@@ -186,9 +186,9 @@ func ssfEventMatchesStream(ev *store.SSFEvent, s *store.SSFStream) bool {
 	return s.Status != store.SSFStreamDisabled && ev.Held == (s.Status == store.SSFStreamPaused)
 }
 
-func (s *ssfEventStore) ClaimDue(_ context.Context, now time.Time, n int, lease time.Duration) ([]*store.SSFEvent, error) {
-	if n <= 0 {
-		return nil, errors.New("inmem: ssf claim size must be positive")
+func (s *ssfEventStore) ClaimDue(_ context.Context, now time.Time, n, perStream int, lease time.Duration) ([]*store.SSFEvent, error) {
+	if n <= 0 || perStream <= 0 {
+		return nil, errors.New("inmem: ssf claim sizes must be positive")
 	}
 	s.st.mu.Lock()
 	defer s.st.mu.Unlock()
@@ -210,11 +210,16 @@ func (s *ssfEventStore) ClaimDue(_ context.Context, now time.Time, n int, lease 
 		}
 		return 0
 	})
-	if len(due) > n {
-		due = due[:n]
-	}
-	out := make([]*store.SSFEvent, 0, len(due))
+	taken := make(map[string]int)
+	out := make([]*store.SSFEvent, 0, min(n, len(due)))
 	for _, ev := range due {
+		if len(out) == n {
+			break
+		}
+		if taken[ev.StreamID] == perStream {
+			continue
+		}
+		taken[ev.StreamID]++
 		ev.NextAttemptAt = now.Add(lease)
 		out = append(out, cloneSSFEvent(ev))
 	}

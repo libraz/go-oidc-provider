@@ -28,7 +28,7 @@ CREATE TABLE IF NOT EXISTS oidc_ssf_events (
     attempts INT NOT NULL DEFAULT 0,
     next_attempt_at BIGINT NOT NULL DEFAULT 0,
     expires_at BIGINT NOT NULL DEFAULT 0,
-    INDEX idx_oidc_ssf_events_stream (stream_id),
-    INDEX idx_oidc_ssf_events_next_attempt (next_attempt_at),
+    INDEX idx_oidc_ssf_events_stream_ready (stream_id, delivery_method, held, jti),
+    INDEX idx_oidc_ssf_events_due (delivery_method, held, next_attempt_at),
     INDEX idx_oidc_ssf_events_expires (expires_at)
 );

@@ -734,7 +734,7 @@ func TestMgmtCreatePushSealsHeaderAndQueuesVerification(t *testing.T) {
 		t.Error("stored header is not sealed")
 	}
 
-	evs, err := f.st.SSFEvents().ClaimDue(context.Background(), testNow, 10, time.Minute)
+	evs, err := f.st.SSFEvents().ClaimDue(context.Background(), testNow, 10, 10, time.Minute)
 	if err != nil || len(evs) != 1 {
 		t.Fatalf("ClaimDue = %d events, %v; want the creation verification", len(evs), err)
 	}

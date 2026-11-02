@@ -29,8 +29,15 @@ func (s *accessTokenStore) Register(ctx context.Context, rec store.AccessTokenRe
 	if err != nil {
 		return err
 	}
+	links := linkItems(s.parent.names.accessTokens, entry, attrGrantID, attrClientID)
 	if s.tx != nil {
+		if err := s.tx.stageLinks(links); err != nil {
+			return err
+		}
 		return s.tx.putIfAbsent(s.parent.names.accessTokens, entry)
+	}
+	if err := s.parent.putLinks(ctx, links); err != nil {
+		return wrapErr("accessTokens.Register", err)
 	}
 	placed, err := s.parent.putIfAbsent(ctx, s.parent.names.accessTokens, entry)
 	if err != nil {
@@ -99,7 +106,7 @@ func (s *accessTokenStore) retire(ctx context.Context, pk string) error {
 // RevokeByGrant marks every access token of a grant revoked and reports
 // how many it newly revoked. A token already revoked is not counted.
 //
-// Inside a transaction the enumeration reads the index while each
+// Inside a transaction the enumeration reads the links and index while each
 // retirement is buffered, so the cascade covers the committed set and
 // costs one of the transaction's actions per token. The enumeration is
 // outside the buffer, so the settled-handle guard is explicit: a grant
@@ -109,18 +116,14 @@ func (s *accessTokenStore) RevokeByGrant(ctx context.Context, grantID string) (i
 	if err := s.tx.assertOpen(); err != nil {
 		return 0, err
 	}
-	matches, err := s.parent.queryIndex(
+	keys, err := s.parent.enumerateCommitted(
 		ctx, s.parent.names.accessTokens, indexByGrant, attrGrantID, grantID,
 	)
 	if err != nil {
 		return 0, wrapErr("accessTokens.RevokeByGrant", err)
 	}
 	count := 0
-	for _, match := range matches {
-		pk := readS(match, attrPK)
-		if pk == "" {
-			continue
-		}
+	for _, pk := range keys {
 		flipped, err := s.parent.flipRevoked(ctx, s.tx, s.parent.names.accessTokens, pk)
 		if err != nil {
 			return count, wrapErr("accessTokens.RevokeByGrant", err)
@@ -146,17 +149,13 @@ func (s *accessTokenStore) RevokeByClient(ctx context.Context, clientID string) 
 	if clientID == "" {
 		return nil
 	}
-	matches, err := s.parent.queryIndex(
+	keys, err := s.parent.enumerateCommitted(
 		ctx, s.parent.names.accessTokens, indexByClient, attrClientID, clientID,
 	)
 	if err != nil {
 		return wrapErr("accessTokens.RevokeByClient", err)
 	}
-	for _, match := range matches {
-		pk := readS(match, attrPK)
-		if pk == "" {
-			continue
-		}
+	for _, pk := range keys {
 		if err := s.retire(ctx, pk); err != nil && !errors.Is(err, store.ErrNotFound) {
 			return wrapErr("accessTokens.RevokeByClient", err)
 		}

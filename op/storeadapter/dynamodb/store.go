@@ -94,7 +94,7 @@ func WithTablePrefix(prefix string) Option {
 // "initial_access_tokens", "registration_access_tokens", "op_metadata",
 // "device_codes", "ciba_requests", "totp_secrets", "passkeys",
 // "recovery_codes", "email_otps", "authn_lockouts", "ssf_streams",
-// "ssf_events"); values are the
+// "ssf_events", "cascade_links"); values are the
 // physical table names to use. An override replaces the prefixed
 // default outright. Unknown keys cause [New] to return an error so
 // typos surface at construction time.

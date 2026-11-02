@@ -208,7 +208,7 @@ func TestTransmitter_PushStreamEventIsClaimable(t *testing.T) {
 	if _, err := tr.Publish(context.Background(), EventAccountDisabled, "alice", Fields{Reason: "hijacking"}); err != nil {
 		t.Fatalf("Publish: %v", err)
 	}
-	evs, err := st.SSFEvents().ClaimDue(context.Background(), testNow, 10, time.Minute)
+	evs, err := st.SSFEvents().ClaimDue(context.Background(), testNow, 10, 10, time.Minute)
 	if err != nil || len(evs) != 1 {
 		t.Fatalf("ClaimDue = %d, %v", len(evs), err)
 	}
@@ -589,7 +589,7 @@ func TestTransmitter_PublishRacingStateChange(t *testing.T) {
 				mustUpdate(t, st, s)
 			},
 			check: func(t *testing.T, st *inmem.Store, _ *store.SSFStream) {
-				evs, err := st.SSFEvents().ClaimDue(context.Background(), testNow, 10, time.Minute)
+				evs, err := st.SSFEvents().ClaimDue(context.Background(), testNow, 10, 10, time.Minute)
 				if err != nil || len(evs) != 1 {
 					t.Errorf("ClaimDue = %d, %v; want the SET tagged push", len(evs), err)
 				}

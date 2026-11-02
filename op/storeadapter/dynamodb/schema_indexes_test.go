@@ -60,9 +60,15 @@ func TestEveryProvisionedIndexIsQueried(t *testing.T) {
 	}
 	declared := 0
 	for _, def := range s.TableDefinitions() {
+		var names []string
 		for _, idx := range def.GlobalSecondaryIndexes {
+			names = append(names, aws.ToString(idx.IndexName))
+		}
+		for _, idx := range def.LocalSecondaryIndexes {
+			names = append(names, aws.ToString(idx.IndexName))
+		}
+		for _, name := range names {
 			declared++
-			name := aws.ToString(idx.IndexName)
 			if !queried[name] {
 				t.Errorf("table %s provisions index %s, which no query path in the adapter reads; "+
 					"an index that is written on every item and never read costs storage and write units for nothing",
@@ -137,7 +143,7 @@ func indexNameConstants(t *testing.T, files []*ast.File) map[string]string {
 }
 
 // queriedIndexIdents collects the index-name identifiers a file reads
-// from: the third argument of a queryIndex call, and the IndexName a
+// from: the third argument of a queryIndex or enumerateCommitted call, and the IndexName a
 // Query input carries either in its literal or by later assignment.
 //
 // A function's own parameter naming an index is a pass-through — the
@@ -160,7 +166,7 @@ func queriedIndexIdents(file *ast.File) map[string]struct{} {
 		ast.Inspect(fn.Body, func(n ast.Node) bool {
 			switch node := n.(type) {
 			case *ast.CallExpr:
-				if sel, ok := node.Fun.(*ast.SelectorExpr); ok && sel.Sel.Name == "queryIndex" && len(node.Args) > 2 {
+				if sel, ok := node.Fun.(*ast.SelectorExpr); ok && (sel.Sel.Name == "queryIndex" || sel.Sel.Name == "enumerateCommitted") && len(node.Args) > 2 {
 					if ident, ok := node.Args[2].(*ast.Ident); ok {
 						record(ident.Name)
 					}
@@ -210,7 +216,7 @@ func addIndexIdent(record func(string), expr ast.Expr) {
 }
 
 // TestQueriedIndexIdents_RecognisesBothQueryShapes feeds the collector
-// the two shapes an index read takes, so a regression in the collector
+// the shapes an index read takes, so a regression in the collector
 // surfaces independently of what the adapter's sources happen to
 // contain: a collector that recognised nothing would otherwise report
 // every provisioned index as dead, and one that over-matched would
@@ -230,6 +236,14 @@ func f(s *Store) {
     s.parent.queryIndex(ctx, table, indexByGrant, attrGrantID, value)
 }`,
 			want: []string{"indexByGrant"},
+		},
+		{
+			name: "consistent enumeration call",
+			src: `package x
+func f(s *Store) {
+    s.parent.enumerateCommitted(ctx, table, indexByClient, attrClientID, value)
+}`,
+			want: []string{"indexByClient"},
 		},
 		{
 			name: "query input literal",

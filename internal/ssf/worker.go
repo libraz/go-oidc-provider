@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/libraz/go-oidc-provider/internal/audit"
@@ -22,11 +23,14 @@ import (
 	"github.com/libraz/go-oidc-provider/op/store"
 )
 
-// Push delivery shape. A batch takes at most
-// ceil(workerBatchSize/workerConcurrency) × workerPushTimeout, which must
+// Push delivery shape. A claim takes at most workerStreamShare SETs of one
+// stream, pushed one after another, and streams share workerConcurrency
+// goroutines, so a round lasts at most (ceil(workerBatchSize/
+// workerConcurrency) + workerStreamShare) × workerPushTimeout. That must
 // stay under workerLease or another replica re-claims a SET mid-push.
 const (
 	workerBatchSize      = 32
+	workerStreamShare    = 4
 	workerConcurrency    = 8
 	workerPushTimeout    = 5 * time.Second
 	workerLease          = 60 * time.Second
@@ -162,8 +166,9 @@ func workerFetchClient(allowPrivate, insecureDev bool, timeout time.Duration) *s
 	})
 }
 
-// Start runs the delivery loop on a background goroutine: RunOnce every
-// interval and DeleteExpired once an hour. Calls after the first are
+// Start runs the delivery loop on a background goroutine: every interval
+// it claims rounds of due SETs until the backlog is drained, and it runs
+// DeleteExpired once an hour. Calls after the first are
 // no-ops. ctx bounds the loop as [Worker.Stop] does.
 func (w *Worker) Start(ctx context.Context) {
 	w.mu.Lock()
@@ -218,35 +223,103 @@ func (w *Worker) loop(ctx context.Context, done chan<- struct{}) {
 		case <-ticker.C:
 		}
 		now := w.clock.Now()
-		if _, err := w.RunOnce(ctx, now); err != nil && ctx.Err() == nil {
-			w.logger.ErrorContext(ctx, "ssf: claim due SETs", "error", err)
-		}
 		if lastSweep.IsZero() || now.Sub(lastSweep) >= workerExpiryInterval {
 			lastSweep = now
 			if _, err := w.events.DeleteExpired(ctx, now); err != nil && ctx.Err() == nil {
 				w.logger.ErrorContext(ctx, "ssf: delete expired SETs", "error", err)
 			}
 		}
+		w.runRounds(ctx)
 	}
 }
 
-// RunOnce claims the SETs due at now and pushes them through a pool of
-// [workerConcurrency] goroutines, so one stalled receiver holds a single
-// slot. It returns once every claimed SET is settled and reports how
-// many it claimed.
-func (w *Worker) RunOnce(ctx context.Context, now time.Time) (int, error) {
-	due, err := w.events.ClaimDue(ctx, now, workerBatchSize, workerLease)
+// runRounds runs claim rounds back to back while each one reports that
+// more SETs may be due. Every claimed SET leaves the due set, by its lease
+// or by settling, so the rounds end once the backlog is drained.
+func (w *Worker) runRounds(ctx context.Context) {
+	for ctx.Err() == nil {
+		_, more, err := w.RunOnce(ctx, w.clock.Now())
+		if err != nil {
+			if ctx.Err() == nil {
+				w.logger.ErrorContext(ctx, "ssf: claim due SETs", "error", err)
+			}
+			return
+		}
+		if !more {
+			return
+		}
+	}
+}
+
+// RunOnce claims the SETs due at now, at most [workerStreamShare] per
+// stream, and pushes each stream's share in order on one of
+// [workerConcurrency] goroutines, so a stream has one push in flight and
+// a stalled receiver holds a single slot. It returns once every stream's
+// share is done and reports how many SETs it claimed, and whether more
+// may be due: the claim was full, or a stream took its whole share
+// without a failure.
+func (w *Worker) RunOnce(ctx context.Context, now time.Time) (int, bool, error) {
+	due, err := w.events.ClaimDue(ctx, now, workerBatchSize, workerStreamShare, workerLease)
 	if err != nil {
-		return 0, fmt.Errorf("ssf: claim due SETs: %w", err)
+		return 0, false, fmt.Errorf("ssf: claim due SETs: %w", err)
 	}
-	if len(due) == 0 {
-		return 0, nil
-	}
-	streams := newStreamMemo(w.streams)
-	backchannel.EachBounded(workerConcurrency, due, func(ev *store.SSFEvent) {
-		w.deliver(ctx, streams, ev, now)
+	var drained atomic.Bool
+	backchannel.EachBounded(workerConcurrency, perStreamShares(due), func(share []*store.SSFEvent) {
+		if w.deliverShare(ctx, share, now) && len(share) == workerStreamShare {
+			drained.Store(true)
+		}
 	})
-	return len(due), nil
+	return len(due), len(due) == workerBatchSize || drained.Load(), nil
+}
+
+// perStreamShares splits a claimed batch into each stream's SETs, keeping
+// the claim order within a stream.
+func perStreamShares(due []*store.SSFEvent) [][]*store.SSFEvent {
+	index := make(map[string]int)
+	var out [][]*store.SSFEvent
+	for _, ev := range due {
+		i, ok := index[ev.StreamID]
+		if !ok {
+			i = len(out)
+			index[ev.StreamID] = i
+			out = append(out, nil)
+		}
+		out[i] = append(out[i], ev)
+	}
+	return out
+}
+
+// deliverShare pushes one stream's SETs one at a time and stops at the
+// first the receiver did not take: the rest keep their lease and come back
+// once it ends, without spending the receiver's retry budget. It reports
+// whether every SET was settled.
+func (w *Worker) deliverShare(ctx context.Context, share []*store.SSFEvent, now time.Time) bool {
+	// Settling must survive Stop: a receiver that already accepted the
+	// SET must not get it again.
+	settle := context.WithoutCancel(ctx)
+	streamID := share[0].StreamID
+	stream, err := w.streams.Get(ctx, streamID)
+	if errors.Is(err, store.ErrNotFound) {
+		for _, ev := range share {
+			w.ack(settle, ev)
+		}
+		return true
+	}
+	if err != nil {
+		w.logger.ErrorContext(ctx, "ssf: load stream for push", "stream_id", streamID, "error", err)
+		return false
+	}
+	if stream.Delivery.Method != store.SSFDeliveryPush {
+		// Switched to poll after the claim; the stream Update already
+		// moved the rows to the poll queue.
+		return false
+	}
+	for _, ev := range share {
+		if !w.deliver(ctx, settle, stream, ev, now) {
+			return false
+		}
+	}
+	return true
 }
 
 // workerOutcome is one push's result.
@@ -256,52 +329,38 @@ type workerOutcome struct {
 	cause   error
 }
 
-// deliver pushes one claimed SET and settles it in the queue. A fault on
-// the OP side (store read, signing key) leaves the SET leased, so it is
-// retried after the lease without spending the receiver's budget.
-func (w *Worker) deliver(ctx context.Context, streams *streamMemo, ev *store.SSFEvent, now time.Time) {
-	// Settling must survive Stop: a receiver that already accepted the
-	// SET must not get it again.
-	settle := context.WithoutCancel(ctx)
-	stream, err := streams.get(ctx, ev.StreamID)
-	if errors.Is(err, store.ErrNotFound) {
-		w.ack(settle, ev)
-		return
-	}
-	if err != nil {
-		w.logger.ErrorContext(ctx, "ssf: load stream for push", "stream_id", ev.StreamID, "jti", ev.JTI, "error", err)
-		return
-	}
-	if stream.Delivery.Method != store.SSFDeliveryPush {
-		// Switched to poll after the claim; Retag already moved the row.
-		return
-	}
+// deliver pushes one claimed SET and settles it in the queue, reporting
+// whether it was settled: delivered, rejected or abandoned. A fault on the
+// OP side (signing key) leaves the SET leased, so it is retried after the
+// lease without spending the receiver's budget.
+func (w *Worker) deliver(ctx, settle context.Context, stream *store.SSFStream, ev *store.SSFEvent, now time.Time) bool {
 	var authz string
 	if len(stream.Delivery.SealedAuthorizationHeader) > 0 {
+		var err error
 		authz, err = w.sealer.Unseal(stream.ID, stream.Delivery.SealedAuthorizationHeader)
 		if err != nil {
 			w.abandon(settle, stream, ev, workerReasonSeal, workerOutcome{cause: err})
-			return
+			return true
 		}
 	}
 	key, err := w.signingKey()
 	if err != nil {
 		w.logger.ErrorContext(ctx, "ssf: signing key for push", "stream_id", stream.ID, "jti", ev.JTI, "error", err)
-		return
+		return false
 	}
 	set, err := Sign(ev.Claims, key)
 	if errors.Is(err, ErrInvalidClaims) {
 		w.abandon(settle, stream, ev, workerReasonClaims, workerOutcome{cause: err})
-		return
+		return true
 	}
 	if err != nil {
 		w.logger.ErrorContext(ctx, "ssf: sign SET for push", "stream_id", stream.ID, "jti", ev.JTI, "error", err)
-		return
+		return false
 	}
 	out := w.post(ctx, stream.Delivery.EndpointURL, authz, set)
 	if out.status == 0 && ctx.Err() != nil {
 		// Cut short by Stop; the lease brings it back.
-		return
+		return false
 	}
 	switch out.status {
 	case http.StatusAccepted:
@@ -312,37 +371,9 @@ func (w *Worker) deliver(ctx context.Context, streams *streamMemo, ev *store.SSF
 		w.emit(settle, workerEventRejected, audit.LevelWarn, "security event token rejected by receiver", stream, ev, out, "", nil)
 	default:
 		w.retry(settle, stream, ev, now, out)
+		return false
 	}
-}
-
-// streamMemo loads each stream once per RunOnce batch, however many of
-// its SETs the batch holds.
-type streamMemo struct {
-	store   store.SSFStreamStore
-	mu      sync.Mutex
-	entries map[string]*streamEntry
-}
-
-type streamEntry struct {
-	once   sync.Once
-	stream *store.SSFStream
-	err    error
-}
-
-func newStreamMemo(s store.SSFStreamStore) *streamMemo {
-	return &streamMemo{store: s, entries: make(map[string]*streamEntry)}
-}
-
-func (m *streamMemo) get(ctx context.Context, id string) (*store.SSFStream, error) {
-	m.mu.Lock()
-	e, ok := m.entries[id]
-	if !ok {
-		e = &streamEntry{}
-		m.entries[id] = e
-	}
-	m.mu.Unlock()
-	e.once.Do(func() { e.stream, e.err = m.store.Get(ctx, id) })
-	return e.stream, e.err
+	return true
 }
 
 // post sends set to endpoint and classifies the response.

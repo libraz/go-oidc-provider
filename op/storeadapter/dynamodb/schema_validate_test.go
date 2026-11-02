@@ -102,6 +102,34 @@ func TestValidateSchema_ReportsIndexAndKeyDrift(t *testing.T) {
 		"valdrift_par_records has key schema (pk:N:HASH), want (pk:S:HASH)", "recreate the table")
 }
 
+// TestValidateSchema_ReportsMissingLocalIndex pins that a table created
+// without a local secondary index fails validation with the recreate
+// guidance, since such an index cannot be added in place.
+func TestValidateSchema_ReportsMissingLocalIndex(t *testing.T) {
+	t.Parallel()
+	client := newEmulatorClient(t)
+	const prefix = "vallsi_"
+	s := provisioned(t, client, prefix, "ssf_events")
+
+	if _, err := client.CreateTable(t.Context(), &awsdynamodb.CreateTableInput{
+		TableName: aws.String(prefix + "ssf_events"),
+		KeySchema: []types.KeySchemaElement{
+			{AttributeName: aws.String("pk"), KeyType: types.KeyTypeHash},
+			{AttributeName: aws.String("sk"), KeyType: types.KeyTypeRange},
+		},
+		AttributeDefinitions: []types.AttributeDefinition{
+			{AttributeName: aws.String("pk"), AttributeType: types.ScalarAttributeTypeS},
+			{AttributeName: aws.String("sk"), AttributeType: types.ScalarAttributeTypeS},
+		},
+		BillingMode: types.BillingModePayPerRequest,
+	}); err != nil {
+		t.Fatalf("CreateTable ssf_events: %v", err)
+	}
+
+	wantSchemaError(t, validatorOf(t, s.SSFEvents()).ValidateSchema(t.Context()),
+		"missing local secondary index ssf_ready", "cannot be added in place", "recreate the table")
+}
+
 func createTable(t *testing.T, client *awsdynamodb.Client, name string, pkType types.ScalarAttributeType) {
 	t.Helper()
 	if _, err := client.CreateTable(t.Context(), &awsdynamodb.CreateTableInput{

@@ -58,6 +58,10 @@ type txOp struct {
 	pk    string
 	item  item
 
+	// key overrides the primary key of a txDelete on a composite-key
+	// table; pk is then only the buffer's identity for the action.
+	key map[string]types.AttributeValue
+
 	// consumedAtGuard is set for txPutIfUnconsumed: the commit asserts
 	// the stored item is still unconsumed before stamping it.
 	consumedAtGuard bool
@@ -460,9 +464,13 @@ func (o *txOp) action() types.TransactWriteItem {
 	case txPutIfMatch:
 		return types.TransactWriteItem{Put: o.matchPut()}
 	case txDelete:
+		k := o.key
+		if k == nil {
+			k = key(o.pk)
+		}
 		return types.TransactWriteItem{Delete: &types.Delete{
 			TableName: aws.String(o.table),
-			Key:       key(o.pk),
+			Key:       k,
 		}}
 	case txPut:
 		fallthrough

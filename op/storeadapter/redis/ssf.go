@@ -23,13 +23,17 @@ import (
 //	ssf:stream-events:<streamID>   SET   JTIs queued for the stream
 //	ssf:stream-verify:<streamID>   STRING JTI of the stream's queued verification
 //	ssf:stream-updated:<streamID>  STRING JTI of the stream's queued stream-updated
-//	ssf:due                        ZSET  JTI scored by next_attempt_at, push && !held only
+//	ssf:stream-due:<streamID>      ZSET  JTI scored by next_attempt_at, push && !held only
+//	ssf:stream-ready:<streamID>    ZSET  JTI scored 0, poll && !held only
+//	ssf:due                        ZSET  stream ID scored by its earliest stream-due score
 //	ssf:expiry                     ZSET  JTI scored by expires_at
 //
 // Instants are decimal Unix microseconds, exact in a Lua/ZSET double.
-// Every event mutation runs as one Lua script, so the due set, the expiry
+// Every event mutation runs as one Lua script, so the due sets, the expiry
 // set and the per-stream indexes never disagree with the event hashes, and
 // a stream Update and an Enqueue checking the stream's state are serial.
+// ClaimDue and Pending read only the per-stream due and ready sets, so
+// their cost follows the events they return, not the stream's backlog.
 // The scripts derive the event keys from the prefix passed as ARGV[1];
 // that is sound because the adapter talks to one Redis node, never a
 // cluster. None of these keys carries a TTL: queue lifetime is
@@ -45,25 +49,43 @@ const ssfLuaPrelude = `
 local P = ARGV[1]
 local function ev_key(jti) return P .. "ssf:event:" .. jti end
 local function idx_key(sid) return P .. "ssf:stream-events:" .. sid end
+local function sdue_key(sid) return P .. "ssf:stream-due:" .. sid end
+local function ready_key(sid) return P .. "ssf:stream-ready:" .. sid end
 local ctl_prefix = {verification = "ssf:stream-verify:", ["stream-updated"] = "ssf:stream-updated:"}
 local function ctl_key(kind, sid) return P .. ctl_prefix[kind] .. sid end
 local streams_key = P .. "ssf:streams"
 local due_key = P .. "ssf:due"
 local expiry_key = P .. "ssf:expiry"
-local function sync_due(jti, delivery, held, next)
-	if delivery == "push" and held == "0" then
-		redis.call("ZADD", due_key, next, jti)
+local function sync_head(sid)
+	local head = redis.call("ZRANGE", sdue_key(sid), 0, 0, "WITHSCORES")
+	if head[1] then
+		redis.call("ZADD", due_key, head[2], sid)
 	else
-		redis.call("ZREM", due_key, jti)
+		redis.call("ZREM", due_key, sid)
 	end
+end
+local function sync_queues(jti, sid, delivery, held, next)
+	if delivery == "push" and held == "0" then
+		redis.call("ZADD", sdue_key(sid), next, jti)
+	else
+		redis.call("ZREM", sdue_key(sid), jti)
+	end
+	if delivery == "poll" and held == "0" then
+		redis.call("ZADD", ready_key(sid), 0, jti)
+	else
+		redis.call("ZREM", ready_key(sid), jti)
+	end
+	sync_head(sid)
 end
 local function remove_event(jti)
 	local f = redis.call("HMGET", ev_key(jti), "stream", "kind")
 	if not f[1] then return 0 end
 	redis.call("DEL", ev_key(jti))
-	redis.call("ZREM", due_key, jti)
+	redis.call("ZREM", sdue_key(f[1]), jti)
+	redis.call("ZREM", ready_key(f[1]), jti)
 	redis.call("ZREM", expiry_key, jti)
 	redis.call("SREM", idx_key(f[1]), jti)
+	sync_head(f[1])
 	if ctl_prefix[f[2]] and redis.call("GET", ctl_key(f[2], f[1])) == jti then
 		redis.call("DEL", ctl_key(f[2], f[1]))
 	end
@@ -79,7 +101,7 @@ local function put_event(jti, sid, kind, delivery, held, claims, attempts, next,
 		"held", held, "claims", claims, "attempts", attempts, "next", next, "expires", expires)
 	redis.call("SADD", idx_key(sid), jti)
 	redis.call("ZADD", expiry_key, expires, jti)
-	sync_due(jti, delivery, held, next)
+	sync_queues(jti, sid, delivery, held, next)
 end
 local function read_event(jti)
 	local v = redis.call("HMGET", ev_key(jti), "stream", "kind", "delivery", "held", "claims", "attempts", "next", "expires")
@@ -107,19 +129,27 @@ put_event(jti, sid, kind, delivery, held, ARGV[7], ARGV[8], ARGV[9], ARGV[10])
 return 1
 `
 
-// ssfClaimDueLua: ARGV[2] = now, ARGV[3] = n, ARGV[4] = now+lease.
+// ssfClaimDueLua: ARGV[2] = now, ARGV[3] = n, ARGV[4] = per-stream cap,
+// ARGV[5] = now+lease. It visits the streams whose earliest due event is
+// earliest, at most n of them, and leases up to the cap from each.
 // Selecting and re-scoring happen in this one script, which is what makes
 // ClaimDue single-winner across replicas.
 const ssfClaimDueLua = ssfLuaPrelude + `
+local n, per = tonumber(ARGV[3]), tonumber(ARGV[4])
 local out = {}
-for _, jti in ipairs(redis.call("ZRANGEBYSCORE", due_key, "-inf", ARGV[2], "LIMIT", 0, tonumber(ARGV[3]))) do
-	if redis.call("EXISTS", ev_key(jti)) == 1 then
-		redis.call("ZADD", due_key, ARGV[4], jti)
-		redis.call("HSET", ev_key(jti), "next", ARGV[4])
-		out[#out + 1] = read_event(jti)
-	else
-		redis.call("ZREM", due_key, jti)
+for _, sid in ipairs(redis.call("ZRANGEBYSCORE", due_key, "-inf", ARGV[2], "LIMIT", 0, n)) do
+	local sdue = sdue_key(sid)
+	for _, jti in ipairs(redis.call("ZRANGEBYSCORE", sdue, "-inf", ARGV[2], "LIMIT", 0, math.min(per, n - #out))) do
+		if redis.call("EXISTS", ev_key(jti)) == 1 then
+			redis.call("ZADD", sdue, ARGV[5], jti)
+			redis.call("HSET", ev_key(jti), "next", ARGV[5])
+			out[#out + 1] = read_event(jti)
+		else
+			redis.call("ZREM", sdue, jti)
+		end
 	end
+	sync_head(sid)
+	if #out == n then break end
 end
 return out
 `
@@ -128,10 +158,10 @@ return out
 // event is not queued.
 const ssfRescheduleLua = ssfLuaPrelude + `
 local jti = ARGV[2]
-local f = redis.call("HMGET", ev_key(jti), "delivery", "held")
+local f = redis.call("HMGET", ev_key(jti), "stream", "delivery", "held")
 if not f[1] then return 0 end
 redis.call("HSET", ev_key(jti), "next", ARGV[3], "attempts", ARGV[4])
-sync_due(jti, f[1], f[2], ARGV[3])
+sync_queues(jti, f[1], f[2], f[3], ARGV[3])
 return 1
 `
 
@@ -146,17 +176,16 @@ return 1
 `
 
 // ssfPendingLua: ARGV[2] = stream ID, ARGV[3] = n. Returns the more flag
-// followed by up to n events.
+// followed by up to n events, lowest JTI first; it reads one entry past n
+// from the stream's ready set and nothing else of its queue.
 const ssfPendingLua = ssfLuaPrelude + `
 local n = tonumber(ARGV[3])
 local out = {0}
-for _, jti in ipairs(redis.call("SMEMBERS", idx_key(ARGV[2]))) do
-	local f = redis.call("HMGET", ev_key(jti), "delivery", "held")
-	if f[1] == "poll" and f[2] == "0" then
-		if #out > n then
-			out[1] = 1
-			break
-		end
+local jtis = redis.call("ZRANGE", ready_key(ARGV[2]), 0, n)
+for i, jti in ipairs(jtis) do
+	if i > n then
+		out[1] = 1
+	else
 		out[#out + 1] = read_event(jti)
 	end
 end
@@ -208,7 +237,7 @@ for _, jti in ipairs(redis.call("SMEMBERS", idx_key(sid))) do
 		local held = "0"
 		if f[1] == "event" and status == "paused" then held = "1" end
 		redis.call("HSET", ev_key(jti), "delivery", delivery, "held", held)
-		sync_due(jti, delivery, held, f[2])
+		sync_queues(jti, sid, delivery, held, f[2])
 	end
 end
 if ARGV[6] == "1" then
@@ -229,7 +258,8 @@ if redis.call("HGET", KEYS[2], cid) == sid then redis.call("HDEL", KEYS[2], cid)
 for _, jti in ipairs(redis.call("SMEMBERS", idx_key(sid))) do
 	remove_event(jti)
 end
-redis.call("DEL", idx_key(sid), ctl_key("verification", sid), ctl_key("stream-updated", sid))
+redis.call("DEL", idx_key(sid), sdue_key(sid), ready_key(sid), ctl_key("verification", sid), ctl_key("stream-updated", sid))
+redis.call("ZREM", due_key, sid)
 return 1
 `
 
@@ -481,12 +511,12 @@ func ssfEventArgs(ev *store.SSFEvent) []any {
 	}
 }
 
-func (e *ssfEventStore) ClaimDue(ctx context.Context, now time.Time, n int, lease time.Duration) ([]*store.SSFEvent, error) {
-	if n <= 0 {
-		return nil, errors.New("oidcredis: ssf claim size must be positive")
+func (e *ssfEventStore) ClaimDue(ctx context.Context, now time.Time, n, perStream int, lease time.Duration) ([]*store.SSFEvent, error) {
+	if n <= 0 || perStream <= 0 {
+		return nil, errors.New("oidcredis: ssf claim sizes must be positive")
 	}
 	res, err := e.scripts.claimDue.Run(ctx, e.parent.client, nil,
-		e.parent.prefix, ssfMicros(now), n, ssfMicros(now.Add(lease)),
+		e.parent.prefix, ssfMicros(now), n, perStream, ssfMicros(now.Add(lease)),
 	).Slice()
 	if err != nil {
 		return nil, fmt.Errorf("oidcredis: claim ssf events: %w", err)

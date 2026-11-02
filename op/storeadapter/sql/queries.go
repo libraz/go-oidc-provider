@@ -1156,10 +1156,14 @@ func addSSFQueries(q *queries, d Dialect, n nameMap) {
 	q.ssfEventDropOtherOfKind = d.rebind(
 		"DELETE FROM " + n.ssfEvents + " WHERE stream_id = ? AND kind = ? AND jti <> ?",
 	)
+	// The window ranks each stream's due rows so a claim takes at most the
+	// per-stream cap of them; the due index confines it to push, unheld rows.
 	q.ssfEventSelectDue = d.rebind(
-		"SELECT " + eventCols + " FROM " + n.ssfEvents +
-			" WHERE delivery_method = ? AND held = 0 AND next_attempt_at <= ?" +
-			" ORDER BY next_attempt_at, jti LIMIT ?",
+		"SELECT " + eventCols + " FROM (SELECT " + eventCols +
+			", ROW_NUMBER() OVER (PARTITION BY stream_id ORDER BY next_attempt_at, jti) AS stream_rank" +
+			" FROM " + n.ssfEvents +
+			" WHERE delivery_method = ? AND held = 0 AND next_attempt_at <= ?) due" +
+			" WHERE stream_rank <= ? ORDER BY next_attempt_at, jti LIMIT ?",
 	)
 	// The lease is a compare-and-swap on the next_attempt_at the candidate
 	// scan observed, so of several concurrent claimers exactly one matches.

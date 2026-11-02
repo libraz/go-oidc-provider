@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/ecdsa"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -118,7 +119,7 @@ func (e *workerEnv) enqueue(t *testing.T, streamID, clientID, jti string, attemp
 // runOnce runs one batch at now and fails on error.
 func (e *workerEnv) runOnce(t *testing.T, now time.Time) int {
 	t.Helper()
-	n, err := e.w.RunOnce(context.Background(), now)
+	n, _, err := e.w.RunOnce(context.Background(), now)
 	if err != nil {
 		t.Fatalf("RunOnce: %v", err)
 	}
@@ -129,7 +130,7 @@ func (e *workerEnv) runOnce(t *testing.T, now time.Time) int {
 // queue, so call it only once the worker is done with the event.
 func (e *workerEnv) claimAt(t *testing.T, now time.Time) []*store.SSFEvent {
 	t.Helper()
-	evs, err := e.st.SSFEvents().ClaimDue(context.Background(), now, 1000, workerLease)
+	evs, err := e.st.SSFEvents().ClaimDue(context.Background(), now, 1000, 1000, workerLease)
 	if err != nil {
 		t.Fatalf("ClaimDue: %v", err)
 	}
@@ -218,7 +219,7 @@ func (r *workerReceiver) got() []workerPush {
 
 func TestWorker_BatchFitsInsideLease(t *testing.T) {
 	t.Parallel()
-	rounds := (workerBatchSize + workerConcurrency - 1) / workerConcurrency
+	rounds := (workerBatchSize+workerConcurrency-1)/workerConcurrency + workerStreamShare
 	if batch := time.Duration(rounds) * workerPushTimeout; batch >= workerLease {
 		t.Fatalf("worst-case batch %v >= lease %v: another replica could re-claim a SET mid-push", batch, workerLease)
 	}
@@ -389,13 +390,24 @@ func TestWorker_AbandonsAfterFourRetries(t *testing.T) {
 }
 
 // TestWorker_HungReceiverDoesNotBlockBatch wedges one receiver for the
-// whole batch: the other receiver's SETs must all be delivered while the
-// wedged push is still open.
+// whole batch: the other receivers' SETs must all be delivered while the
+// wedged push is still open, and the wedged stream never has a second
+// push in flight.
 func TestWorker_HungReceiverDoesNotBlockBatch(t *testing.T) {
 	t.Parallel()
 	e := newWorkerEnv(t)
 	release := make(chan struct{})
+	var inFlight, maxInFlight, hungPushes atomic.Int32
 	hung := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hungPushes.Add(1)
+		cur := inFlight.Add(1)
+		defer inFlight.Add(-1)
+		for {
+			prev := maxInFlight.Load()
+			if cur <= prev || maxInFlight.CompareAndSwap(prev, cur) {
+				break
+			}
+		}
 		select {
 		case <-release:
 		case <-r.Context().Done():
@@ -403,9 +415,11 @@ func TestWorker_HungReceiverDoesNotBlockBatch(t *testing.T) {
 		w.WriteHeader(http.StatusAccepted)
 	}))
 	defer hung.Close()
-	defer close(release)
+	var releaseOnce sync.Once
+	releaseAll := func() { releaseOnce.Do(func() { close(release) }) }
+	defer releaseAll()
 
-	others := workerBatchSize - 1
+	others := workerBatchSize - workerStreamShare
 	var served atomic.Int32
 	allServed := make(chan struct{})
 	fast := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -417,35 +431,133 @@ func TestWorker_HungReceiverDoesNotBlockBatch(t *testing.T) {
 	defer fast.Close()
 
 	a := e.pushStream(t, "rp-hung", hung.URL, "")
-	b := e.pushStream(t, "rp-fast", fast.URL, "")
-	// Earliest due, so the wedged push is claimed and started first.
-	e.enqueue(t, a.ID, a.ClientID, "a-0", 0, testNow.Add(-time.Second))
-	for i := range others {
-		e.enqueue(t, b.ID, b.ClientID, "b-"+string(rune('A'+i)), 0, testNow)
+	// Earliest due, so the wedged stream is claimed and started first.
+	for i := range workerStreamShare {
+		e.enqueue(t, a.ID, a.ClientID, fmt.Sprintf("a-%d", i), 0, testNow.Add(-time.Hour))
+	}
+	for g := range others / workerStreamShare {
+		s := e.pushStream(t, fmt.Sprintf("rp-fast-%d", g), fast.URL, "")
+		for i := range workerStreamShare {
+			e.enqueue(t, s.ID, s.ClientID, fmt.Sprintf("b-%d-%d", g, i), 0, testNow)
+		}
 	}
 
 	done := make(chan int, 1)
 	go func() {
-		n, _ := e.w.RunOnce(context.Background(), testNow)
+		n, _, _ := e.w.RunOnce(context.Background(), testNow)
 		done <- n
 	}()
 
 	select {
 	case <-allServed:
 	case <-time.After(10 * time.Second):
-		t.Fatalf("fast receiver got %d of %d SETs while one receiver hung", served.Load(), others)
+		t.Fatalf("fast receivers got %d of %d SETs while one receiver hung", served.Load(), others)
 	}
 	select {
 	case <-done:
 		t.Fatal("RunOnce returned while the hung push was still open")
 	default:
 	}
-	release <- struct{}{}
+	if got := hungPushes.Load(); got != 1 {
+		t.Fatalf("hung receiver saw %d pushes while the first was open, want 1", got)
+	}
+	releaseAll()
 	if n := <-done; n != workerBatchSize {
 		t.Fatalf("RunOnce claimed %d, want %d", n, workerBatchSize)
 	}
 	if got := len(e.rec.named(workerEventDelivered)); got != workerBatchSize {
 		t.Fatalf("push_delivered = %d, want %d", got, workerBatchSize)
+	}
+	if got := maxInFlight.Load(); got != 1 {
+		t.Fatalf("concurrent pushes to one stream = %d, want 1", got)
+	}
+}
+
+// TestWorker_StreamShareBoundsClaim queues a large backlog for one
+// receiver ahead of two others: one round takes only that stream's share,
+// delivers the other receivers' SETs, and asks for another round.
+func TestWorker_StreamShareBoundsClaim(t *testing.T) {
+	t.Parallel()
+	e := newWorkerEnv(t)
+	busy, busySrv := newWorkerReceiver(t, http.StatusAccepted, "")
+	other, otherSrv := newWorkerReceiver(t, http.StatusAccepted, "")
+	a := e.pushStream(t, "rp-busy", busySrv.URL, "")
+	for i := range 3 * workerBatchSize {
+		e.enqueue(t, a.ID, a.ClientID, fmt.Sprintf("a-%03d", i), 0, testNow.Add(-time.Hour))
+	}
+	for _, client := range []string{"rp-b", "rp-c"} {
+		s := e.pushStream(t, client, otherSrv.URL, "")
+		e.enqueue(t, s.ID, s.ClientID, client+"-0", 0, testNow)
+	}
+
+	n, more, err := e.w.RunOnce(context.Background(), testNow)
+	if err != nil {
+		t.Fatalf("RunOnce: %v", err)
+	}
+	if n != workerStreamShare+2 || !more {
+		t.Fatalf("RunOnce = %d more=%v, want %d more=true", n, more, workerStreamShare+2)
+	}
+	if got := len(busy.got()); got != workerStreamShare {
+		t.Fatalf("busy receiver got %d pushes in one round, want its share %d", got, workerStreamShare)
+	}
+	if got := len(other.got()); got != 2 {
+		t.Fatalf("other receivers got %d pushes, want 2 in the same round", got)
+	}
+}
+
+// TestWorker_FailedPushStopsStreamShare fails a stream's first push: the
+// rest of its share is not pushed in that round, keeps its lease and its
+// retry budget, and no further round is requested.
+func TestWorker_FailedPushStopsStreamShare(t *testing.T) {
+	t.Parallel()
+	e := newWorkerEnv(t)
+	recv, srv := newWorkerReceiver(t, http.StatusServiceUnavailable, "")
+	s := e.pushStream(t, "rp-1", srv.URL, "")
+	for i := range workerStreamShare {
+		e.enqueue(t, s.ID, s.ClientID, fmt.Sprintf("jti-%d", i), 0, testNow.Add(time.Duration(i)*time.Second-time.Minute))
+	}
+
+	n, more, err := e.w.RunOnce(context.Background(), testNow)
+	if err != nil {
+		t.Fatalf("RunOnce: %v", err)
+	}
+	if n != workerStreamShare || more {
+		t.Fatalf("RunOnce = %d more=%v, want %d more=false", n, more, workerStreamShare)
+	}
+	if got := len(recv.got()); got != 1 {
+		t.Fatalf("receiver saw %d pushes, want 1: a failed push ends the stream's round", got)
+	}
+	untouched := 0
+	for _, ev := range e.claimAt(t, testNow.Add(workerLease)) {
+		if ev.JTI != "jti-0" && ev.Attempts == 0 {
+			untouched++
+		}
+	}
+	if untouched != workerStreamShare-1 {
+		t.Fatalf("unpushed SETs due after the lease = %d, want %d with no spent attempt", untouched, workerStreamShare-1)
+	}
+}
+
+// TestWorker_RoundsDrainBacklog pins that one tick claims round after
+// round until a receiver's backlog is delivered, rather than one share per
+// interval.
+func TestWorker_RoundsDrainBacklog(t *testing.T) {
+	t.Parallel()
+	e := newWorkerEnv(t)
+	recv, srv := newWorkerReceiver(t, http.StatusAccepted, "")
+	s := e.pushStream(t, "rp-1", srv.URL, "")
+	backlog := 3*workerStreamShare + 1
+	for i := range backlog {
+		e.enqueue(t, s.ID, s.ClientID, fmt.Sprintf("jti-%02d", i), 0, testNow)
+	}
+
+	e.w.runRounds(context.Background())
+
+	if got := len(recv.got()); got != backlog {
+		t.Fatalf("receiver got %d pushes in one tick, want the whole backlog %d", got, backlog)
+	}
+	if evs := e.claimAt(t, testNow.Add(1000*time.Hour)); len(evs) != 0 {
+		t.Fatalf("%d SETs still queued", len(evs))
 	}
 }
 
@@ -689,41 +801,5 @@ func TestNewWorker_RequiresDeps(t *testing.T) {
 	}
 	if _, err := NewWorker(full); err != nil {
 		t.Fatalf("NewWorker(full) = %v", err)
-	}
-}
-
-// getCountingStreams counts Get calls on the wrapped stream store.
-type getCountingStreams struct {
-	store.SSFStreamStore
-	gets atomic.Int64
-}
-
-func (c *getCountingStreams) Get(ctx context.Context, id string) (*store.SSFStream, error) {
-	c.gets.Add(1)
-	return c.SSFStreamStore.Get(ctx, id)
-}
-
-func TestStreamMemo_LoadsEachStreamOncePerBatch(t *testing.T) {
-	t.Parallel()
-	e := newWorkerEnv(t)
-	s := e.pushStream(t, "rp", "http://127.0.0.1/push", "")
-	counting := &getCountingStreams{SSFStreamStore: e.st.SSFStreams()}
-	memo := newStreamMemo(counting)
-
-	var wg sync.WaitGroup
-	for range 6 {
-		wg.Go(func() {
-			got, err := memo.get(context.Background(), s.ID)
-			if err != nil || got == nil || got.ID != s.ID {
-				t.Errorf("get = %v, %v", got, err)
-			}
-		})
-	}
-	wg.Wait()
-	if _, err := memo.get(context.Background(), "missing"); !errors.Is(err, store.ErrNotFound) {
-		t.Errorf("missing stream err = %v, want ErrNotFound", err)
-	}
-	if got := counting.gets.Load(); got != 2 {
-		t.Errorf("store Get calls = %d, want 2", got)
 	}
 }

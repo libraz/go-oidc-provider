@@ -35,8 +35,15 @@ func (s *grantStore) Save(ctx context.Context, g *store.Grant) error {
 	if err != nil {
 		return err
 	}
+	links := linkItems(s.parent.names.grants, entry, attrSubject, attrClientID)
 	if s.tx != nil {
+		if err := s.tx.stageLinks(links); err != nil {
+			return err
+		}
 		return s.tx.putVersioned(ctx, s.parent.names.grants, g.ID, entry, attrRecordVersion)
+	}
+	if err := s.parent.putLinks(ctx, links); err != nil {
+		return wrapErr("grants.Save", err)
 	}
 	if err := s.parent.putBumpingVersion(
 		ctx, s.parent.names.grants, entry, attrRecordVersion,
@@ -147,18 +154,14 @@ func (s *grantStore) ListBySubject(ctx context.Context, subject string) ([]*stor
 	if err := s.assertTxOpen(); err != nil {
 		return nil, err
 	}
-	matches, err := s.parent.queryIndex(
+	keys, err := s.parent.enumerateCommitted(
 		ctx, s.parent.names.grants, indexBySubjectClient, attrSubject, subject,
 	)
 	if err != nil {
 		return nil, wrapErr("grants.ListBySubject", err)
 	}
-	out := make([]*store.Grant, 0, len(matches))
-	for _, match := range matches {
-		id := readS(match, attrPK)
-		if id == "" {
-			continue
-		}
+	out := make([]*store.Grant, 0, len(keys))
+	for _, id := range keys {
 		g, err := s.Find(ctx, id)
 		if errors.Is(err, store.ErrNotFound) {
 			continue
@@ -184,12 +187,12 @@ func (s *grantStore) ListBySubject(ctx context.Context, subject string) ([]*stor
 // it the rows would outlive the client indefinitely: the grants table is
 // the one table with no TTL.
 //
-// The enumeration reads by_client_subject rather than by_client. The
-// latter is keyed on the composite (subject, client) attribute that
-// serves [grantStore.FindBySubjectClient] and cannot be queried on the
-// client alone. Each candidate is re-read by primary key before it is
-// removed, because the index is eventually consistent and a stale match
-// would otherwise delete a row that no longer belongs to this client.
+// The index leg of the enumeration reads by_client_subject rather than
+// by_client. The latter is keyed on the composite (subject, client)
+// attribute that serves [grantStore.FindBySubjectClient] and cannot be
+// queried on the client alone. Each candidate is re-read by primary key
+// before it is removed, because a stale index match would otherwise
+// delete a row that no longer belongs to this client.
 func (s *grantStore) RevokeByClient(ctx context.Context, clientID string) error {
 	if err := s.assertTxOpen(); err != nil {
 		return err
@@ -197,17 +200,13 @@ func (s *grantStore) RevokeByClient(ctx context.Context, clientID string) error 
 	if clientID == "" {
 		return nil
 	}
-	matches, err := s.parent.queryIndex(
+	keys, err := s.parent.enumerateCommitted(
 		ctx, s.parent.names.grants, indexByClientSubject, attrClientID, clientID,
 	)
 	if err != nil {
 		return wrapErr("grants.RevokeByClient", err)
 	}
-	for _, match := range matches {
-		id := readS(match, attrPK)
-		if id == "" {
-			continue
-		}
+	for _, id := range keys {
 		g, err := s.Find(ctx, id)
 		if errors.Is(err, store.ErrNotFound) {
 			continue
@@ -226,15 +225,28 @@ func (s *grantStore) RevokeByClient(ctx context.Context, clientID string) error 
 }
 
 func (s *grantStore) Delete(ctx context.Context, id string) error {
+	table := s.parent.names.grants
 	if s.tx != nil {
-		return s.tx.delete(s.parent.names.grants, id)
+		found, err := s.tx.get(ctx, table, id)
+		if err != nil && !errors.Is(err, store.ErrNotFound) {
+			return err
+		}
+		if found != nil {
+			if err := s.tx.stageDropLinks(linkItems(table, found, attrSubject, attrClientID)); err != nil {
+				return err
+			}
+		}
+		return s.tx.delete(table, id)
 	}
-	existed, err := s.parent.deleteKey(ctx, s.parent.names.grants, id)
+	old, err := s.parent.deleteReturningOld(ctx, table, id)
 	if err != nil {
 		return wrapErr("grants.Delete", err)
 	}
-	if !existed {
+	if old == nil {
 		return store.ErrNotFound
+	}
+	if err := s.parent.dropLinks(ctx, linkItems(table, old, attrSubject, attrClientID)); err != nil {
+		return wrapErr("grants.Delete", err)
 	}
 	return nil
 }

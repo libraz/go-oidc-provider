@@ -28,8 +28,15 @@ func (s *opaqueAccessTokenStore) Save(ctx context.Context, tok *store.OpaqueAcce
 	if err != nil {
 		return err
 	}
+	links := linkItems(s.parent.names.opaqueAccessTokens, entry, attrGrantID, attrClientID)
 	if s.tx != nil {
+		if err := s.tx.stageLinks(links); err != nil {
+			return err
+		}
 		return s.tx.putIfAbsent(s.parent.names.opaqueAccessTokens, entry)
+	}
+	if err := s.parent.putLinks(ctx, links); err != nil {
+		return wrapErr("opaqueAccessTokens.Save", err)
 	}
 	placed, err := s.parent.putIfAbsent(ctx, s.parent.names.opaqueAccessTokens, entry)
 	if err != nil {
@@ -91,7 +98,7 @@ func (s *opaqueAccessTokenStore) retire(ctx context.Context, pk string) error {
 }
 
 // RevokeByGrant retires every token of a grant and reports how many it
-// newly revoked. Inside a transaction the enumeration reads the index while
+// newly revoked. Inside a transaction the enumeration reads the links and index while
 // each retirement is buffered, so the cascade covers the committed set
 // and costs one of the transaction's actions per token. The enumeration
 // is outside the buffer, so the settled-handle guard is explicit: a
@@ -101,18 +108,14 @@ func (s *opaqueAccessTokenStore) RevokeByGrant(ctx context.Context, grantID stri
 	if err := s.tx.assertOpen(); err != nil {
 		return 0, err
 	}
-	matches, err := s.parent.queryIndex(
+	keys, err := s.parent.enumerateCommitted(
 		ctx, s.parent.names.opaqueAccessTokens, indexByGrant, attrGrantID, grantID,
 	)
 	if err != nil {
 		return 0, wrapErr("opaqueAccessTokens.RevokeByGrant", err)
 	}
 	count := 0
-	for _, match := range matches {
-		pk := readS(match, attrPK)
-		if pk == "" {
-			continue
-		}
+	for _, pk := range keys {
 		flipped, err := s.parent.flipRevoked(ctx, s.tx, s.parent.names.opaqueAccessTokens, pk)
 		if err != nil {
 			return count, wrapErr("opaqueAccessTokens.RevokeByGrant", err)
@@ -135,18 +138,14 @@ func (s *opaqueAccessTokenStore) RevokeByChain(ctx context.Context, grantID, cha
 	if grantID == "" || chainID == "" {
 		return 0, nil
 	}
-	matches, err := s.parent.queryIndex(
+	keys, err := s.parent.enumerateCommitted(
 		ctx, s.parent.names.opaqueAccessTokens, indexByGrant, attrGrantID, grantID,
 	)
 	if err != nil {
 		return 0, wrapErr("opaqueAccessTokens.RevokeByChain", err)
 	}
 	count := 0
-	for _, match := range matches {
-		pk := readS(match, attrPK)
-		if pk == "" || readS(match, attrChainID) != chainID || readBool(match, attrRevoked) {
-			continue
-		}
+	for _, pk := range keys {
 		flipped, err := s.retireInChain(ctx, pk, chainID)
 		if err != nil {
 			return count, wrapErr("opaqueAccessTokens.RevokeByChain", err)
@@ -209,17 +208,13 @@ func (s *opaqueAccessTokenStore) RevokeByClient(ctx context.Context, clientID st
 	if clientID == "" {
 		return nil
 	}
-	matches, err := s.parent.queryIndex(
+	keys, err := s.parent.enumerateCommitted(
 		ctx, s.parent.names.opaqueAccessTokens, indexByClient, attrClientID, clientID,
 	)
 	if err != nil {
 		return wrapErr("opaqueAccessTokens.RevokeByClient", err)
 	}
-	for _, match := range matches {
-		pk := readS(match, attrPK)
-		if pk == "" {
-			continue
-		}
+	for _, pk := range keys {
 		if err := s.retire(ctx, pk); err != nil && !errors.Is(err, store.ErrNotFound) {
 			return wrapErr("opaqueAccessTokens.RevokeByClient", err)
 		}

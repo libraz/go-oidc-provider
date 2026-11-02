@@ -83,6 +83,16 @@
 // permanently — until they expire. See "Transactions" for how the links
 // interact with a caller-owned transaction.
 //
+// The other cascades — access-token and opaque-token RevokeByGrant,
+// RevokeByChain and RevokeByClient, grant RevokeByClient and
+// ListBySubject — follow the same rule through the cascade_links table.
+// Every token and grant is written with one link per parent attribute
+// (grant, client, subject), in the same transaction when the caller owns
+// one and otherwise ahead of the item; the cascade lists the links with
+// a strongly consistent Query and takes the union with the index query,
+// which reaches rows written before the links existed. Links carry the
+// item's TTL, and a grant's links are removed with the grant.
+//
 // # Atomicity
 //
 // No unguarded write in the adapter is a "read, decide, put back": every

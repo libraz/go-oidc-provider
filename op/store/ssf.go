@@ -277,17 +277,25 @@ type SSFEventStore interface {
 	Enqueue(ctx context.Context, ev *SSFEvent) error
 
 	// ClaimDue leases up to n events with Delivery == [SSFDeliveryPush],
-	// Held == false and NextAttemptAt <= now, earliest NextAttemptAt
-	// first, and sets their NextAttemptAt to now+lease. The returned
-	// copies carry the new NextAttemptAt; Attempts is unchanged. n MUST
-	// be positive.
+	// Held == false and NextAttemptAt <= now, at most perStream of them
+	// from any one stream, and sets their NextAttemptAt to now+lease. It
+	// takes each stream's earliest NextAttemptAt first and returns a
+	// stream's events in that order; across streams it favours the
+	// earliest due. Absent concurrent claimers it returns fewer than n
+	// events only when no further event is due under the per-stream cap,
+	// so one stream's backlog never crowds another stream's due events
+	// out of a claim. The returned copies carry the new NextAttemptAt;
+	// Attempts is unchanged. n and perStream MUST be positive.
 	//
 	// Selecting and leasing MUST be one atomic operation: an event is
 	// returned to exactly one of several concurrent callers, and is not
 	// returned again until its lease ends. That is what keeps several OP
 	// replicas from pushing the same SET twice. An event whose lease ran
 	// out without an Ack or Reschedule (its claimer died) is due again.
-	ClaimDue(ctx context.Context, now time.Time, n int, lease time.Duration) ([]*SSFEvent, error)
+	//
+	// A backend SHOULD keep the cost of a claim independent of the poll
+	// and held events queued.
+	ClaimDue(ctx context.Context, now time.Time, n, perStream int, lease time.Duration) ([]*SSFEvent, error)
 
 	// Reschedule sets the event's NextAttemptAt and Attempts after a
 	// failed push. It MUST return [ErrNotFound] when the event is no
@@ -303,7 +311,12 @@ type SSFEventStore interface {
 	// [SSFDeliveryPoll] and Held == false, in no particular order, and
 	// reports whether more such events remain beyond them. It does not
 	// lease or modify the events: they stay pending until acknowledged.
-	// n MUST be positive.
+	// Every such event committed before the call is visible to it. n MUST
+	// be positive.
+	//
+	// The poll endpoint calls it repeatedly during a long poll, so a
+	// backend SHOULD keep its cost bounded by n, independent of the
+	// stream's push and held events.
 	Pending(ctx context.Context, streamID string, n int) ([]*SSFEvent, bool, error)
 
 	// DeleteExpired deletes every event with ExpiresAt <= now and

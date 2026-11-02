@@ -245,6 +245,7 @@ func clientUpdateRoundTrip(t *testing.T, f Factory) {
 var staticClientReconcilerCases = []subtest{
 	{"EquivalentIsIdempotent", staticClientReconcileEquivalent},
 	{"ConflictIsAtomic", staticClientReconcileConflictIsAtomic},
+	{"ConcurrentEquivalentReconcileSucceeds", staticClientReconcileConcurrent},
 }
 
 func staticClientReconcileEquivalent(t *testing.T, f Factory) {
@@ -314,5 +315,39 @@ func staticClientReconcileConflictIsAtomic(t *testing.T, f Factory) {
 	}
 	if !store.StaticClientEquivalent(got, existing) {
 		t.Fatalf("conflicting reconcile changed existing client: got %+v want %+v", got, existing)
+	}
+}
+
+// staticClientReconcileConcurrent pins the replica-startup case: several
+// processes reconciling the same set at once all succeed and leave
+// exactly that set. A lost insert race must be re-evaluated against the
+// winner's record, not reported as a conflict.
+func staticClientReconcileConcurrent(t *testing.T, f Factory) {
+	b := f(t)
+	reconciler := requireStaticClientReconciler(t, b.Store)
+	ctx := context.Background()
+	set := func() []*store.Client {
+		return []*store.Client{
+			{ID: "static-race-a", Scopes: []string{"openid"}, PublicClient: true, Source: store.ClientSourceStatic},
+			{ID: "static-race-b", Scopes: []string{"openid", "profile"}, PublicClient: true, Source: store.ClientSourceStatic},
+		}
+	}
+	errs := race(
+		func() { _, _ = b.Store.Clients().GetClient(ctx, "static-race-warmup") },
+		everyRacer(func(int) error { return reconciler.ReconcileStaticClients(ctx, set()) })...,
+	)
+	for i, err := range errs {
+		if err != nil {
+			t.Fatalf("concurrent ReconcileStaticClients %d with an equivalent set: %v", i, err)
+		}
+	}
+	for _, want := range set() {
+		got, err := b.Store.Clients().GetClient(ctx, want.ID)
+		if err != nil {
+			t.Fatalf("GetClient %s after concurrent reconcile: %v", want.ID, err)
+		}
+		if !store.StaticClientEquivalent(got, want) {
+			t.Fatalf("concurrent reconcile left %s as %+v, want %+v", want.ID, got, want)
+		}
 	}
 }

@@ -217,6 +217,10 @@ var singleWinnerCases = map[methodRef]string{
 	{iface: "CIBARequestStore", method: "Deny"}:                             "Concurrency/CIBAApproveDenyHasOneWinner",
 	{iface: "CIBARequestStore", method: "IncrementPollViolation"}:           "CIBARequestStore/ConcurrentPollViolationsRecordEveryIncrement",
 	{iface: "SSFEventStore", method: "ClaimDue"}:                            "RunSSF/ClaimDueHasOneWinner",
+	{iface: "SSFEventStore", method: "Enqueue"}:                             "RunSSF/EnqueueRacingVerificationsKeepOne",
+	{iface: "SSFStreamStore", method: "Create"}:                             "RunSSF/StreamCreateRacingClientHasOneWinner",
+	{iface: "SSFStreamStore", method: "Update"}:                             "RunSSF/UpdateRacingNoticesKeepOne",
+	{iface: "StaticClientReconciler", method: "ReconcileStaticClients"}:     "StaticClientReconciler/ConcurrentEquivalentReconcileSucceeds",
 }
 
 // AssertConcurrentInteractionCAS pins the atomicity

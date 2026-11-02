@@ -3,6 +3,8 @@ package oidcdynamo
 import (
 	"context"
 	"errors"
+	"maps"
+	"strings"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -12,15 +14,19 @@ import (
 	"github.com/libraz/go-oidc-provider/op/store"
 )
 
-// Key prefixes inside the two SSF tables. Each table holds two item
-// shapes, and the prefixes keep a caller-chosen identifier of one shape
-// from ever addressing an item of the other.
+// Key prefixes and sort values of the two SSF tables. The prefixes keep a
+// caller-chosen identifier of one item shape from ever addressing an item
+// of another.
 const (
-	ssfStreamPrefix        = "stream#"
-	ssfClientPrefix        = "client#"
-	ssfEventPrefix         = "set#"
-	ssfVerificationPrefix  = "verification#"
-	ssfStreamUpdatedPrefix = "stream-updated#"
+	ssfStreamPrefix = "stream#"
+	ssfClientPrefix = "client#"
+	// ssfQueuePrefix is the partition of one stream's queue.
+	ssfQueuePrefix = "queue#"
+	// ssfEventPrefix is an event's sort key in its stream's queue and the
+	// partition of the item reserving its JTI.
+	ssfEventPrefix = "set#"
+	// ssfJTISort is the sort value of a JTI reservation.
+	ssfJTISort = "jti"
 )
 
 // ssfDueValue is the single value of [attrDueQueue]. Every due event
@@ -34,18 +40,31 @@ const ssfEnqueueAttempts = 8
 
 func ssfStreamKey(id string) string       { return ssfStreamPrefix + id }
 func ssfClientKey(clientID string) string { return ssfClientPrefix + clientID }
-func ssfEventKey(jti string) string       { return ssfEventPrefix + jti }
+func ssfQueueKey(streamID string) string  { return ssfQueuePrefix + streamID }
+
+// ssfKey addresses one item of the SSF queue table.
+func ssfKey(pk, sk string) map[string]types.AttributeValue {
+	return map[string]types.AttributeValue{attrPK: avS(pk), attrSSFSort: avS(sk)}
+}
+
+// ssfEventKey addresses an event in its stream's queue.
+func ssfEventKey(streamID, jti string) map[string]types.AttributeValue {
+	return ssfKey(ssfQueueKey(streamID), ssfEventPrefix+jti)
+}
+
+// ssfJTIKey addresses the item reserving jti, which names its stream.
+func ssfJTIKey(jti string) map[string]types.AttributeValue {
+	return ssfKey(ssfEventPrefix+jti, ssfJTISort)
+}
 
 // ssfControlKey is the pointer item naming the stream's queued event of a
-// control kind, or "" for an ordinary event, which has none.
-func ssfControlKey(kind store.SSFEventKind, streamID string) string {
+// control kind, or nil for an ordinary event, which has none.
+func ssfControlKey(kind store.SSFEventKind, streamID string) map[string]types.AttributeValue {
 	switch kind {
-	case store.SSFEventKindVerification:
-		return ssfVerificationPrefix + streamID
-	case store.SSFEventKindStreamUpdated:
-		return ssfStreamUpdatedPrefix + streamID
+	case store.SSFEventKindVerification, store.SSFEventKindStreamUpdated:
+		return ssfKey(ssfQueueKey(streamID), string(kind))
 	}
-	return ""
+	return nil
 }
 
 // ssfStreamStore persists streams. A stream item carries the JSON
@@ -64,7 +83,8 @@ type ssfStreamStore struct {
 // authoritative over the document's copy. ClaimDue reads the sparse
 // ssf_due index and leases each candidate with an update conditioned on
 // the next_attempt_at it observed, so of several claimers only the first
-// write lands.
+// write lands. Every read that must see each committed event of a stream
+// is a strongly consistent Query of its queue partition or of ssf_ready.
 type ssfEventStore struct {
 	parent *Store
 }
@@ -180,11 +200,10 @@ func (s *ssfStreamStore) ListActive(ctx context.Context) ([]*store.SSFStream, er
 // Update replaces the stream but keeps the client it was created for:
 // the client claim item is never rewritten, so the binding cannot move.
 // The stream and the notice are written in one transaction; the queued
-// events are then moved through the by_stream index. That index is
-// eventually consistent, so an event enqueued within its propagation delay
-// before the Update keeps the earlier state's tags, the same window
-// Delete's cascade has. An event enqueued after the Update is refused by
-// Enqueue's state check instead.
+// events are then moved by a strongly consistent read of the stream's
+// queue. Every Enqueue committed before the stream write is in that read,
+// and every later one is refused by Enqueue's state check, so no event
+// keeps the earlier state's tags.
 func (s *ssfStreamStore) Update(ctx context.Context, in *store.SSFStream, notice *store.SSFEvent) error {
 	if in == nil {
 		return errors.New("oidcdynamo: nil ssf stream")
@@ -221,7 +240,8 @@ func (s *ssfStreamStore) Update(ctx context.Context, in *store.SSFStream, notice
 }
 
 // Delete removes the stream and its client claim in one transaction,
-// then every event queued for it and its verification pointer.
+// then every item of its queue partition and each event's JTI
+// reservation.
 func (s *ssfStreamStore) Delete(ctx context.Context, id string) error {
 	table := s.parent.names.ssfStreams
 	found, err := s.parent.get(ctx, table, ssfStreamKey(id))
@@ -257,16 +277,7 @@ func (s *ssfStreamStore) Delete(ctx context.Context, id string) error {
 		}
 		return wrapErr("ssfStreams.Delete", err)
 	}
-	events := s.parent.ssfEventsImpl
-	if err := events.purge(ctx, id); err != nil {
-		return err
-	}
-	for _, kind := range []store.SSFEventKind{store.SSFEventKindVerification, store.SSFEventKindStreamUpdated} {
-		if _, err := s.parent.deleteKey(ctx, s.parent.names.ssfEvents, ssfControlKey(kind, id)); err != nil {
-			return wrapErr("ssfStreams.Delete", err)
-		}
-	}
-	return nil
+	return s.parent.ssfEventsImpl.purge(ctx, id)
 }
 
 // ssfDue reports whether an event belongs in the ssf_due index.
@@ -274,8 +285,13 @@ func ssfDue(delivery store.SSFDeliveryMethod, held bool) bool {
 	return delivery == store.SSFDeliveryPush && !held
 }
 
+// ssfReady reports whether an event belongs in the ssf_ready index.
+func ssfReady(delivery store.SSFDeliveryMethod, held bool) bool {
+	return delivery == store.SSFDeliveryPoll && !held
+}
+
 func ssfEventItem(ev *store.SSFEvent) (item, error) {
-	entry := newItem(ssfEventKey(ev.JTI)).
+	entry := item(ssfEventKey(ev.StreamID, ev.JTI)).
 		set(attrStreamID, ev.StreamID).
 		set(attrKind, string(ev.Kind)).
 		set(attrDelivery, string(ev.Delivery)).
@@ -285,6 +301,9 @@ func ssfEventItem(ev *store.SSFEvent) (item, error) {
 		expires(ev.ExpiresAt)
 	if ssfDue(ev.Delivery, ev.Held) {
 		entry.set(attrDueQueue, ssfDueValue)
+	}
+	if ssfReady(ev.Delivery, ev.Held) {
+		entry.set(attrReady, ev.JTI)
 	}
 	return entry.doc(ev)
 }
@@ -304,6 +323,22 @@ func decodeSSFEvent(found item) (*store.SSFEvent, error) {
 }
 
 func (s *ssfEventStore) table() string { return s.parent.names.ssfEvents }
+
+// getItem reads one queue-table item with a strongly consistent read.
+func (s *ssfEventStore) getItem(ctx context.Context, k map[string]types.AttributeValue) (item, error) {
+	out, err := s.parent.api.GetItem(ctx, &dynamodb.GetItemInput{
+		TableName:      aws.String(s.table()),
+		Key:            k,
+		ConsistentRead: aws.Bool(true),
+	})
+	if err != nil {
+		return nil, err
+	}
+	if out.Item == nil {
+		return nil, store.ErrNotFound
+	}
+	return out.Item, nil
+}
 
 // Enqueue writes the event together with a condition on its stream item,
 // so the state check and the insert are one transaction.
@@ -339,27 +374,28 @@ func (s *ssfEventStore) streamStateCheck(ev *store.SSFEvent) types.TransactWrite
 	}}
 }
 
-// put writes ev in one transaction with lead, reporting leadErr when
-// lead's condition fails. A control event also swaps its stream's pointer
-// of that kind to it, deleting the event the pointer held before. The
-// pointer is conditioned on the value read, so two control events of one
-// kind written at once cannot both keep their event: the loser re-reads
-// the pointer and replaces the winner.
+// put writes ev and its JTI reservation in one transaction with lead,
+// reporting leadErr when lead's condition fails. A control event also
+// swaps its stream's pointer of that kind to it, deleting the event the
+// pointer held before. The pointer is conditioned on the value read, so
+// two control events of one kind written at once cannot both keep their
+// event: the loser re-reads the pointer and replaces the winner.
 func (s *ssfEventStore) put(ctx context.Context, ev *store.SSFEvent, lead types.TransactWriteItem, leadErr error) error {
 	entry, err := ssfEventItem(ev)
 	if err != nil {
 		return err
 	}
-	table := s.table()
+	table := aws.String(s.table())
+	reservation := item(ssfJTIKey(ev.JTI)).set(attrStreamID, ev.StreamID).expires(ev.ExpiresAt)
 	pointerKey := ssfControlKey(ev.Kind, ev.StreamID)
 	for range ssfEnqueueAttempts {
-		actions := []types.TransactWriteItem{lead, {Put: &types.Put{
-			TableName:           aws.String(table),
-			Item:                entry,
-			ConditionExpression: aws.String(absentKeyCondition),
-		}}}
-		if pointerKey != "" {
-			swap, err := s.pointerSwap(ctx, pointerKey, ev.JTI)
+		actions := []types.TransactWriteItem{
+			lead,
+			{Put: &types.Put{TableName: table, Item: entry, ConditionExpression: aws.String(absentKeyCondition)}},
+			{Put: &types.Put{TableName: table, Item: reservation, ConditionExpression: aws.String(absentKeyCondition)}},
+		}
+		if pointerKey != nil {
+			swap, err := s.pointerSwap(ctx, pointerKey, ev.StreamID, ev.JTI)
 			if err != nil {
 				return wrapErr("ssfEvents.Enqueue", err)
 			}
@@ -371,13 +407,13 @@ func (s *ssfEventStore) put(ctx context.Context, ev *store.SSFEvent, lead types.
 		}
 		codes := transactionCancellationCodes(err)
 		switch {
-		case len(codes) < 2:
+		case len(codes) < 3:
 			return wrapErr("ssfEvents.Enqueue", err)
 		case codes[0] == conditionalCheckFailed:
 			return leadErr
-		case codes[1] == conditionalCheckFailed:
+		case codes[1] == conditionalCheckFailed, codes[2] == conditionalCheckFailed:
 			return store.ErrAlreadyExists
-		case pointerKey == "":
+		case pointerKey == nil:
 			return wrapErr("ssfEvents.Enqueue", err)
 		}
 	}
@@ -385,11 +421,14 @@ func (s *ssfEventStore) put(ctx context.Context, ev *store.SSFEvent, lead types.
 }
 
 // pointerSwap reads the pointer at pointerKey and returns the writes that
-// move it to jti, conditioned on the value read, and delete its old event.
-func (s *ssfEventStore) pointerSwap(ctx context.Context, pointerKey, jti string) ([]types.TransactWriteItem, error) {
-	table := s.table()
+// move it to jti, conditioned on the value read, and delete its old event
+// with that event's JTI reservation.
+func (s *ssfEventStore) pointerSwap(
+	ctx context.Context, pointerKey map[string]types.AttributeValue, streamID, jti string,
+) ([]types.TransactWriteItem, error) {
+	table := aws.String(s.table())
 	prior := ""
-	found, err := s.parent.get(ctx, table, pointerKey)
+	found, err := s.getItem(ctx, pointerKey)
 	switch {
 	case err == nil:
 		prior = readS(found, attrValue)
@@ -397,8 +436,8 @@ func (s *ssfEventStore) pointerSwap(ctx context.Context, pointerKey, jti string)
 		return nil, err
 	}
 	pointer := &types.Put{
-		TableName:                aws.String(table),
-		Item:                     newItem(pointerKey).set(attrValue, jti),
+		TableName:                table,
+		Item:                     item(maps.Clone(pointerKey)).set(attrValue, jti),
 		ConditionExpression:      aws.String("attribute_not_exists(#pk)"),
 		ExpressionAttributeNames: map[string]string{"#pk": attrPK},
 	}
@@ -409,59 +448,53 @@ func (s *ssfEventStore) pointerSwap(ctx context.Context, pointerKey, jti string)
 	}
 	out := []types.TransactWriteItem{{Put: pointer}}
 	if prior != "" && prior != jti {
-		out = append(out, types.TransactWriteItem{Delete: &types.Delete{
-			TableName: aws.String(table),
-			Key:       key(ssfEventKey(prior)),
-		}})
+		out = append(out,
+			types.TransactWriteItem{Delete: &types.Delete{TableName: table, Key: ssfEventKey(streamID, prior)}},
+			types.TransactWriteItem{Delete: &types.Delete{TableName: table, Key: ssfJTIKey(prior)}},
+		)
 	}
 	return out, nil
 }
 
-// ClaimDue walks ssf_due earliest first and leases each candidate with an
-// update conditioned on the next_attempt_at the index reported and on
-// the event still being due. The index is eventually consistent, so a
-// candidate it reports stale fails that condition and is skipped; a
-// concurrent claimer that leased it first fails it the same way.
-func (s *ssfEventStore) ClaimDue(ctx context.Context, now time.Time, n int, lease time.Duration) ([]*store.SSFEvent, error) {
-	if n <= 0 {
-		return nil, errors.New("oidcdynamo: ssf claim size must be positive")
+// ClaimDue walks ssf_due earliest first, passing over the events of a
+// stream that already has perStream in the claim, and leases each
+// candidate with an update conditioned on the next_attempt_at the index
+// reported and on the event still being due. The index is eventually
+// consistent, so a candidate it reports stale fails that condition and is
+// skipped; a concurrent claimer that leased it first fails it the same
+// way. The walk covers only due push events, never poll or held ones.
+func (s *ssfEventStore) ClaimDue(ctx context.Context, now time.Time, n, perStream int, lease time.Duration) ([]*store.SSFEvent, error) {
+	if n <= 0 || perStream <= 0 {
+		return nil, errors.New("oidcdynamo: ssf claim sizes must be positive")
 	}
 	leased := now.Add(lease)
 	out := make([]*store.SSFEvent, 0, n)
+	taken := make(map[string]int)
 	var start map[string]types.AttributeValue
 	for {
 		page, err := s.dueCandidates(ctx, now, n, start)
 		if err != nil {
 			return nil, wrapErr("ssfEvents.ClaimDue", err)
 		}
-		out, err = s.claimPage(ctx, page.Items, leased, out, n)
-		if err != nil {
-			return nil, err
+		for _, candidate := range page.Items {
+			streamID := readS(candidate, attrStreamID)
+			if len(out) == n || taken[streamID] == perStream {
+				continue
+			}
+			ev, won, err := s.claim(ctx, candidate, leased)
+			if err != nil {
+				return nil, err
+			}
+			if won {
+				taken[streamID]++
+				out = append(out, ev)
+			}
 		}
 		if len(out) == n || len(page.LastEvaluatedKey) == 0 {
 			return out, nil
 		}
 		start = page.LastEvaluatedKey
 	}
-}
-
-// claimPage leases candidates in order until out holds n events.
-func (s *ssfEventStore) claimPage(
-	ctx context.Context, candidates []map[string]types.AttributeValue, leased time.Time, out []*store.SSFEvent, n int,
-) ([]*store.SSFEvent, error) {
-	for _, candidate := range candidates {
-		if len(out) == n {
-			break
-		}
-		ev, won, err := s.claim(ctx, candidate, leased)
-		if err != nil {
-			return nil, err
-		}
-		if won {
-			out = append(out, ev)
-		}
-	}
-	return out, nil
 }
 
 // dueCandidates reads one page of ssf_due: events due at now, earliest
@@ -489,7 +522,7 @@ func (s *ssfEventStore) dueCandidates(
 func (s *ssfEventStore) claim(ctx context.Context, candidate item, leased time.Time) (*store.SSFEvent, bool, error) {
 	out, err := s.parent.api.UpdateItem(ctx, &dynamodb.UpdateItemInput{
 		TableName:           aws.String(s.table()),
-		Key:                 key(readS(candidate, attrPK)),
+		Key:                 ssfKey(readS(candidate, attrPK), readS(candidate, attrSSFSort)),
 		UpdateExpression:    aws.String("SET #next = :leased"),
 		ConditionExpression: aws.String("#next = :observed AND #q = :q"),
 		ExpressionAttributeNames: map[string]string{
@@ -516,10 +549,19 @@ func (s *ssfEventStore) claim(ctx context.Context, candidate item, leased time.T
 	return ev, true, nil
 }
 
+// Reschedule resolves the event's stream through its JTI reservation,
+// then updates the event in that stream's queue.
 func (s *ssfEventStore) Reschedule(ctx context.Context, jti string, next time.Time, attempts int) error {
-	_, err := s.parent.api.UpdateItem(ctx, &dynamodb.UpdateItemInput{
+	reservation, err := s.getItem(ctx, ssfJTIKey(jti))
+	if errors.Is(err, store.ErrNotFound) {
+		return store.ErrNotFound
+	}
+	if err != nil {
+		return wrapErr("ssfEvents.Reschedule", err)
+	}
+	_, err = s.parent.api.UpdateItem(ctx, &dynamodb.UpdateItemInput{
 		TableName:                aws.String(s.table()),
-		Key:                      key(ssfEventKey(jti)),
+		Key:                      ssfEventKey(readS(reservation, attrStreamID), jti),
 		UpdateExpression:         aws.String("SET #next = :next, #attempts = :attempts"),
 		ConditionExpression:      aws.String("attribute_exists(#pk)"),
 		ExpressionAttributeNames: map[string]string{"#pk": attrPK, "#next": attrNextAttemptAt, "#attempts": attrAttempts},
@@ -537,71 +579,119 @@ func (s *ssfEventStore) Reschedule(ctx context.Context, jti string, next time.Ti
 	return nil
 }
 
-// Ack deletes each listed event under a condition on its stream, so a
-// receiver cannot remove another stream's events.
+// Ack removes each listed event from the stream's own queue partition, so
+// a receiver cannot remove another stream's events.
 func (s *ssfEventStore) Ack(ctx context.Context, streamID string, jtis []string) error {
 	for _, jti := range jtis {
-		if err := s.deleteOfStream(ctx, ssfEventKey(jti), streamID); err != nil {
+		if err := s.remove(ctx, streamID, jti); err != nil {
 			return wrapErr("ssfEvents.Ack", err)
 		}
 	}
 	return nil
 }
 
-// deleteOfStream deletes an event when it belongs to streamID. An event
-// that is gone or belongs elsewhere is not an error.
-func (s *ssfEventStore) deleteOfStream(ctx context.Context, pk, streamID string) error {
-	_, err := s.parent.api.DeleteItem(ctx, &dynamodb.DeleteItemInput{
-		TableName:                 aws.String(s.table()),
-		Key:                       key(pk),
-		ConditionExpression:       aws.String("#stream = :stream"),
-		ExpressionAttributeNames:  map[string]string{"#stream": attrStreamID},
-		ExpressionAttributeValues: map[string]types.AttributeValue{":stream": avS(streamID)},
+// remove deletes an event of streamID and its JTI reservation in one
+// transaction. An event no longer in the stream's queue is not an error.
+func (s *ssfEventStore) remove(ctx context.Context, streamID, jti string) error {
+	table := aws.String(s.table())
+	_, err := s.parent.api.TransactWriteItems(ctx, &dynamodb.TransactWriteItemsInput{
+		TransactItems: []types.TransactWriteItem{
+			{Delete: &types.Delete{
+				TableName:           table,
+				Key:                 ssfEventKey(streamID, jti),
+				ConditionExpression: aws.String(presentKeyCondition),
+			}},
+			{Delete: &types.Delete{TableName: table, Key: ssfJTIKey(jti)}},
+		},
 	})
-	if err != nil && !isConditionalCheckFailed(err) {
+	if err != nil && !isTransactionCanceledByCondition(err) {
 		return err
 	}
 	return nil
 }
 
+// Pending reads ssf_ready, which holds only the stream's poll-ready
+// events, with a strongly consistent Query that stops one event past n.
 func (s *ssfEventStore) Pending(ctx context.Context, streamID string, n int) ([]*store.SSFEvent, bool, error) {
 	if n <= 0 {
 		return nil, false, errors.New("oidcdynamo: ssf pending size must be positive")
 	}
-	found, err := s.parent.queryIndex(ctx, s.table(), indexByStream, attrStreamID, streamID)
+	limit := int32(n + 1) //nolint:gosec // n is the poll request's maxEvents, far below int32.
+	found, err := collectPages(limit, func(start map[string]types.AttributeValue) ([]map[string]types.AttributeValue, map[string]types.AttributeValue, error) {
+		page, err := s.parent.api.Query(ctx, &dynamodb.QueryInput{
+			TableName:                 aws.String(s.table()),
+			IndexName:                 aws.String(indexSSFReady),
+			KeyConditionExpression:    aws.String("#pk = :pk"),
+			ExpressionAttributeNames:  map[string]string{"#pk": attrPK},
+			ExpressionAttributeValues: map[string]types.AttributeValue{":pk": avS(ssfQueueKey(streamID))},
+			ConsistentRead:            aws.Bool(true),
+			Limit:                     aws.Int32(limit),
+			ExclusiveStartKey:         start,
+		})
+		if err != nil {
+			return nil, nil, err
+		}
+		return page.Items, page.LastEvaluatedKey, nil
+	})
 	if err != nil {
 		return nil, false, wrapErr("ssfEvents.Pending", err)
 	}
-	out := make([]*store.SSFEvent, 0, min(n, len(found)))
+	more := len(found) > n
+	if more {
+		found = found[:n]
+	}
+	out := make([]*store.SSFEvent, 0, len(found))
 	for _, raw := range found {
-		if store.SSFDeliveryMethod(readS(raw, attrDelivery)) != store.SSFDeliveryPoll || readBool(raw, attrHeld) {
-			continue
-		}
-		if len(out) == n {
-			return out, true, nil
-		}
 		ev, err := decodeSSFEvent(raw)
 		if err != nil {
 			return nil, false, err
 		}
 		out = append(out, ev)
 	}
-	return out, false, nil
+	return out, more, nil
+}
+
+// queryQueue reads the items of a stream's queue partition whose sort key
+// starts with prefix, every item for an empty prefix, with a strongly
+// consistent Query, so an item committed before the call is never missed.
+func (s *ssfEventStore) queryQueue(ctx context.Context, streamID, prefix string) ([]item, error) {
+	cond := "#pk = :pk"
+	names := map[string]string{"#pk": attrPK}
+	values := map[string]types.AttributeValue{":pk": avS(ssfQueueKey(streamID))}
+	if prefix != "" {
+		cond += " AND begins_with(#sk, :prefix)"
+		names["#sk"] = attrSSFSort
+		values[":prefix"] = avS(prefix)
+	}
+	return collectPages(0, func(start map[string]types.AttributeValue) ([]map[string]types.AttributeValue, map[string]types.AttributeValue, error) {
+		page, err := s.parent.api.Query(ctx, &dynamodb.QueryInput{
+			TableName:                 aws.String(s.table()),
+			KeyConditionExpression:    aws.String(cond),
+			ExpressionAttributeNames:  names,
+			ExpressionAttributeValues: values,
+			ConsistentRead:            aws.Bool(true),
+			ExclusiveStartKey:         start,
+		})
+		if err != nil {
+			return nil, nil, err
+		}
+		return page.Items, page.LastEvaluatedKey, nil
+	})
 }
 
 // reconcile moves every event queued for st to st's state: ordinary
 // events of a disabled stream are deleted, every other event takes the
 // stream's delivery method, and ordinary events take its hold.
 func (s *ssfEventStore) reconcile(ctx context.Context, st *store.SSFStream) error {
-	found, err := s.parent.queryIndex(ctx, s.table(), indexByStream, attrStreamID, st.ID)
+	found, err := s.queryQueue(ctx, st.ID, ssfEventPrefix)
 	if err != nil {
 		return wrapErr("ssfStreams.Update", err)
 	}
 	for _, raw := range found {
-		pk := readS(raw, attrPK)
+		jti := strings.TrimPrefix(readS(raw, attrSSFSort), ssfEventPrefix)
 		ordinary := store.SSFEventKind(readS(raw, attrKind)) == store.SSFEventKindEvent
 		if ordinary && st.Status == store.SSFStreamDisabled {
-			if err := s.deleteOfStream(ctx, pk, st.ID); err != nil {
+			if err := s.remove(ctx, st.ID, jti); err != nil {
 				return wrapErr("ssfStreams.Update", err)
 			}
 			continue
@@ -610,35 +700,44 @@ func (s *ssfEventStore) reconcile(ctx context.Context, st *store.SSFStream) erro
 		if store.SSFDeliveryMethod(readS(raw, attrDelivery)) == st.Delivery.Method && readBool(raw, attrHeld) == held {
 			continue
 		}
-		if err := s.retagOne(ctx, pk, st.ID, st.Delivery.Method, held); err != nil {
+		if err := s.retagOne(ctx, st.ID, jti, st.Delivery.Method, held); err != nil {
 			return wrapErr("ssfStreams.Update", err)
 		}
 	}
 	return nil
 }
 
-func (s *ssfEventStore) retagOne(ctx context.Context, pk, streamID string, delivery store.SSFDeliveryMethod, held bool) error {
-	update := "SET #delivery = :delivery, #held = :held REMOVE #q"
-	values := map[string]types.AttributeValue{
-		":delivery": avS(string(delivery)),
-		":held":     avBool(held),
-		":stream":   avS(streamID),
-	}
+// retagOne sets an event's delivery and hold and the sparse index keys
+// that follow from them.
+func (s *ssfEventStore) retagOne(ctx context.Context, streamID, jti string, delivery store.SSFDeliveryMethod, held bool) error {
+	sets := []string{"#delivery = :delivery", "#held = :held"}
+	var removes []string
+	names := map[string]string{"#pk": attrPK, "#delivery": attrDelivery, "#held": attrHeld}
+	values := map[string]types.AttributeValue{":delivery": avS(string(delivery)), ":held": avBool(held)}
 	if ssfDue(delivery, held) {
-		update = "SET #delivery = :delivery, #held = :held, #q = :q"
+		sets = append(sets, "#q = :q")
 		values[":q"] = avS(ssfDueValue)
+	} else {
+		removes = append(removes, "#q")
+	}
+	names["#q"] = attrDueQueue
+	if ssfReady(delivery, held) {
+		sets = append(sets, "#ready = :ready")
+		values[":ready"] = avS(jti)
+	} else {
+		removes = append(removes, "#ready")
+	}
+	names["#ready"] = attrReady
+	update := "SET " + strings.Join(sets, ", ")
+	if len(removes) > 0 {
+		update += " REMOVE " + strings.Join(removes, ", ")
 	}
 	_, err := s.parent.api.UpdateItem(ctx, &dynamodb.UpdateItemInput{
-		TableName:           aws.String(s.table()),
-		Key:                 key(pk),
-		UpdateExpression:    aws.String(update),
-		ConditionExpression: aws.String("#stream = :stream"),
-		ExpressionAttributeNames: map[string]string{
-			"#delivery": attrDelivery,
-			"#held":     attrHeld,
-			"#q":        attrDueQueue,
-			"#stream":   attrStreamID,
-		},
+		TableName:                 aws.String(s.table()),
+		Key:                       ssfEventKey(streamID, jti),
+		UpdateExpression:          aws.String(update),
+		ConditionExpression:       aws.String("attribute_exists(#pk)"),
+		ExpressionAttributeNames:  names,
 		ExpressionAttributeValues: values,
 	})
 	if err != nil && !isConditionalCheckFailed(err) {
@@ -648,26 +747,75 @@ func (s *ssfEventStore) retagOne(ctx context.Context, pk, streamID string, deliv
 	return nil
 }
 
-// purge deletes every event queued for streamID.
+// purge deletes every item of the stream's queue partition: each event
+// with its JTI reservation, and the control pointers.
 func (s *ssfEventStore) purge(ctx context.Context, streamID string) error {
-	found, err := s.parent.queryIndex(ctx, s.table(), indexByStream, attrStreamID, streamID)
+	found, err := s.queryQueue(ctx, streamID, "")
 	if err != nil {
 		return wrapErr("ssfStreams.Delete", err)
 	}
 	for _, raw := range found {
-		if err := s.deleteOfStream(ctx, readS(raw, attrPK), streamID); err != nil {
+		sk := readS(raw, attrSSFSort)
+		if jti, ok := strings.CutPrefix(sk, ssfEventPrefix); ok {
+			err = s.remove(ctx, streamID, jti)
+		} else {
+			_, err = s.parent.api.DeleteItem(ctx, &dynamodb.DeleteItemInput{
+				TableName: aws.String(s.table()),
+				Key:       ssfKey(ssfQueueKey(streamID), sk),
+			})
+		}
+		if err != nil {
 			return wrapErr("ssfStreams.Delete", err)
 		}
 	}
 	return nil
 }
 
-// DeleteExpired scans for expired events and deletes each under the same
-// expiry condition, counting only the deletes that landed. Verification
-// and stream-updated pointers carry no expiry and never match.
+// DeleteExpired scans for expired items with a consistent read and
+// deletes each under the same expiry condition, counting only the events
+// whose delete landed. A JTI reservation expires with its event; the
+// control pointers carry no expiry and never match.
 func (s *ssfEventStore) DeleteExpired(ctx context.Context, now time.Time) (int, error) {
 	values := map[string]types.AttributeValue{":cutoff": avTime(now)}
-	return s.parent.gcWhere(ctx, s.table(), "ssfEvents.DeleteExpired", expiredAtOrBeforeCondition, values, true)
+	deleted := 0
+	var start map[string]types.AttributeValue
+	for {
+		page, err := s.parent.api.Scan(ctx, &dynamodb.ScanInput{
+			TableName:                 aws.String(s.table()),
+			FilterExpression:          aws.String(expiredAtOrBeforeCondition),
+			ProjectionExpression:      aws.String("#pk, #sk"),
+			ExpressionAttributeNames:  map[string]string{"#pk": attrPK, "#sk": attrSSFSort, "#expires": attrExpiresAt},
+			ExpressionAttributeValues: values,
+			ExclusiveStartKey:         start,
+			ConsistentRead:            aws.Bool(true),
+		})
+		if err != nil {
+			return deleted, wrapErr("ssfEvents.DeleteExpired", err)
+		}
+		for _, entry := range page.Items {
+			sk := readS(entry, attrSSFSort)
+			_, err := s.parent.api.DeleteItem(ctx, &dynamodb.DeleteItemInput{
+				TableName:                 aws.String(s.table()),
+				Key:                       ssfKey(readS(entry, attrPK), sk),
+				ConditionExpression:       aws.String("attribute_exists(#pk) AND " + expiredAtOrBeforeCondition),
+				ExpressionAttributeNames:  map[string]string{"#pk": attrPK, "#expires": attrExpiresAt},
+				ExpressionAttributeValues: values,
+			})
+			if isConditionalCheckFailed(err) {
+				continue
+			}
+			if err != nil {
+				return deleted, wrapErr("ssfEvents.DeleteExpired", err)
+			}
+			if strings.HasPrefix(sk, ssfEventPrefix) {
+				deleted++
+			}
+		}
+		if len(page.LastEvaluatedKey) == 0 {
+			return deleted, nil
+		}
+		start = page.LastEvaluatedKey
+	}
 }
 
 // expiredAtOrBeforeCondition holds for an item whose expiry is set and at

@@ -103,6 +103,7 @@ var naming = map[string]string{
 	"authn_lockouts":             "auth_authn_lockouts",
 	"ssf_streams":                "auth_ssf_streams",
 	"ssf_events":                 "auth_ssf_events",
+	"cascade_links":              "auth_cascade_links",
 }
 
 func main() {

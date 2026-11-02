@@ -132,9 +132,7 @@ func newMySQLFactoryWithClientFoundRows(t *testing.T, clientFoundRows bool) cont
 func TestMySQL_Contract(t *testing.T) {
 	t.Parallel()
 	factory := newMySQLFactory(t)
-	contract.Run(t, factory)
-	runMFAContracts(t, factory)
-	runClientUpdateContracts(t, factory)
+	runFullContract(t, factory)
 }
 
 // TestMySQL_ClientFoundRows_FullContract runs the complete store contract
@@ -158,9 +156,7 @@ func TestMySQL_Contract(t *testing.T) {
 func TestMySQL_ClientFoundRows_FullContract(t *testing.T) {
 	t.Parallel()
 	factory := newMySQLFactoryWithClientFoundRows(t, true)
-	contract.Run(t, factory)
-	runMFAContracts(t, factory)
-	runClientUpdateContracts(t, factory)
+	runFullContract(t, factory)
 }
 
 // TestMySQL_ClientFoundRowsMFAPut exercises the driver mode used by services

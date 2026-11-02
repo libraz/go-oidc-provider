@@ -62,6 +62,7 @@ type nameMap struct {
 	authnLockouts      string
 	ssfStreams         string
 	ssfEvents          string
+	cascadeLinks       string
 }
 
 //nolint:gochecknoglobals // immutable list used by error messages and collision reporting.
@@ -90,6 +91,7 @@ var knownNamingKeys = []string{
 	"authn_lockouts",
 	"ssf_streams",
 	"ssf_events",
+	"cascade_links",
 }
 
 // defaultNames returns the canonical table names under prefix.
@@ -119,6 +121,7 @@ func defaultNames(prefix string) nameMap {
 		authnLockouts:      prefix + "authn_lockouts",
 		ssfStreams:         prefix + "ssf_streams",
 		ssfEvents:          prefix + "ssf_events",
+		cascadeLinks:       prefix + "cascade_links",
 	}
 }
 
@@ -151,6 +154,7 @@ func (n nameMap) all() []string {
 		n.authnLockouts,
 		n.ssfStreams,
 		n.ssfEvents,
+		n.cascadeLinks,
 	}
 }
 
@@ -209,6 +213,8 @@ func (n *nameMap) applyOverrides(overrides map[string]string) error {
 			n.ssfStreams = physical
 		case "ssf_events":
 			n.ssfEvents = physical
+		case "cascade_links":
+			n.cascadeLinks = physical
 		default:
 			return fmt.Errorf("oidcdynamo: unknown WithNaming key %q (valid keys: %s)",
 				logical, strings.Join(knownNamingKeys, ", "))

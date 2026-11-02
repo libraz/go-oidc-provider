@@ -4,30 +4,7 @@ import (
 	"context"
 	"strings"
 	"testing"
-
-	"github.com/libraz/go-oidc-provider/op/store"
-	"github.com/libraz/go-oidc-provider/op/store/contract"
 )
-
-// ssfFactory adapts a store contract factory to the SSF contract, which
-// takes the two substores rather than the aggregate.
-func ssfFactory(f contract.Factory) contract.SSFFactory {
-	return func(t *testing.T) contract.SSFBackend {
-		t.Helper()
-		s, ok := f(t).Store.(store.SharedSignalsStore)
-		if !ok {
-			t.Fatal("sql store does not implement store.SharedSignalsStore")
-		}
-		return contract.SSFBackend{Streams: s.SSFStreams(), Events: s.SSFEvents()}
-	}
-}
-
-// TestSQLite_SSF runs the Shared Signals stream and SET-queue contract
-// against SQLite.
-func TestSQLite_SSF(t *testing.T) {
-	t.Parallel()
-	contract.RunSSF(t, ssfFactory(newSQLiteFactory(t)))
-}
 
 // A database created before the SSF tables existed fails ValidateSchema
 // with the migration that creates them.

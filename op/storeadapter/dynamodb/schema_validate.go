@@ -112,6 +112,34 @@ func validateIndexes(def TableDefinition, have *types.TableDescription) []error 
 			def.Name, strings.Join(missing, ", "),
 		))
 	}
+	return append(problems, validateLocalIndexes(def, have)...)
+}
+
+// validateLocalIndexes compares the local secondary indexes def requires
+// with the ones the table carries. A local index exists only from table
+// creation, so a missing or mismatched one means recreating the table.
+func validateLocalIndexes(def TableDefinition, have *types.TableDescription) []error {
+	var problems []error
+	for _, idx := range def.LocalSecondaryIndexes {
+		name := aws.ToString(idx.IndexName)
+		j := slices.IndexFunc(have.LocalSecondaryIndexes, func(l types.LocalSecondaryIndexDescription) bool {
+			return aws.ToString(l.IndexName) == name
+		})
+		if j < 0 {
+			problems = append(problems, fmt.Errorf(
+				"oidcdynamo: table %s is missing local secondary index %s; a local index cannot be added in place, so recreate the table from Store.TableDefinitions",
+				def.Name, name,
+			))
+			continue
+		}
+		wantKeys := formatKeys(idx.KeySchema, def.AttributeDefinitions)
+		if gotKeys := formatKeys(have.LocalSecondaryIndexes[j].KeySchema, have.AttributeDefinitions); gotKeys != wantKeys {
+			problems = append(problems, fmt.Errorf(
+				"oidcdynamo: index %s on table %s has key schema %s, want %s; recreate the table from Store.TableDefinitions",
+				name, def.Name, gotKeys, wantKeys,
+			))
+		}
+	}
 	return problems
 }
 
@@ -184,13 +212,13 @@ func (s *refreshStore) ValidateSchema(ctx context.Context) error {
 // ValidateSchema implements [store.SchemaValidator] for the access tokens
 // table.
 func (s *accessTokenStore) ValidateSchema(ctx context.Context) error {
-	return s.parent.validateTables(ctx, s.parent.names.accessTokens)
+	return s.parent.validateTables(ctx, s.parent.names.accessTokens, s.parent.names.cascadeLinks)
 }
 
 // ValidateSchema implements [store.SchemaValidator] for the opaque access
 // tokens table.
 func (s *opaqueAccessTokenStore) ValidateSchema(ctx context.Context) error {
-	return s.parent.validateTables(ctx, s.parent.names.opaqueAccessTokens)
+	return s.parent.validateTables(ctx, s.parent.names.opaqueAccessTokens, s.parent.names.cascadeLinks)
 }
 
 // ValidateSchema implements [store.SchemaValidator] for the grant
@@ -201,7 +229,7 @@ func (s *grantRevocationStore) ValidateSchema(ctx context.Context) error {
 
 // ValidateSchema implements [store.SchemaValidator] for the grants table.
 func (s *grantStore) ValidateSchema(ctx context.Context) error {
-	return s.parent.validateTables(ctx, s.parent.names.grants)
+	return s.parent.validateTables(ctx, s.parent.names.grants, s.parent.names.cascadeLinks)
 }
 
 // ValidateSchema implements [store.SchemaValidator] for the sessions table.

@@ -24,8 +24,8 @@ const (
 	indexByUsername      = "by_username"
 	indexByChooserGroup  = "by_chooser_group"
 	indexByHash          = "by_hash"
-	indexByStream        = "by_stream"
 	indexSSFDue          = "ssf_due"
+	indexSSFReady        = "ssf_ready"
 )
 
 // Projected attribute names. These are the attributes an index or a
@@ -83,6 +83,10 @@ const (
 	// attrDueQueue is present only on push, unheld events, which makes
 	// ssf_due a sparse index of exactly what ClaimDue may lease.
 	attrDueQueue = "due_queue"
+	// attrSSFSort is the sort key of the SSF queue table, and attrReady,
+	// present only on poll, unheld events, the sort key of ssf_ready.
+	attrSSFSort = "sk"
+	attrReady   = "ready"
 )
 
 // TableDefinition describes one table the adapter expects. Embedders
@@ -101,6 +105,11 @@ type TableDefinition struct {
 	// GlobalSecondaryIndexes lists the indexes the substore's access
 	// patterns require.
 	GlobalSecondaryIndexes []types.GlobalSecondaryIndex
+
+	// LocalSecondaryIndexes lists the indexes a substore reads with a
+	// strongly consistent Query. DynamoDB accepts them only when the
+	// table is created.
+	LocalSecondaryIndexes []types.LocalSecondaryIndex
 
 	// TTLAttribute names the attribute DynamoDB's TTL feature should
 	// watch, or is empty for a table whose records never expire.
@@ -154,6 +163,16 @@ func gsiWithSort(name, partition, sort string) types.GlobalSecondaryIndex {
 	return types.GlobalSecondaryIndex{
 		IndexName:  aws.String(name),
 		KeySchema:  compositeKeySchema(partition, sort),
+		Projection: &types.Projection{ProjectionType: types.ProjectionTypeAll},
+	}
+}
+
+// lsi builds a local secondary index over the table's partition key that
+// projects every attribute.
+func lsi(name, sort string) types.LocalSecondaryIndex {
+	return types.LocalSecondaryIndex{
+		IndexName:  aws.String(name),
+		KeySchema:  compositeKeySchema(attrPK, sort),
 		Projection: &types.Projection{ProjectionType: types.ProjectionTypeAll},
 	}
 }
@@ -348,6 +367,16 @@ func (s *Store) TableDefinitions() []TableDefinition {
 			),
 		},
 		{
+			// Membership links for the cascades that must visit every
+			// committed token or grant of a parent: partition
+			// "<table>#<attribute>#<value>", one item per member, so a
+			// cascade enumerates them with a strongly consistent Query.
+			Name:                 n.cascadeLinks,
+			KeySchema:            compositeKeySchema(attrPK, attrLinkSort),
+			AttributeDefinitions: stringAttr(attrPK, attrLinkSort),
+			TTLAttribute:         attrTTL,
+		},
+		{
 			Name:                 n.emailOTPs,
 			KeySchema:            keySchema(attrPK),
 			AttributeDefinitions: stringAttr(attrPK),
@@ -369,18 +398,26 @@ func (s *Store) TableDefinitions() []TableDefinition {
 			AttributeDefinitions: stringAttr(attrPK),
 		},
 		{
-			// ssf_due is sparse over due_queue and sorted by
-			// next_attempt_at, so ClaimDue reads due push events earliest
-			// first. by_stream serves Pending, Retag, Purge and the
-			// cascade of stream deletion. The table also holds one
-			// "verification#<stream_id>" pointer per stream, which carries
-			// neither index key.
-			Name:                 n.ssfEvents,
-			KeySchema:            keySchema(attrPK),
-			AttributeDefinitions: append(stringAttr(attrPK, attrStreamID, attrDueQueue), numberAttr(attrNextAttemptAt)),
+			// A stream's queue is one partition, "queue#<stream_id>",
+			// holding its events ("set#<jti>") and its "verification" and
+			// "stream-updated" pointers, so the queue move of a stream
+			// Update and the cascade of its deletion read it with a
+			// strongly consistent Query. A "set#<jti>" partition per event
+			// reserves the JTI and names its stream. ssf_due is sparse over
+			// due_queue and sorted by next_attempt_at, so ClaimDue reads due
+			// push events earliest first; ssf_ready is sparse over ready, so
+			// Pending reads only a stream's poll-ready events, consistently.
+			Name:      n.ssfEvents,
+			KeySchema: compositeKeySchema(attrPK, attrSSFSort),
+			AttributeDefinitions: append(
+				stringAttr(attrPK, attrSSFSort, attrDueQueue, attrReady),
+				numberAttr(attrNextAttemptAt),
+			),
 			GlobalSecondaryIndexes: []types.GlobalSecondaryIndex{
 				gsiWithSort(indexSSFDue, attrDueQueue, attrNextAttemptAt),
-				gsi(indexByStream, attrStreamID),
+			},
+			LocalSecondaryIndexes: []types.LocalSecondaryIndex{
+				lsi(indexSSFReady, attrReady),
 			},
 			TTLAttribute: attrTTL,
 		},
@@ -412,6 +449,7 @@ func (s *Store) createTable(ctx context.Context, def TableDefinition) error {
 		KeySchema:              def.KeySchema,
 		AttributeDefinitions:   def.AttributeDefinitions,
 		GlobalSecondaryIndexes: def.GlobalSecondaryIndexes,
+		LocalSecondaryIndexes:  def.LocalSecondaryIndexes,
 		BillingMode:            types.BillingModePayPerRequest,
 	})
 	if err != nil {

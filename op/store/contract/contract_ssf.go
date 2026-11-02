@@ -48,6 +48,7 @@ var ssfCases = []factorCase[SSFBackend]{
 	{"EnqueueRacingUpdateLeavesNoStaleEvent", ssfEnqueueUpdateRace},
 	{"ClaimDueSelectsDueUnheldPush", ssfClaimDueSelects},
 	{"ClaimDueEarliestFirst", ssfClaimDueOrder},
+	{"ClaimDueCapsEachStream", ssfClaimDueStreamCap},
 	{"ClaimDueLeaseHidesEventUntilItEnds", ssfClaimDueLease},
 	{"ClaimDueHasOneWinner", ssfClaimDueOneWinner},
 	{"RescheduleMovesNextAttempt", ssfReschedule},
@@ -70,7 +71,7 @@ var ssfCases = []factorCase[SSFBackend]{
 // authors call it from their black-box test suite.
 func RunSSF(t *testing.T, f SSFFactory) {
 	t.Helper()
-	for _, tc := range ssfCases {
+	for _, tc := range allSSFCases() {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			tc.run(t, f(t))
@@ -464,12 +465,44 @@ func ssfClaimDueOrder(t *testing.T, b SSFBackend) {
 	early := ssfEvent("early", "stream-1", store.SSFEventKindEvent, store.SSFDeliveryPush)
 	early.NextAttemptAt = Reference.Add(-time.Hour)
 	enqueueSSF(t, b, late, early)
-	got, err := b.Events.ClaimDue(context.Background(), Reference, 1, ssfLease)
+	got, err := b.Events.ClaimDue(context.Background(), Reference, 1, 1, ssfLease)
 	if err != nil {
 		t.Fatalf("ClaimDue: %v", err)
 	}
 	if len(got) != 1 || got[0].JTI != "early" {
 		t.Fatalf("ClaimDue(n=1) = %v, want [early]", ssfJTIs(got))
+	}
+}
+
+// ssfClaimDueStreamCap pins the per-stream cap: a stream whose backlog is
+// due before everything else still yields only its share of a claim, the
+// other streams' due events fill the rest, and each stream's share is its
+// earliest events in order.
+func ssfClaimDueStreamCap(t *testing.T, b SSFBackend) {
+	t.Helper()
+	for i := range 5 {
+		ev := ssfEvent(fmt.Sprintf("a-%d", i), "stream-a", store.SSFEventKindEvent, store.SSFDeliveryPush)
+		ev.NextAttemptAt = Reference.Add(-time.Hour + time.Duration(i)*time.Minute)
+		enqueueSSF(t, b, ev)
+	}
+	enqueueSSF(t, b,
+		ssfEvent("b-0", "stream-b", store.SSFEventKindEvent, store.SSFDeliveryPush),
+		ssfEvent("c-0", "stream-c", store.SSFEventKindVerification, store.SSFDeliveryPush),
+	)
+	ctx := context.Background()
+	got, err := b.Events.ClaimDue(ctx, Reference, 3, 1, ssfLease)
+	if err != nil {
+		t.Fatalf("ClaimDue: %v", err)
+	}
+	if jtis := ssfJTIs(got); !slices.Equal(jtis, []string{"a-0", "b-0", "c-0"}) {
+		t.Fatalf("ClaimDue(n=3, perStream=1) = %v, want [a-0 b-0 c-0]", jtis)
+	}
+	got, err = b.Events.ClaimDue(ctx, Reference, 10, 2, ssfLease)
+	if err != nil {
+		t.Fatalf("ClaimDue: %v", err)
+	}
+	if len(got) != 2 || got[0].JTI != "a-1" || got[1].JTI != "a-2" {
+		t.Fatalf("ClaimDue(n=10, perStream=2) = %v in claim order, want [a-1 a-2]", ssfJTIs(got))
 	}
 }
 
@@ -505,7 +538,7 @@ func ssfClaimDueOneWinner(t *testing.T, b SSFBackend) {
 	errs := race(
 		func() { _, _, _ = b.Events.Pending(ctx, "ssf-race-warmup", 1) },
 		everyRacer(func(i int) error {
-			got, err := b.Events.ClaimDue(ctx, Reference, len(want), ssfLease)
+			got, err := b.Events.ClaimDue(ctx, Reference, len(want), len(want), ssfLease)
 			claimed[i] = got
 			return err
 		})...,
@@ -857,7 +890,7 @@ func ssfJTIs(events []*store.SSFEvent) []string {
 // claimed JTIs are exactly want.
 func assertClaimed(t *testing.T, b SSFBackend, now time.Time, want []string) []*store.SSFEvent {
 	t.Helper()
-	got, err := b.Events.ClaimDue(context.Background(), now, 100, ssfLease)
+	got, err := b.Events.ClaimDue(context.Background(), now, 100, 100, ssfLease)
 	if err != nil {
 		t.Fatalf("ClaimDue at %v: %v", now, err)
 	}

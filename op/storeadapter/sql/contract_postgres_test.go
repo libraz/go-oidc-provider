@@ -151,7 +151,5 @@ func rewritePostgresDB(t *testing.T, dsn, dbName string) string {
 func TestPostgres_Contract(t *testing.T) {
 	t.Parallel()
 	factory := newPostgresFactory(t)
-	contract.Run(t, factory)
-	runMFAContracts(t, factory)
-	runClientUpdateContracts(t, factory)
+	runFullContract(t, factory)
 }

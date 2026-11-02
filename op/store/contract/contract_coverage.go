@@ -139,6 +139,10 @@ var atomicWrites = []methodRef{
 	{iface: "GrantStore", method: "Save"},
 	{iface: "PasskeyStore", method: "Put"},
 	{iface: "RefreshTokenStore", method: "Save"},
+	{iface: "SSFEventStore", method: "Enqueue"},
+	{iface: "SSFStreamStore", method: "Create"},
+	{iface: "SSFStreamStore", method: "Update"},
+	{iface: "StaticClientReconciler", method: "ReconcileStaticClients"},
 }
 
 // methodRef names one method of one interface.

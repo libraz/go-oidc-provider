@@ -208,14 +208,14 @@ func (s *ssfEventStore) insert(ctx context.Context, e execer, ev *store.SSFEvent
 	return wrapErr("ssf_events.Enqueue", err)
 }
 
-func (s *ssfEventStore) ClaimDue(ctx context.Context, now time.Time, n int, lease time.Duration) ([]*store.SSFEvent, error) {
-	if n <= 0 {
-		return nil, errors.New("oidcsql: ssf_events.ClaimDue: n must be positive")
+func (s *ssfEventStore) ClaimDue(ctx context.Context, now time.Time, n, perStream int, lease time.Duration) ([]*store.SSFEvent, error) {
+	if n <= 0 || perStream <= 0 {
+		return nil, errors.New("oidcsql: ssf_events.ClaimDue: n and perStream must be positive")
 	}
 	db := dbRunner{db: s.parent.db}
 	push := string(store.SSFDeliveryPush)
 	candidates, err := queryEvents(ctx, db, "ssf_events.ClaimDue", s.parent.queries.ssfEventSelectDue,
-		push, timeToInt64(now), n)
+		push, timeToInt64(now), perStream, n)
 	if err != nil {
 		return nil, err
 	}
