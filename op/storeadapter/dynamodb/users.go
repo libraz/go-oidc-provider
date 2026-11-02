@@ -40,9 +40,6 @@ var errReservedSubject = errors.New("oidcdynamo: subject must not start with " +
 func (s *userStore) FindBySubject(ctx context.Context, sub string) (*store.User, error) {
 	found, err := s.parent.get(ctx, s.parent.names.users, sub)
 	if err != nil {
-		if errors.Is(err, store.ErrNotFound) {
-			return nil, store.ErrNotFound
-		}
 		return nil, wrapErr("users.FindBySubject", err)
 	}
 	return decodeUser(found)
@@ -74,9 +71,6 @@ func (s *userStore) FindByUsername(ctx context.Context, username string) (*store
 func (s *userStore) findReservedUsername(ctx context.Context, username string) (*store.User, error) {
 	reserved, err := s.parent.get(ctx, s.parent.names.users, usernameKey(username))
 	if err != nil {
-		if errors.Is(err, store.ErrNotFound) {
-			return nil, store.ErrNotFound
-		}
 		return nil, wrapErr("users.FindByUsername", err)
 	}
 	subject := readS(reserved, attrSubject)
@@ -116,9 +110,6 @@ func (s *userStore) findIndexedUsername(ctx context.Context, username string) (*
 func (s *userStore) findVerifiedUsername(ctx context.Context, subject, username string) (*store.User, error) {
 	found, err := s.parent.get(ctx, s.parent.names.users, subject)
 	if err != nil {
-		if errors.Is(err, store.ErrNotFound) {
-			return nil, store.ErrNotFound
-		}
 		return nil, wrapErr("users.FindByUsername.reread", err)
 	}
 	if readS(found, attrUsername) != username {
@@ -134,9 +125,6 @@ func (s *userStore) findVerifiedUsername(ctx context.Context, subject, username 
 func (s *userStore) ReadPasswordHash(ctx context.Context, subject string) ([]byte, error) {
 	found, err := s.parent.get(ctx, s.parent.names.users, subject)
 	if err != nil {
-		if errors.Is(err, store.ErrNotFound) {
-			return nil, store.ErrNotFound
-		}
 		return nil, wrapErr("users.ReadPasswordHash", err)
 	}
 	hash := readBytes(found, attrCodeHash)

@@ -2,7 +2,6 @@ package oidcdynamo
 
 import (
 	"context"
-	"errors"
 
 	"github.com/libraz/go-oidc-provider/op/store"
 )
@@ -17,9 +16,6 @@ type metadataStore struct {
 
 func (s *metadataStore) Get(ctx context.Context, key string) (string, error) {
 	found, err := s.parent.get(ctx, s.parent.names.metadata, key)
-	if errors.Is(err, store.ErrNotFound) {
-		return "", store.ErrNotFound
-	}
 	if err != nil {
 		return "", wrapErr("metadata.Get", err)
 	}

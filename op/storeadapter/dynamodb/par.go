@@ -54,9 +54,6 @@ func (s *parStore) Find(ctx context.Context, uri string) (*store.PushedAuthReque
 func (s *parStore) find(ctx context.Context, uri string) (*store.PushedAuthRequest, error) {
 	found, err := s.read(ctx, digestKey(uri))
 	if err != nil {
-		if errors.Is(err, store.ErrNotFound) {
-			return nil, store.ErrNotFound
-		}
 		return nil, wrapErr("pars.Find", err)
 	}
 	var rec store.PushedAuthRequest

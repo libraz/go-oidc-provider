@@ -59,9 +59,6 @@ func (s *authCodeStore) find(ctx context.Context, id string) (*store.Authorizati
 	digest := digestKey(id)
 	found, err := s.read(ctx, s.parent.names.authCodes, digest)
 	if err != nil {
-		if errors.Is(err, store.ErrNotFound) {
-			return nil, store.ErrNotFound
-		}
 		return nil, wrapErr("authCodes.Find", err)
 	}
 	var rec store.AuthorizationCode

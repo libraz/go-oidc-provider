@@ -51,9 +51,6 @@ func (s *opaqueAccessTokenStore) Save(ctx context.Context, tok *store.OpaqueAcce
 func (s *opaqueAccessTokenStore) Find(ctx context.Context, id string) (*store.OpaqueAccessToken, error) {
 	found, err := s.read(ctx, digestKey(id))
 	if err != nil {
-		if errors.Is(err, store.ErrNotFound) {
-			return nil, store.ErrNotFound
-		}
 		return nil, wrapErr("opaqueAccessTokens.Find", err)
 	}
 	var rec store.OpaqueAccessToken

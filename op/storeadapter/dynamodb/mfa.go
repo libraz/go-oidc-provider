@@ -55,9 +55,6 @@ type totpStore struct {
 func (s *totpStore) Get(ctx context.Context, subject string) (*store.TOTPRecord, error) {
 	found, err := s.parent.get(ctx, s.parent.names.totpSecrets, subject)
 	if err != nil {
-		if errors.Is(err, store.ErrNotFound) {
-			return nil, store.ErrNotFound
-		}
 		return nil, wrapErr("totp.Get", err)
 	}
 	var rec store.TOTPRecord
@@ -247,9 +244,6 @@ func (s *emailOTPStore) Get(ctx context.Context, subject string) (*store.EmailOT
 func (s *emailOTPStore) load(ctx context.Context, subject string) (*store.EmailOTPRecord, error) {
 	found, err := s.parent.get(ctx, s.parent.names.emailOTPs, subject)
 	if err != nil {
-		if errors.Is(err, store.ErrNotFound) {
-			return nil, store.ErrNotFound
-		}
 		return nil, wrapErr("emailOTP.Get", err)
 	}
 	var rec store.EmailOTPRecord
@@ -811,9 +805,6 @@ type passkeyStore struct {
 func (s *passkeyStore) Get(ctx context.Context, credentialID []byte) (*store.PasskeyRecord, error) {
 	found, err := s.parent.get(ctx, s.parent.names.passkeys, credentialKey(credentialID))
 	if err != nil {
-		if errors.Is(err, store.ErrNotFound) {
-			return nil, store.ErrNotFound
-		}
 		return nil, wrapErr("passkeys.Get", err)
 	}
 	return decodePasskey(found)
@@ -919,9 +910,6 @@ func (s *passkeyStore) tryAssertionSwap(
 ) (*store.PasskeyRecord, error) {
 	found, err := s.parent.get(ctx, s.parent.names.passkeys, pk)
 	if err != nil {
-		if errors.Is(err, store.ErrNotFound) {
-			return nil, store.ErrNotFound
-		}
 		return nil, wrapErr("passkeys.UpdateAssertion", err)
 	}
 	current, err := decodePasskey(found)
@@ -1021,9 +1009,6 @@ type authnLockoutStore struct {
 func (s *authnLockoutStore) Get(ctx context.Context, subject string) (*store.AuthnLockoutRecord, error) {
 	found, err := s.parent.get(ctx, s.parent.names.authnLockouts, subject)
 	if err != nil {
-		if errors.Is(err, store.ErrNotFound) {
-			return nil, store.ErrNotFound
-		}
 		return nil, wrapErr("authnLockouts.Get", err)
 	}
 	var rec store.AuthnLockoutRecord

@@ -56,9 +56,6 @@ func (s *grantStore) Save(ctx context.Context, g *store.Grant) error {
 func (s *grantStore) Find(ctx context.Context, id string) (*store.Grant, error) {
 	found, err := s.read(ctx, id)
 	if err != nil {
-		if errors.Is(err, store.ErrNotFound) {
-			return nil, store.ErrNotFound
-		}
 		return nil, wrapErr("grants.Find", err)
 	}
 	return decodeGrant(found)
@@ -275,8 +272,6 @@ func (s *grantStore) HasAny(ctx context.Context) (bool, error) {
 // exists for. Repeat grants for one client are adjacent in that order and
 // collapse after the strongly-consistent re-read; when a page is filled
 // from several index pages, each individual query stays bounded.
-//
-//nolint:gocognit,cyclop // Stable cursor paging needs its bounded query, live re-read, and deduplication decisions in one ordered loop.
 func (s *grantStore) ListClientIDsBySubject(
 	ctx context.Context,
 	subject, cursor string,
@@ -288,70 +283,19 @@ func (s *grantStore) ListClientIDsBySubject(
 	if limit <= 0 {
 		return store.GrantClientPage{}, errors.New("oidcdynamo: grant client page limit must be positive")
 	}
-	seen := make(map[string]struct{}, limit+1)
-	ids := make([]string, 0, limit+1)
-	var start map[string]types.AttributeValue
-	for len(ids) <= limit {
-		in := &dynamodb.QueryInput{
-			TableName:              aws.String(s.parent.names.grants),
-			IndexName:              aws.String(indexBySubjectClient),
-			KeyConditionExpression: aws.String("#subject = :subject"),
-			ExpressionAttributeNames: map[string]string{
-				"#subject": attrSubject,
-			},
-			ExpressionAttributeValues: map[string]types.AttributeValue{
-				":subject": avS(subject),
-			},
-			ExclusiveStartKey: start,
-			Limit:             aws.Int32(int32(limit + 1)), //nolint:gosec // limit is bounded by the caller's int and DynamoDB accepts int32 pages.
-		}
-		if cursor != "" {
-			in.KeyConditionExpression = aws.String("#subject = :subject AND #client > :cursor")
-			in.ExpressionAttributeNames["#client"] = attrClientID
-			in.ExpressionAttributeValues[":cursor"] = avS(cursor)
-		}
-		page, err := s.parent.api.Query(ctx, in)
-		if err != nil {
-			return store.GrantClientPage{}, wrapErr("grants.ListClientIDsBySubject", err)
-		}
-		for _, match := range page.Items {
-			id := readS(match, attrPK)
-			if id == "" {
-				continue
-			}
-			g, err := s.Find(ctx, id)
-			if errors.Is(err, store.ErrNotFound) {
-				continue
-			}
-			if err != nil {
-				return store.GrantClientPage{}, err
-			}
-			if g.Subject != subject || g.ClientID == "" || g.ClientID <= cursor {
-				continue
-			}
-			if _, duplicate := seen[g.ClientID]; duplicate {
-				continue
-			}
-			seen[g.ClientID] = struct{}{}
-			ids = append(ids, g.ClientID)
-			if len(ids) > limit {
-				break
-			}
-		}
-		if len(ids) > limit || len(page.LastEvaluatedKey) == 0 {
-			break
-		}
-		start = page.LastEvaluatedKey
+	ids, next, err := s.listGrantSortValues(ctx, grantListing{
+		op:          "grants.ListClientIDsBySubject",
+		index:       indexBySubjectClient,
+		partAttr:    attrSubject,
+		sortAttr:    attrClientID,
+		partition:   subject,
+		partitionOf: func(g *store.Grant) string { return g.Subject },
+		sortOf:      func(g *store.Grant) string { return g.ClientID },
+	}, cursor, limit)
+	if err != nil {
+		return store.GrantClientPage{}, err
 	}
-
-	result := store.GrantClientPage{}
-	if len(ids) > limit {
-		result.ClientIDs = ids[:limit]
-		result.NextCursor = result.ClientIDs[limit-1]
-		return result, nil
-	}
-	result.ClientIDs = ids
-	return result, nil
+	return store.GrantClientPage{ClientIDs: ids, NextCursor: next}, nil
 }
 
 // ListSubjectsByClient implements [store.GrantSubjectLister]. The dedicated
@@ -360,8 +304,6 @@ func (s *grantStore) ListClientIDsBySubject(
 // after the strongly-consistent re-read; when a page is filled from several
 // GSI pages, each individual query remains bounded and the cursor remains a
 // subject key rather than leaking grant IDs.
-//
-//nolint:gocognit,cyclop // Stable cursor paging needs its bounded query, live re-read, and deduplication decisions in one ordered loop.
 func (s *grantStore) ListSubjectsByClient(
 	ctx context.Context,
 	clientID, cursor string,
@@ -373,31 +315,66 @@ func (s *grantStore) ListSubjectsByClient(
 	if limit <= 0 {
 		return store.GrantSubjectPage{}, errors.New("oidcdynamo: grant subject page limit must be positive")
 	}
+	subjects, next, err := s.listGrantSortValues(ctx, grantListing{
+		op:          "grants.ListSubjectsByClient",
+		index:       indexByClientSubject,
+		partAttr:    attrClientID,
+		sortAttr:    attrSubject,
+		partition:   clientID,
+		partitionOf: func(g *store.Grant) string { return g.ClientID },
+		sortOf:      func(g *store.Grant) string { return g.Subject },
+	}, cursor, limit)
+	if err != nil {
+		return store.GrantSubjectPage{}, err
+	}
+	return store.GrantSubjectPage{Subjects: subjects, NextCursor: next}, nil
+}
+
+// grantListing describes one direction of the grant enumerations: an
+// index partitioned on one attribute and sorted on another, and how to
+// read both back off a re-read grant.
+type grantListing struct {
+	op          string
+	index       string
+	partAttr    string
+	sortAttr    string
+	partition   string
+	partitionOf func(*store.Grant) string
+	sortOf      func(*store.Grant) string
+}
+
+// listGrantSortValues pages the distinct sort values of the grants in
+// one partition of l.index, in index order after cursor. It returns at
+// most limit values and the cursor of the next page, empty on the last.
+//
+//nolint:gocognit,cyclop // Stable cursor paging needs its bounded query, live re-read, and deduplication decisions in one ordered loop.
+func (s *grantStore) listGrantSortValues(
+	ctx context.Context,
+	l grantListing,
+	cursor string,
+	limit int,
+) ([]string, string, error) {
 	seen := make(map[string]struct{}, limit+1)
-	subjects := make([]string, 0, limit+1)
+	values := make([]string, 0, limit+1)
 	var start map[string]types.AttributeValue
-	for len(subjects) <= limit {
+	for len(values) <= limit {
 		in := &dynamodb.QueryInput{
-			TableName:              aws.String(s.parent.names.grants),
-			IndexName:              aws.String(indexByClientSubject),
-			KeyConditionExpression: aws.String("#client = :client"),
-			ExpressionAttributeNames: map[string]string{
-				"#client": attrClientID,
-			},
-			ExpressionAttributeValues: map[string]types.AttributeValue{
-				":client": avS(clientID),
-			},
-			ExclusiveStartKey: start,
-			Limit:             aws.Int32(int32(limit + 1)), //nolint:gosec // limit is bounded by the caller's int and DynamoDB accepts int32 pages.
+			TableName:                 aws.String(s.parent.names.grants),
+			IndexName:                 aws.String(l.index),
+			KeyConditionExpression:    aws.String("#part = :part"),
+			ExpressionAttributeNames:  map[string]string{"#part": l.partAttr},
+			ExpressionAttributeValues: map[string]types.AttributeValue{":part": avS(l.partition)},
+			ExclusiveStartKey:         start,
+			Limit:                     aws.Int32(int32(limit + 1)), //nolint:gosec // limit is bounded by the caller's int and DynamoDB accepts int32 pages.
 		}
 		if cursor != "" {
-			in.KeyConditionExpression = aws.String("#client = :client AND #subject > :cursor")
-			in.ExpressionAttributeNames["#subject"] = attrSubject
+			in.KeyConditionExpression = aws.String("#part = :part AND #sort > :cursor")
+			in.ExpressionAttributeNames["#sort"] = l.sortAttr
 			in.ExpressionAttributeValues[":cursor"] = avS(cursor)
 		}
 		page, err := s.parent.api.Query(ctx, in)
 		if err != nil {
-			return store.GrantSubjectPage{}, wrapErr("grants.ListSubjectsByClient", err)
+			return nil, "", wrapErr(l.op, err)
 		}
 		for _, match := range page.Items {
 			id := readS(match, attrPK)
@@ -409,34 +386,31 @@ func (s *grantStore) ListSubjectsByClient(
 				continue
 			}
 			if err != nil {
-				return store.GrantSubjectPage{}, err
+				return nil, "", err
 			}
-			if g.ClientID != clientID || g.Subject == "" || g.Subject <= cursor {
+			value := l.sortOf(g)
+			if l.partitionOf(g) != l.partition || value == "" || value <= cursor {
 				continue
 			}
-			if _, duplicate := seen[g.Subject]; duplicate {
+			if _, duplicate := seen[value]; duplicate {
 				continue
 			}
-			seen[g.Subject] = struct{}{}
-			subjects = append(subjects, g.Subject)
-			if len(subjects) > limit {
+			seen[value] = struct{}{}
+			values = append(values, value)
+			if len(values) > limit {
 				break
 			}
 		}
-		if len(subjects) > limit || len(page.LastEvaluatedKey) == 0 {
+		if len(values) > limit || len(page.LastEvaluatedKey) == 0 {
 			break
 		}
 		start = page.LastEvaluatedKey
 	}
 
-	result := store.GrantSubjectPage{}
-	if len(subjects) > limit {
-		result.Subjects = subjects[:limit]
-		result.NextCursor = result.Subjects[limit-1]
-		return result, nil
+	if len(values) > limit {
+		return values[:limit], values[limit-1], nil
 	}
-	result.Subjects = subjects
-	return result, nil
+	return values, "", nil
 }
 
 func grantItem(g *store.Grant) (item, error) {

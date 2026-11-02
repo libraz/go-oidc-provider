@@ -39,9 +39,6 @@ func (s *interactionStore) Save(ctx context.Context, i *store.Interaction) error
 func (s *interactionStore) Find(ctx context.Context, id string) (*store.Interaction, error) {
 	found, err := s.parent.getLive(ctx, s.parent.names.interactions, id)
 	if err != nil {
-		if errors.Is(err, store.ErrNotFound) {
-			return nil, store.ErrNotFound
-		}
 		return nil, wrapErr("interactions.Find", err)
 	}
 	var rec store.Interaction

@@ -6,6 +6,8 @@ import (
 	"slices"
 
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
+
+	"github.com/libraz/go-oidc-provider/op/store"
 )
 
 // conditionalCheckFailed is the code DynamoDB reports for an action a
@@ -30,11 +32,15 @@ var ErrTransactionTooLarge = errors.New("oidcdynamo: transaction exceeds the Tra
 const maxTransactionItems = 100
 
 // wrapErr decorates a service error with the substore operation that
-// issued it. Callers MUST map "not found" and conditional-check
-// failures before reaching this helper.
+// issued it. [store.ErrNotFound] is a contract answer rather than a
+// fault and passes through undecorated. Callers MUST map
+// conditional-check failures before reaching this helper.
 func wrapErr(op string, err error) error {
 	if err == nil {
 		return nil
+	}
+	if errors.Is(err, store.ErrNotFound) {
+		return store.ErrNotFound
 	}
 	return fmt.Errorf("oidcdynamo: %s: %w", op, err)
 }
@@ -56,6 +62,14 @@ func isConditionalCheckFailed(err error) bool {
 // be inspected to tell a lost race from a real fault.
 func isTransactionCanceledByCondition(err error) bool {
 	return slices.Contains(transactionCancellationCodes(err), conditionalCheckFailed)
+}
+
+// firstActionFailedCondition reports whether err is a TransactWriteItems
+// cancellation whose first action — the one a write puts its own
+// existence or version guard on — failed its condition.
+func firstActionFailedCondition(err error) bool {
+	codes := transactionCancellationCodes(err)
+	return len(codes) > 0 && codes[0] == conditionalCheckFailed
 }
 
 // transactionCancellationCodes returns the cancellation code of every

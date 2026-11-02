@@ -157,9 +157,6 @@ func (s *ratStore) Put(ctx context.Context, t *store.RegistrationAccessToken) er
 func (s *ratStore) GetByClientID(ctx context.Context, clientID string) (*store.RegistrationAccessToken, error) {
 	found, err := s.parent.get(ctx, s.parent.names.rats, clientID)
 	if err != nil {
-		if errors.Is(err, store.ErrNotFound) {
-			return nil, store.ErrNotFound
-		}
 		return nil, wrapErr("rats.GetByClientID", err)
 	}
 	var rec store.RegistrationAccessToken

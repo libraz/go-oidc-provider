@@ -134,9 +134,6 @@ func (s *deviceCodeStore) resolveUserCode(ctx context.Context, userCode string) 
 	}
 	found, err := s.parent.get(ctx, s.parent.names.deviceCodes, userCodeKey(userCode))
 	if err != nil {
-		if errors.Is(err, store.ErrNotFound) {
-			return "", store.ErrNotFound
-		}
 		return "", wrapErr("deviceCodes.FindByUserCode", err)
 	}
 	if s.parent.expired(found) {
@@ -152,9 +149,6 @@ func (s *deviceCodeStore) resolveUserCode(ctx context.Context, userCode string) 
 func (s *deviceCodeStore) findLive(ctx context.Context, pk string) (*store.DeviceCode, item, error) {
 	found, err := s.parent.get(ctx, s.parent.names.deviceCodes, pk)
 	if err != nil {
-		if errors.Is(err, store.ErrNotFound) {
-			return nil, nil, store.ErrNotFound
-		}
 		return nil, nil, wrapErr("deviceCodes.Find", err)
 	}
 	var rec store.DeviceCode
@@ -270,14 +264,7 @@ func (s *deviceCodeStore) RecordPoll(
 	nextInterval time.Duration,
 ) error {
 	return s.transition(ctx, digestKey(deviceCode), func(rec *store.DeviceCode) error {
-		polled := when
-		rec.LastPolledAt = &polled
-		// The interval only escalates. Accepting a smaller value would
-		// let a device that polled too fast re-arm the gate it just
-		// tripped by passing the original interval back.
-		if nextInterval > rec.Interval {
-			rec.Interval = nextInterval
-		}
+		recordPoll(&rec.LastPolledAt, &rec.Interval, when, nextInterval)
 		return nil
 	})
 }
@@ -314,32 +301,25 @@ func (s *deviceCodeStore) IncrementPollViolation(ctx context.Context, deviceCode
 // Consume redeems an approved record exactly once.
 func (s *deviceCodeStore) Consume(ctx context.Context, deviceCode string) (*store.DeviceCode, error) {
 	pk := digestKey(deviceCode)
-	rec, _, err := s.findLive(ctx, pk)
+	find := func() (*store.DeviceCode, error) {
+		rec, _, err := s.findLive(ctx, pk)
+		return rec, err
+	}
+	rec, err := consumeApproved(
+		find,
+		func(r *store.DeviceCode) store.DeviceCodeStatus { return r.Status },
+		store.DeviceCodeStatusApproved, store.DeviceCodeStatusConsumed,
+		func() error {
+			return s.transition(ctx, pk, func(current *store.DeviceCode) error {
+				if current.Status != store.DeviceCodeStatusApproved {
+					return store.ErrAlreadyConsumed
+				}
+				current.Status = store.DeviceCodeStatusConsumed
+				return nil
+			}, int64(store.DeviceCodeStatusApproved))
+		},
+	)
 	if err != nil {
-		return nil, err
-	}
-	switch rec.Status {
-	case store.DeviceCodeStatusConsumed:
-		return nil, store.ErrAlreadyConsumed
-	case store.DeviceCodeStatusApproved:
-	default:
-		return nil, store.ErrConflict
-	}
-
-	if err := s.transition(ctx, pk, func(current *store.DeviceCode) error {
-		if current.Status != store.DeviceCodeStatusApproved {
-			return store.ErrAlreadyConsumed
-		}
-		current.Status = store.DeviceCodeStatusConsumed
-		return nil
-	}, int64(store.DeviceCodeStatusApproved)); err != nil {
-		// A racer that won the status-guarded write leaves the record
-		// consumed; the loser reports that, not a generic conflict.
-		if errors.Is(err, store.ErrConflict) {
-			if cur, _, ferr := s.findLive(ctx, pk); ferr == nil && cur.Status == store.DeviceCodeStatusConsumed {
-				return nil, store.ErrAlreadyConsumed
-			}
-		}
 		return nil, err
 	}
 	rec.ID = deviceCode

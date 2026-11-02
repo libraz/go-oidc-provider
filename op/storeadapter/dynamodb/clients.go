@@ -21,9 +21,6 @@ type clientStore struct {
 func (s *clientStore) GetClient(ctx context.Context, id string) (*store.Client, error) {
 	found, err := s.parent.get(ctx, s.parent.names.clients, id)
 	if err != nil {
-		if errors.Is(err, store.ErrNotFound) {
-			return nil, store.ErrNotFound
-		}
 		return nil, wrapErr("clients.GetClient", err)
 	}
 	var c store.Client

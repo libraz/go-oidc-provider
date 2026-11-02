@@ -39,9 +39,6 @@ func (s *sessionStore) Save(ctx context.Context, sess *store.Session) error {
 func (s *sessionStore) Find(ctx context.Context, id string) (*store.Session, error) {
 	found, err := s.parent.getLive(ctx, s.parent.names.sessions, id)
 	if err != nil {
-		if errors.Is(err, store.ErrNotFound) {
-			return nil, store.ErrNotFound
-		}
 		return nil, wrapErr("sessions.Find", err)
 	}
 	return decodeSession(found)
@@ -81,9 +78,6 @@ func (s *sessionStore) Touch(ctx context.Context, id string, expiresAt, updatedA
 func (s *sessionStore) touchOnce(ctx context.Context, id string, expiresAt, updatedAt time.Time) error {
 	found, err := s.parent.getLive(ctx, s.parent.names.sessions, id)
 	if err != nil {
-		if errors.Is(err, store.ErrNotFound) {
-			return store.ErrNotFound
-		}
 		return wrapErr("sessions.Touch", err)
 	}
 	current, err := decodeSession(found)

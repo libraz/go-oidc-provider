@@ -280,9 +280,6 @@ func (s *grantRevocationStore) IsIssuanceRevoked(ctx context.Context, grantID st
 // for one that is absent or past its expiry.
 func (s *grantRevocationStore) liveTombstone(ctx context.Context, grantID, op string) (item, error) {
 	found, err := s.read(ctx, tombstonePrefix+grantID)
-	if errors.Is(err, store.ErrNotFound) {
-		return nil, store.ErrNotFound
-	}
 	if err != nil {
 		return nil, wrapErr(op, err)
 	}

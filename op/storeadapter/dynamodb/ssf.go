@@ -183,9 +183,6 @@ func (s *ssfStreamStore) Create(ctx context.Context, in *store.SSFStream) error 
 func (s *ssfStreamStore) Get(ctx context.Context, id string) (*store.SSFStream, error) {
 	found, err := s.parent.get(ctx, s.parent.names.ssfStreams, ssfStreamKey(id))
 	if err != nil {
-		if errors.Is(err, store.ErrNotFound) {
-			return nil, store.ErrNotFound
-		}
 		return nil, wrapErr("ssfStreams.Get", err)
 	}
 	return decodeSSFStream(found)
@@ -197,9 +194,6 @@ func (s *ssfStreamStore) Get(ctx context.Context, id string) (*store.SSFStream, 
 func (s *ssfStreamStore) GetByClient(ctx context.Context, clientID string) (*store.SSFStream, error) {
 	found, err := s.parent.get(ctx, s.parent.names.ssfStreams, ssfClientKey(clientID))
 	if err != nil {
-		if errors.Is(err, store.ErrNotFound) {
-			return nil, store.ErrNotFound
-		}
 		return nil, wrapErr("ssfStreams.GetByClient", err)
 	}
 	id := readS(found, attrStreamID)
@@ -212,22 +206,15 @@ func (s *ssfStreamStore) GetByClient(ctx context.Context, clientID string) (*sto
 // ListActive is one consistent Scan filtered on the projected status.
 // Client claims carry no status, so the filter drops them too.
 func (s *ssfStreamStore) ListActive(ctx context.Context) ([]*store.SSFStream, error) {
-	found, err := collectPages(0, func(start map[string]types.AttributeValue) ([]map[string]types.AttributeValue, map[string]types.AttributeValue, error) {
-		page, err := s.parent.api.Scan(ctx, &dynamodb.ScanInput{
-			TableName:                aws.String(s.parent.names.ssfStreams),
-			FilterExpression:         aws.String("#status IN (:enabled, :paused)"),
-			ExpressionAttributeNames: map[string]string{"#status": attrStatus},
-			ExpressionAttributeValues: map[string]types.AttributeValue{
-				":enabled": avS(string(store.SSFStreamEnabled)),
-				":paused":  avS(string(store.SSFStreamPaused)),
-			},
-			ExclusiveStartKey: start,
-			ConsistentRead:    aws.Bool(true),
-		})
-		if err != nil {
-			return nil, nil, err
-		}
-		return page.Items, page.LastEvaluatedKey, nil
+	found, err := s.parent.scanPages(ctx, 0, dynamodb.ScanInput{
+		TableName:                aws.String(s.parent.names.ssfStreams),
+		FilterExpression:         aws.String("#status IN (:enabled, :paused)"),
+		ExpressionAttributeNames: map[string]string{"#status": attrStatus},
+		ExpressionAttributeValues: map[string]types.AttributeValue{
+			":enabled": avS(string(store.SSFStreamEnabled)),
+			":paused":  avS(string(store.SSFStreamPaused)),
+		},
+		ConsistentRead: aws.Bool(true),
 	})
 	if err != nil {
 		return nil, wrapErr("ssfStreams.ListActive", err)
@@ -277,9 +264,6 @@ func (s *ssfStreamStore) write(ctx context.Context, in *store.SSFStream, notice 
 	table := s.parent.names.ssfStreams
 	found, err := s.parent.get(ctx, table, ssfStreamKey(in.ID))
 	if err != nil {
-		if errors.Is(err, store.ErrNotFound) {
-			return nil, 0, store.ErrNotFound
-		}
 		return nil, 0, wrapErr("ssfStreams.Update", err)
 	}
 	cur, err := decodeSSFStream(found)
@@ -335,9 +319,6 @@ func (s *ssfStreamStore) Delete(ctx context.Context, id string) error {
 	table := s.parent.names.ssfStreams
 	found, err := s.parent.get(ctx, table, ssfStreamKey(id))
 	if err != nil {
-		if errors.Is(err, store.ErrNotFound) {
-			return store.ErrNotFound
-		}
 		return wrapErr("ssfStreams.Delete", err)
 	}
 	clientID := readS(found, attrClientID)
@@ -686,9 +667,6 @@ func (s *ssfEventStore) claim(ctx context.Context, candidate item, leased time.T
 // then updates the event in that stream's queue.
 func (s *ssfEventStore) Reschedule(ctx context.Context, jti string, next time.Time, attempts int) error {
 	reservation, err := s.getItem(ctx, ssfJTIKey(jti))
-	if errors.Is(err, store.ErrNotFound) {
-		return store.ErrNotFound
-	}
 	if err != nil {
 		return wrapErr("ssfEvents.Reschedule", err)
 	}
@@ -719,9 +697,38 @@ func (s *ssfEventStore) Reschedule(ctx context.Context, jti string, next time.Ti
 // Ack removes each listed event from the stream's own queue partition, so
 // a receiver cannot remove another stream's events.
 func (s *ssfEventStore) Ack(ctx context.Context, streamID string, jtis []string) error {
-	for _, jti := range jtis {
-		if err := s.remove(ctx, streamID, jti); err != nil {
-			return wrapErr("ssfEvents.Ack", err)
+	if err := s.removeMany(ctx, streamID, jtis); err != nil {
+		return wrapErr("ssfEvents.Ack", err)
+	}
+	return nil
+}
+
+// ssfRemoveBatch is the most events one transaction removes: each takes
+// two actions, and a guarded transaction keeps one more for its guard.
+const ssfRemoveBatch = (maxTransactionItems - 1) / 2
+
+// removeMany deletes events of streamID and their JTI reservations,
+// ssfRemoveBatch events to a transaction. An event no longer in the
+// queue is not an error: a batch that one such event cancels is redone
+// event by event so the rest still go.
+func (s *ssfEventStore) removeMany(ctx context.Context, streamID string, jtis []string) error {
+	jtis = slices.Compact(slices.Sorted(slices.Values(jtis)))
+	for chunk := range slices.Chunk(jtis, ssfRemoveBatch) {
+		actions := make([]types.TransactWriteItem, 0, 2*len(chunk))
+		for _, jti := range chunk {
+			actions = append(actions, s.removeActions(streamID, jti)...)
+		}
+		_, err := s.parent.api.TransactWriteItems(ctx, &dynamodb.TransactWriteItemsInput{TransactItems: actions})
+		if err == nil || (len(chunk) == 1 && isTransactionCanceledByCondition(err)) {
+			continue
+		}
+		if !isTransactionCanceledByCondition(err) {
+			return err
+		}
+		for _, jti := range chunk {
+			if err := s.remove(ctx, streamID, jti); err != nil {
+				return err
+			}
 		}
 	}
 	return nil
@@ -760,21 +767,14 @@ func (s *ssfEventStore) Pending(ctx context.Context, streamID string, n int) ([]
 		return nil, false, errors.New("oidcdynamo: ssf pending size must be positive")
 	}
 	limit := int32(n + 1) //nolint:gosec // n is the poll request's maxEvents, far below int32.
-	found, err := collectPages(limit, func(start map[string]types.AttributeValue) ([]map[string]types.AttributeValue, map[string]types.AttributeValue, error) {
-		page, err := s.parent.api.Query(ctx, &dynamodb.QueryInput{
-			TableName:                 aws.String(s.table()),
-			IndexName:                 aws.String(indexSSFReady),
-			KeyConditionExpression:    aws.String("#pk = :pk"),
-			ExpressionAttributeNames:  map[string]string{"#pk": attrPK},
-			ExpressionAttributeValues: map[string]types.AttributeValue{":pk": avS(ssfQueueKey(streamID))},
-			ConsistentRead:            aws.Bool(true),
-			Limit:                     aws.Int32(limit),
-			ExclusiveStartKey:         start,
-		})
-		if err != nil {
-			return nil, nil, err
-		}
-		return page.Items, page.LastEvaluatedKey, nil
+	found, err := s.parent.queryPages(ctx, limit, dynamodb.QueryInput{
+		TableName:                 aws.String(s.table()),
+		IndexName:                 aws.String(indexSSFReady),
+		KeyConditionExpression:    aws.String("#pk = :pk"),
+		ExpressionAttributeNames:  map[string]string{"#pk": attrPK},
+		ExpressionAttributeValues: map[string]types.AttributeValue{":pk": avS(ssfQueueKey(streamID))},
+		ConsistentRead:            aws.Bool(true),
+		Limit:                     aws.Int32(limit),
 	})
 	if err != nil {
 		return nil, false, wrapErr("ssfEvents.Pending", err)
@@ -806,19 +806,12 @@ func (s *ssfEventStore) queryQueue(ctx context.Context, streamID, prefix string)
 		names["#sk"] = attrSSFSort
 		values[":prefix"] = avS(prefix)
 	}
-	return collectPages(0, func(start map[string]types.AttributeValue) ([]map[string]types.AttributeValue, map[string]types.AttributeValue, error) {
-		page, err := s.parent.api.Query(ctx, &dynamodb.QueryInput{
-			TableName:                 aws.String(s.table()),
-			KeyConditionExpression:    aws.String(cond),
-			ExpressionAttributeNames:  names,
-			ExpressionAttributeValues: values,
-			ConsistentRead:            aws.Bool(true),
-			ExclusiveStartKey:         start,
-		})
-		if err != nil {
-			return nil, nil, err
-		}
-		return page.Items, page.LastEvaluatedKey, nil
+	return s.parent.queryPages(ctx, 0, dynamodb.QueryInput{
+		TableName:                 aws.String(s.table()),
+		KeyConditionExpression:    aws.String(cond),
+		ExpressionAttributeNames:  names,
+		ExpressionAttributeValues: values,
+		ConsistentRead:            aws.Bool(true),
 	})
 }
 
@@ -833,20 +826,27 @@ func (s *ssfEventStore) reconcile(ctx context.Context, st *store.SSFStream, vers
 		return wrapErr("ssfStreams.Update", err)
 	}
 	guard := s.streamVersionCheck(st.ID, version)
+	var gone []string
 	for _, raw := range found {
 		jti := strings.TrimPrefix(readS(raw, attrSSFSort), ssfEventPrefix)
-		ordinary := store.SSFEventKind(readS(raw, attrKind)) == store.SSFEventKindEvent
-		held := ordinary && st.Status == store.SSFStreamPaused
-		var move []types.TransactWriteItem
-		switch {
-		case ordinary && st.Status == store.SSFStreamDisabled:
-			move = s.removeActions(st.ID, jti)
-		case store.SSFDeliveryMethod(readS(raw, attrDelivery)) == st.Delivery.Method && readBool(raw, attrHeld) == held:
+		move, held := reconcileMove(raw, st)
+		switch move {
+		case reconcileDelete:
+			gone = append(gone, jti)
 			continue
-		default:
-			move = []types.TransactWriteItem{s.retagAction(st.ID, jti, st.Delivery.Method, held)}
+		case reconcileKeep:
+			continue
+		case reconcileRetag:
 		}
-		current, err := s.guarded(ctx, guard, move)
+		current, err := s.guardedRemove(ctx, guard, st.ID, gone)
+		gone = nil
+		if err != nil {
+			return wrapErr("ssfStreams.Update", err)
+		}
+		if !current {
+			return nil
+		}
+		current, err = s.guarded(ctx, guard, []types.TransactWriteItem{s.retagAction(st.ID, jti, st.Delivery.Method, held)})
 		if err != nil {
 			return wrapErr("ssfStreams.Update", err)
 		}
@@ -854,7 +854,35 @@ func (s *ssfEventStore) reconcile(ctx context.Context, st *store.SSFStream, vers
 			return nil
 		}
 	}
+	if _, err := s.guardedRemove(ctx, guard, st.ID, gone); err != nil {
+		return wrapErr("ssfStreams.Update", err)
+	}
 	return nil
+}
+
+// reconcileAction is what [ssfEventStore.reconcile] does with one queued event.
+type reconcileAction int
+
+const (
+	reconcileKeep reconcileAction = iota
+	reconcileDelete
+	reconcileRetag
+)
+
+// reconcileMove classifies a queued event against st and returns the hold
+// a retag must apply: ordinary events of a disabled stream go, events
+// already at st's delivery method and hold stay, the rest are retagged.
+func reconcileMove(raw map[string]types.AttributeValue, st *store.SSFStream) (reconcileAction, bool) {
+	ordinary := store.SSFEventKind(readS(raw, attrKind)) == store.SSFEventKindEvent
+	held := ordinary && st.Status == store.SSFStreamPaused
+	switch {
+	case ordinary && st.Status == store.SSFStreamDisabled:
+		return reconcileDelete, held
+	case store.SSFDeliveryMethod(readS(raw, attrDelivery)) == st.Delivery.Method && readBool(raw, attrHeld) == held:
+		return reconcileKeep, held
+	default:
+		return reconcileRetag, held
+	}
 }
 
 // streamVersionCheck holds while the stream item is at version.
@@ -868,29 +896,88 @@ func (s *ssfEventStore) streamVersionCheck(streamID string, version int64) types
 	}}
 }
 
+// guardedOutcome is how a transaction led by a stream-version guard ended.
+type guardedOutcome int
+
+const (
+	// guardedMoved: every action landed.
+	guardedMoved guardedOutcome = iota
+	// guardedStale: the guard no longer holds.
+	guardedStale
+	// guardedSkipped: an action's own condition failed, which for an
+	// event means it was acknowledged since it was read.
+	guardedSkipped
+)
+
 // guarded writes move in one transaction with guard and reports false
 // when guard no longer holds. A move whose event was acknowledged since
 // it was read is done; one that collided with another transaction is
 // retried.
 func (s *ssfEventStore) guarded(ctx context.Context, guard types.TransactWriteItem, move []types.TransactWriteItem) (bool, error) {
-	actions := append([]types.TransactWriteItem{guard}, move...)
+	outcome, err := s.guardedWrite(ctx, append([]types.TransactWriteItem{guard}, move...))
+	if err != nil {
+		return false, err
+	}
+	return outcome != guardedStale, nil
+}
+
+// guardedRemove removes events of streamID under guard, ssfRemoveBatch
+// to a transaction, and reports false when guard no longer holds. A
+// batch cancelled by an acknowledged event is redone event by event.
+func (s *ssfEventStore) guardedRemove(ctx context.Context, guard types.TransactWriteItem, streamID string, jtis []string) (bool, error) {
+	for chunk := range slices.Chunk(jtis, ssfRemoveBatch) {
+		actions := []types.TransactWriteItem{guard}
+		for _, jti := range chunk {
+			actions = append(actions, s.removeActions(streamID, jti)...)
+		}
+		outcome, err := s.guardedWrite(ctx, actions)
+		if err != nil {
+			return false, err
+		}
+		switch {
+		case outcome == guardedStale:
+			return false, nil
+		case outcome == guardedSkipped && len(chunk) > 1:
+			if current, err := s.guardedRemoveEach(ctx, guard, streamID, chunk); err != nil || !current {
+				return false, err
+			}
+		}
+	}
+	return true, nil
+}
+
+// guardedRemoveEach removes each event in its own guarded transaction, so
+// one acknowledged event does not hold back the rest.
+func (s *ssfEventStore) guardedRemoveEach(ctx context.Context, guard types.TransactWriteItem, streamID string, jtis []string) (bool, error) {
+	for _, jti := range jtis {
+		current, err := s.guarded(ctx, guard, s.removeActions(streamID, jti))
+		if err != nil || !current {
+			return false, err
+		}
+	}
+	return true, nil
+}
+
+// guardedWrite runs actions, whose first is the guard, retrying a
+// collision with another transaction.
+func (s *ssfEventStore) guardedWrite(ctx context.Context, actions []types.TransactWriteItem) (guardedOutcome, error) {
 	for range ssfUpdateAttempts {
 		_, err := s.parent.api.TransactWriteItems(ctx, &dynamodb.TransactWriteItemsInput{TransactItems: actions})
 		codes := transactionCancellationCodes(err)
 		switch {
 		case err == nil:
-			return true, nil
+			return guardedMoved, nil
 		case len(codes) == 0:
-			return false, err
+			return guardedStale, err
 		case codes[0] == conditionalCheckFailed:
-			return false, nil
+			return guardedStale, nil
 		case slices.Contains(codes, conditionalCheckFailed):
-			return true, nil
+			return guardedSkipped, nil
 		case !slices.Contains(codes, transactionConflict):
-			return false, err
+			return guardedStale, err
 		}
 	}
-	return false, errSSFStreamMoved
+	return guardedStale, errSSFStreamMoved
 }
 
 // retagAction sets an event's delivery and hold and the sparse index keys
@@ -942,19 +1029,27 @@ func (s *ssfEventStore) purge(ctx context.Context, streamID string) error {
 	if err != nil {
 		return wrapErr("ssfStreams.Delete", err)
 	}
+	var jtis []string
 	for _, raw := range found {
 		sk := readS(raw, attrSSFSort)
 		if jti, ok := strings.CutPrefix(sk, ssfEventPrefix); ok {
-			err = s.remove(ctx, streamID, jti)
-		} else {
-			_, err = s.parent.api.DeleteItem(ctx, &dynamodb.DeleteItemInput{
-				TableName: aws.String(s.table()),
-				Key:       ssfKey(ssfQueueKey(streamID), sk),
-			})
+			jtis = append(jtis, jti)
+			continue
 		}
+		if err := s.removeMany(ctx, streamID, jtis); err != nil {
+			return wrapErr("ssfStreams.Delete", err)
+		}
+		jtis = nil
+		_, err = s.parent.api.DeleteItem(ctx, &dynamodb.DeleteItemInput{
+			TableName: aws.String(s.table()),
+			Key:       ssfKey(ssfQueueKey(streamID), sk),
+		})
 		if err != nil {
 			return wrapErr("ssfStreams.Delete", err)
 		}
+	}
+	if err := s.removeMany(ctx, streamID, jtis); err != nil {
+		return wrapErr("ssfStreams.Delete", err)
 	}
 	return nil
 }

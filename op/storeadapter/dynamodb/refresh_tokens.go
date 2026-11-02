@@ -105,8 +105,7 @@ func (s *refreshStore) saveRotation(ctx context.Context, t *store.RefreshToken, 
 	if !isTransactionCanceledByCondition(err) {
 		return wrapErr("refreshes.Save", err)
 	}
-	codes := transactionCancellationCodes(err)
-	if len(codes) > 0 && codes[0] == conditionalCheckFailed {
+	if firstActionFailedCondition(err) {
 		return store.ErrAlreadyExists
 	}
 	parent, err := s.parent.get(ctx, s.parent.names.refreshes, digestKey(*t.ParentID))
@@ -226,7 +225,7 @@ func (s *refreshStore) putRootAndList(ctx context.Context, t *store.RefreshToken
 	if !isTransactionCanceledByCondition(err) {
 		return wrapErr("refreshes.Save", err)
 	}
-	if codes := transactionCancellationCodes(err); len(codes) > 0 && codes[0] == conditionalCheckFailed {
+	if firstActionFailedCondition(err) {
 		return store.ErrAlreadyExists
 	}
 	return store.ErrConflict
@@ -456,9 +455,6 @@ func (s *refreshStore) rotationRejected(ctx context.Context, parentID string, co
 func (s *refreshStore) LoadRetryResponse(ctx context.Context, predecessorID string) ([]byte, error) {
 	found, err := s.read(ctx, digestKey(predecessorID))
 	if err != nil {
-		if errors.Is(err, store.ErrNotFound) {
-			return nil, store.ErrNotFound
-		}
 		return nil, wrapErr("refreshes.LoadRetryResponse", err)
 	}
 	if s.parent.expired(found) {
@@ -518,9 +514,6 @@ func (s *refreshStore) findByHandle(ctx context.Context, handle string) (*store.
 func (s *refreshStore) load(ctx context.Context, pk string) (*store.RefreshToken, error) {
 	found, err := s.read(ctx, pk)
 	if err != nil {
-		if errors.Is(err, store.ErrNotFound) {
-			return nil, store.ErrNotFound
-		}
 		return nil, wrapErr("refreshes.Find", err)
 	}
 	var rec store.RefreshToken
@@ -663,9 +656,6 @@ func (s *refreshStore) resolveChainRoot(ctx context.Context, rootID string) (str
 		return "", wrapErr("refreshes.RevokeChain.resolve", err)
 	}
 	if _, err := s.read(ctx, rootID); err != nil {
-		if errors.Is(err, store.ErrNotFound) {
-			return "", store.ErrNotFound
-		}
 		return "", wrapErr("refreshes.RevokeChain.resolve", err)
 	}
 	return rootID, nil
@@ -707,8 +697,10 @@ func (s *refreshStore) revokeOne(ctx context.Context, pk, grantID string, now ti
 		}
 		return nil, wrapErr("refreshes.revoke", err)
 	}
-	if err := s.stampConsumedIfUnset(ctx, pk, now); err != nil {
-		return nil, err
+	if readN(out.Attributes, attrConsumedAt) == 0 {
+		if err := s.stampConsumedIfUnset(ctx, pk, now); err != nil {
+			return nil, err
+		}
 	}
 	return readSS(out.Attributes, attrChildren), nil
 }

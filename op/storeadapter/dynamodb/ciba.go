@@ -54,9 +54,6 @@ func (s *cibaRequestStore) FindByAuthReqID(ctx context.Context, authReqID string
 func (s *cibaRequestStore) findLive(ctx context.Context, pk string) (*store.CIBARequest, error) {
 	found, err := s.parent.get(ctx, s.parent.names.cibaRequests, pk)
 	if err != nil {
-		if errors.Is(err, store.ErrNotFound) {
-			return nil, store.ErrNotFound
-		}
 		return nil, wrapErr("cibaRequests.Find", err)
 	}
 	var rec store.CIBARequest
@@ -108,13 +105,7 @@ func (s *cibaRequestStore) RecordPoll(
 	nextInterval time.Duration,
 ) error {
 	return s.transition(ctx, digestKey(authReqID), func(rec *store.CIBARequest) error {
-		polled := when
-		rec.LastPolledAt = &polled
-		// The interval only escalates: accepting a smaller value would
-		// let a client that polled too fast re-arm the gate it tripped.
-		if nextInterval > rec.Interval {
-			rec.Interval = nextInterval
-		}
+		recordPoll(&rec.LastPolledAt, &rec.Interval, when, nextInterval)
 		return nil
 	}, -1)
 }
@@ -136,32 +127,21 @@ func (s *cibaRequestStore) IncrementPollViolation(ctx context.Context, authReqID
 // the conditional write rather than issuing a second token set.
 func (s *cibaRequestStore) Consume(ctx context.Context, authReqID string) (*store.CIBARequest, error) {
 	pk := digestKey(authReqID)
-	rec, err := s.findLive(ctx, pk)
+	rec, err := consumeApproved(
+		func() (*store.CIBARequest, error) { return s.findLive(ctx, pk) },
+		func(r *store.CIBARequest) store.CIBARequestStatus { return r.Status },
+		store.CIBARequestStatusApproved, store.CIBARequestStatusConsumed,
+		func() error {
+			return s.transition(ctx, pk, func(current *store.CIBARequest) error {
+				if current.Status != store.CIBARequestStatusApproved {
+					return store.ErrAlreadyConsumed
+				}
+				current.Status = store.CIBARequestStatusConsumed
+				return nil
+			}, int64(store.CIBARequestStatusApproved))
+		},
+	)
 	if err != nil {
-		return nil, err
-	}
-	switch rec.Status {
-	case store.CIBARequestStatusConsumed:
-		return nil, store.ErrAlreadyConsumed
-	case store.CIBARequestStatusApproved:
-	default:
-		return nil, store.ErrConflict
-	}
-
-	if err := s.transition(ctx, pk, func(current *store.CIBARequest) error {
-		if current.Status != store.CIBARequestStatusApproved {
-			return store.ErrAlreadyConsumed
-		}
-		current.Status = store.CIBARequestStatusConsumed
-		return nil
-	}, int64(store.CIBARequestStatusApproved)); err != nil {
-		// A racer that won the status-guarded write leaves the request
-		// consumed; the loser reports that, not a generic conflict.
-		if errors.Is(err, store.ErrConflict) {
-			if cur, ferr := s.findLive(ctx, pk); ferr == nil && cur.Status == store.CIBARequestStatusConsumed {
-				return nil, store.ErrAlreadyConsumed
-			}
-		}
 		return nil, err
 	}
 	rec.ID = authReqID

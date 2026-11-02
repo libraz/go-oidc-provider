@@ -364,9 +364,6 @@ func (s *Store) incrementCounter(ctx context.Context, op, table, pk, attr string
 func (s *Store) rejectedCounter(ctx context.Context, op, table, pk, attr string) (uint8, error) {
 	found, err := s.getLive(ctx, table, pk)
 	if err != nil {
-		if errors.Is(err, store.ErrNotFound) {
-			return 0, store.ErrNotFound
-		}
 		return 0, wrapErr(op, err)
 	}
 	return counter8(found, attr), nil
@@ -385,6 +382,51 @@ func rejectedConsume[T any](ctx context.Context, reread func(context.Context) (T
 		return zero, err
 	}
 	return rec, store.ErrAlreadyConsumed
+}
+
+// consumeApproved redeems a record exactly once. find reads the live
+// record and claim performs the status-guarded write that moves it from
+// approved to consumed; the guarded write is the single-use guarantee,
+// so a racer that lost it reports the record consumed rather than a
+// generic conflict.
+func consumeApproved[T any, S comparable](
+	find func() (*T, error),
+	statusOf func(*T) S,
+	approved, consumed S,
+	claim func() error,
+) (*T, error) {
+	rec, err := find()
+	if err != nil {
+		return nil, err
+	}
+	switch statusOf(rec) {
+	case consumed:
+		return nil, store.ErrAlreadyConsumed
+	case approved:
+	default:
+		return nil, store.ErrConflict
+	}
+	if err := claim(); err != nil {
+		if errors.Is(err, store.ErrConflict) {
+			if cur, ferr := find(); ferr == nil && statusOf(cur) == consumed {
+				return nil, store.ErrAlreadyConsumed
+			}
+		}
+		return nil, err
+	}
+	return rec, nil
+}
+
+// recordPoll stamps a poll on a record's last-polled time and raises its
+// interval to nextInterval. The interval only escalates: accepting a
+// smaller value would let a client that polled too fast re-arm the gate
+// it tripped by passing the original interval back.
+func recordPoll(lastPolledAt **time.Time, interval *time.Duration, when time.Time, nextInterval time.Duration) {
+	polled := when
+	*lastPolledAt = &polled
+	if nextInterval > *interval {
+		*interval = nextInterval
+	}
 }
 
 // deleteKey removes one item and reports whether it existed. ALL_OLD
@@ -455,20 +497,12 @@ func collectPages(
 	}
 }
 
-// queryIndex enumerates every item whose indexed attribute equals
-// value. Index reads cannot be strongly consistent, so callers that act
-// on an individual result re-read it by primary key first, and a caller
-// that must not miss a recent write pairs it with a consistent read.
-func (s *Store) queryIndex(ctx context.Context, table, index, attr, value string) ([]item, error) {
-	return collectPages(0, func(start map[string]types.AttributeValue) ([]map[string]types.AttributeValue, map[string]types.AttributeValue, error) {
-		page, err := s.api.Query(ctx, &dynamodb.QueryInput{
-			TableName:                 aws.String(table),
-			IndexName:                 aws.String(index),
-			KeyConditionExpression:    aws.String("#a = :v"),
-			ExpressionAttributeNames:  map[string]string{"#a": attr},
-			ExpressionAttributeValues: map[string]types.AttributeValue{":v": avS(value)},
-			ExclusiveStartKey:         start,
-		})
+// queryPages runs in as a paginated Query, filling in ExclusiveStartKey
+// page by page, and collects the items as [collectPages] does.
+func (s *Store) queryPages(ctx context.Context, limit int32, in dynamodb.QueryInput) ([]item, error) {
+	return collectPages(limit, func(start map[string]types.AttributeValue) ([]map[string]types.AttributeValue, map[string]types.AttributeValue, error) {
+		in.ExclusiveStartKey = start
+		page, err := s.api.Query(ctx, &in)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -476,22 +510,41 @@ func (s *Store) queryIndex(ctx context.Context, table, index, attr, value string
 	})
 }
 
-// queryPartition enumerates every item sharing a partition key, in sort
-// order. It backs the composite-key tables (recovery-code slots).
-func (s *Store) queryPartition(ctx context.Context, table, pk string) ([]item, error) {
-	return collectPages(0, func(start map[string]types.AttributeValue) ([]map[string]types.AttributeValue, map[string]types.AttributeValue, error) {
-		page, err := s.api.Query(ctx, &dynamodb.QueryInput{
-			TableName:                 aws.String(table),
-			KeyConditionExpression:    aws.String("#k = :v"),
-			ExpressionAttributeNames:  map[string]string{"#k": attrPK},
-			ExpressionAttributeValues: map[string]types.AttributeValue{":v": avS(pk)},
-			ExclusiveStartKey:         start,
-			ConsistentRead:            aws.Bool(true),
-		})
+// scanPages is [Store.queryPages] for a Scan.
+func (s *Store) scanPages(ctx context.Context, limit int32, in dynamodb.ScanInput) ([]item, error) {
+	return collectPages(limit, func(start map[string]types.AttributeValue) ([]map[string]types.AttributeValue, map[string]types.AttributeValue, error) {
+		in.ExclusiveStartKey = start
+		page, err := s.api.Scan(ctx, &in)
 		if err != nil {
 			return nil, nil, err
 		}
 		return page.Items, page.LastEvaluatedKey, nil
+	})
+}
+
+// queryIndex enumerates every item whose indexed attribute equals
+// value. Index reads cannot be strongly consistent, so callers that act
+// on an individual result re-read it by primary key first, and a caller
+// that must not miss a recent write pairs it with a consistent read.
+func (s *Store) queryIndex(ctx context.Context, table, index, attr, value string) ([]item, error) {
+	return s.queryPages(ctx, 0, dynamodb.QueryInput{
+		TableName:                 aws.String(table),
+		IndexName:                 aws.String(index),
+		KeyConditionExpression:    aws.String("#a = :v"),
+		ExpressionAttributeNames:  map[string]string{"#a": attr},
+		ExpressionAttributeValues: map[string]types.AttributeValue{":v": avS(value)},
+	})
+}
+
+// queryPartition enumerates every item sharing a partition key, in sort
+// order. It backs the composite-key tables (recovery-code slots).
+func (s *Store) queryPartition(ctx context.Context, table, pk string) ([]item, error) {
+	return s.queryPages(ctx, 0, dynamodb.QueryInput{
+		TableName:                 aws.String(table),
+		KeyConditionExpression:    aws.String("#k = :v"),
+		ExpressionAttributeNames:  map[string]string{"#k": attrPK},
+		ExpressionAttributeValues: map[string]types.AttributeValue{":v": avS(pk)},
+		ConsistentRead:            aws.Bool(true),
 	})
 }
 
@@ -499,20 +552,11 @@ func (s *Store) queryPartition(ctx context.Context, table, pk string) ([]item, e
 // contract asks a question that has no key — HasAny and the static
 // client reconciliation — and never on a request path.
 func (s *Store) scanAll(ctx context.Context, table string, limit int32) ([]item, error) {
-	return collectPages(limit, func(start map[string]types.AttributeValue) ([]map[string]types.AttributeValue, map[string]types.AttributeValue, error) {
-		in := &dynamodb.ScanInput{
-			TableName:         aws.String(table),
-			ExclusiveStartKey: start,
-		}
-		if limit > 0 {
-			in.Limit = aws.Int32(limit)
-		}
-		page, err := s.api.Scan(ctx, in)
-		if err != nil {
-			return nil, nil, err
-		}
-		return page.Items, page.LastEvaluatedKey, nil
-	})
+	in := dynamodb.ScanInput{TableName: aws.String(table)}
+	if limit > 0 {
+		in.Limit = aws.Int32(limit)
+	}
+	return s.scanPages(ctx, limit, in)
 }
 
 // scanMatching returns every item whose attr equals value, projected to
@@ -521,20 +565,13 @@ func (s *Store) scanAll(ctx context.Context, table string, limit int32) ([]item,
 // no bounded key to read — the refresh cascade of client deletion — and
 // never a request path.
 func (s *Store) scanMatching(ctx context.Context, table, attr, value string) ([]item, error) {
-	return collectPages(0, func(start map[string]types.AttributeValue) ([]map[string]types.AttributeValue, map[string]types.AttributeValue, error) {
-		page, err := s.api.Scan(ctx, &dynamodb.ScanInput{
-			TableName:                 aws.String(table),
-			FilterExpression:          aws.String("#a = :v"),
-			ProjectionExpression:      aws.String("#pk"),
-			ExpressionAttributeNames:  map[string]string{"#a": attr, "#pk": attrPK},
-			ExpressionAttributeValues: map[string]types.AttributeValue{":v": avS(value)},
-			ExclusiveStartKey:         start,
-			ConsistentRead:            aws.Bool(true),
-		})
-		if err != nil {
-			return nil, nil, err
-		}
-		return page.Items, page.LastEvaluatedKey, nil
+	return s.scanPages(ctx, 0, dynamodb.ScanInput{
+		TableName:                 aws.String(table),
+		FilterExpression:          aws.String("#a = :v"),
+		ProjectionExpression:      aws.String("#pk"),
+		ExpressionAttributeNames:  map[string]string{"#a": attr, "#pk": attrPK},
+		ExpressionAttributeValues: map[string]types.AttributeValue{":v": avS(value)},
+		ConsistentRead:            aws.Bool(true),
 	})
 }
 
