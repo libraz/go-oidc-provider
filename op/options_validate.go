@@ -152,7 +152,7 @@ func (c *config) validateOpenIDScopeOptional() error {
 	}
 	for _, p := range c.profiles {
 		if isFAPI2Profile(p) {
-			return newConfigurationError("WithOpenIDScopeOptional is incompatible with FAPI 2.0 profile "+p.String(), nil)
+			return newConfigurationError("WithOpenIDScopeOptional is incompatible with FAPI 2.0 profile "+profileOptionName(p), nil)
 		}
 	}
 	return nil
@@ -227,8 +227,9 @@ func (c *config) validateAccessTokenRevocation() error {
 	if c.atRevocation != store.RevocationStrategyNone {
 		if c.atRevocation == store.RevocationStrategyGrantTombstone &&
 			nilcheck.IsNil(c.store.GrantRevocations()) {
-			return newConfigurationError("RevocationStrategyGrantTombstone requires "+
-				"Store.GrantRevocations() to be non-nil", nil)
+			return newConfigurationError("the access-token revocation strategy RevocationStrategyGrantTombstone "+
+				"(the default) requires Store.GrantRevocations() to be non-nil; implement it, or choose "+
+				"another strategy with WithAccessTokenRevocationStrategy", nil)
 		}
 		if c.atRevocation == store.RevocationStrategyJTIRegistry &&
 			nilcheck.IsNil(c.store.AccessTokens()) {
@@ -241,7 +242,7 @@ func (c *config) validateAccessTokenRevocation() error {
 		if profile.RequiresAccessTokenRevocation(p) {
 			return newConfigurationError("FAPI 2.0 Security Profile §5.3.2.2 requires "+
 				"access-token revocation; RevocationStrategyNone is "+
-				"rejected under profile "+p.String()+
+				"rejected under profile "+profileOptionName(p)+
 				" — use RevocationStrategyGrantTombstone (default) or "+
 				"RevocationStrategyJTIRegistry", nil)
 		}
@@ -458,13 +459,18 @@ func (c *config) validateRegistration() error {
 		return nil
 	}
 	if flagOn {
-		return newConfigurationError("feature.DynamicRegistration was enabled more than once", nil)
+		return newConfigurationError("feature.DynamicRegistration was enabled more than once: "+
+			"WithDynamicRegistration already enables it, so remove WithFeature(feature.DynamicRegistration)", nil)
 	}
 	if nilcheck.IsNil(c.store.InitialAccessTokens()) {
-		return newConfigurationError("InitialAccessTokens not implemented by store backend", nil)
+		return newConfigurationError("WithDynamicRegistration requires the configured Store to provide a non-nil "+
+			"InitialAccessTokens substore (the inmem, sql and dynamodb adapters ship one; the redis adapter does not — "+
+			"route this substore to another backend through storeadapter/composite)", nil)
 	}
 	if nilcheck.IsNil(c.store.RegistrationAccessTokens()) {
-		return newConfigurationError("RegistrationAccessTokens not implemented by store backend", nil)
+		return newConfigurationError("WithDynamicRegistration requires the configured Store to provide a non-nil "+
+			"RegistrationAccessTokens substore (the inmem, sql and dynamodb adapters ship one; the redis adapter does not — "+
+			"route this substore to another backend through storeadapter/composite)", nil)
 	}
 	if _, ok := resolveClientRegistry(c.store); !ok {
 		return newConfigurationError("Store does not expose ClientRegistry; dynamic registration requires a client backend with write access", nil)

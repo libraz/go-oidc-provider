@@ -26,9 +26,6 @@ import (
 // consult when the Step omits its own field (e.g. StepTOTP defers to
 // [WithMFAEncryptionKeys] when [StepTOTP.EncryptionKey] is empty).
 func compileLoginFlow(flow LoginFlow, cfg *config) (*authn.CompiledLoginFlow, error) {
-	if err := cfg.validateLockoutStore(); err != nil {
-		return nil, err
-	}
 	primary, err := projectStepAt("Primary", flow.Primary, cfg, true)
 	if err != nil {
 		return nil, err
@@ -72,6 +69,11 @@ func compileLoginFlow(flow LoginFlow, cfg *config) (*authn.CompiledLoginFlow, er
 	}
 	if !nilcheck.IsNil(flow.Decider) {
 		spec.Decider = &deciderAdapter{inner: flow.Decider}
+	}
+	// Checked after projection so a step's own configuration error wins
+	// over the missing-store error.
+	if err := cfg.validateLockoutStore(); err != nil {
+		return nil, err
 	}
 	return authn.CompileLoginFlow(spec)
 }

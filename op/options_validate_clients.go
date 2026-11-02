@@ -23,7 +23,7 @@ func (c *config) validateFirstPartyClients() error {
 	}
 	for _, p := range c.profiles {
 		if isFAPI2Profile(p) {
-			return newConfigurationError("WithFirstPartyClients is incompatible with FAPI 2.0 profile "+p.String(), nil)
+			return newConfigurationError("WithFirstPartyClients is incompatible with FAPI 2.0 profile "+profileOptionName(p), nil)
 		}
 	}
 	known := make(map[string]struct{}, len(c.staticClients))

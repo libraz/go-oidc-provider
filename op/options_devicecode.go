@@ -231,8 +231,8 @@ func (c *config) validateDeviceCodeGrant() error {
 	}
 	if nilcheck.IsNil(c.store.DeviceCodes()) {
 		return newConfigurationError("the device_code grant requires the configured Store to provide "+
-			"a non-nil DeviceCodes substore (storeadapter/inmem ships one; SQL / "+
-			"Redis adapters require an explicit implementation)", nil)
+			"a non-nil DeviceCodes substore (the inmem, sql and dynamodb adapters ship one; "+
+			"the redis adapter does not — route this substore to another backend through storeadapter/composite)", nil)
 	}
 	return nil
 }

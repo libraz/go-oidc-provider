@@ -37,7 +37,7 @@ func TestWithProfile_FAPICIBARequiresCIBAGrant(t *testing.T) {
 	if !op.IsServerError(err) {
 		t.Errorf("expected a server-side configuration error, got %v", err)
 	}
-	if !strings.Contains(err.Error(), "fapi-ciba") {
+	if !strings.Contains(err.Error(), "profile.FAPICIBA") {
 		t.Errorf("err = %v, want it to name the declared profile", err)
 	}
 	if !strings.Contains(err.Error(), "WithCIBA") {

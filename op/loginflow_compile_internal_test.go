@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -340,6 +341,29 @@ func TestResolveAuthnLockoutStore(t *testing.T) {
 				t.Fatalf("resolveAuthnLockoutStore = %v, want %v", got, tc.want)
 			}
 		})
+	}
+}
+
+// TestCompile_StepErrorWinsOverMissingLockoutStore pins that a step's own
+// configuration error is reported ahead of the missing lockout store.
+func TestCompile_StepErrorWinsOverMissingLockoutStore(t *testing.T) {
+	t.Parallel()
+
+	inner := inmem.New()
+	flow := LoginFlow{
+		Primary: PrimaryPassword{Store: inner.UserPasswords()},
+		Rules:   []Rule{RuleAlways(StepTOTP{Store: inner.TOTPs()})}, // no encryption key
+	}
+	cfg := &config{store: noLockoutsStore{Store: inner}, loginFlow: flow, loginFlowSet: true}
+	_, err := compileLoginFlow(flow, cfg)
+	if err == nil {
+		t.Fatal("compileLoginFlow: want error, got nil")
+	}
+	if errors.Is(err, ErrAuthnLockoutStoreRequired) {
+		t.Fatalf("compileLoginFlow err = %v, want the StepTOTP key error", err)
+	}
+	if !strings.Contains(err.Error(), "StepTOTP.EncryptionKey is required") {
+		t.Fatalf("compileLoginFlow err = %v, want StepTOTP key error", err)
 	}
 }
 

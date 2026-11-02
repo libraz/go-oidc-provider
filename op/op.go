@@ -226,7 +226,7 @@ func New(opts ...Option) (*Provider, error) {
 	}
 	mux := router.mux
 	handler := wrapWithProfileMiddleware(mux, cfg)
-	handler = wrapWithTrustedProxy(handler, trust, cfg.logger)
+	handler = wrapWithTrustedProxy(handler, trust, cfg.startupLog())
 	provider := &Provider{
 		cfg:     cfg,
 		keys:    keySet,
@@ -267,7 +267,8 @@ func New(opts ...Option) (*Provider, error) {
 // unconditionally so the request flow stays uniform across deployments.
 // In that state the first request carrying X-Forwarded-For,
 // X-Forwarded-Proto or X-Forwarded-Host logs one WARN per wrapped
-// handler (a Provider) on logger; a nil logger disables the warning.
+// handler (a Provider) on logger ([WithLogger], else [slog.Default]); a nil
+// logger disables the warning.
 func wrapWithTrustedProxy(h http.Handler, t *proxy.Trust, logger *slog.Logger) http.Handler {
 	var warnOnce sync.Once
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

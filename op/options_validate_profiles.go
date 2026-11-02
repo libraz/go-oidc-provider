@@ -2,6 +2,7 @@ package op
 
 import (
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -11,6 +12,29 @@ import (
 	"github.com/libraz/go-oidc-provider/op/grant"
 	"github.com/libraz/go-oidc-provider/op/profile"
 )
+
+// profileOptionName returns the exported identifier an embedder passes to
+// [WithProfile] ("profile.OAuth21"), for error and warning text. Wire
+// output (discovery, audit) keeps [profile.Profile.String], whose slug
+// "baseline" reads as FAPI.
+func profileOptionName(p profile.Profile) string {
+	switch p {
+	case profile.OAuth21:
+		return "profile.OAuth21"
+	case profile.FAPI2Baseline:
+		return "profile.FAPI2Baseline"
+	case profile.FAPI2MessageSigning:
+		return "profile.FAPI2MessageSigning"
+	case profile.FAPICIBA:
+		return "profile.FAPICIBA"
+	}
+	return "profile.Profile(" + strconv.Itoa(int(p)) + ")"
+}
+
+// withProfileName renders "WithProfile(profile.X)" for error text.
+func withProfileName(p profile.Profile) string {
+	return "WithProfile(" + profileOptionName(p) + ")"
+}
 
 // isFAPI2Profile reports whether p is one of the FAPI 2.0 family
 // profiles. Centralising the check lets future first-party / FAPI
@@ -38,12 +62,12 @@ func (c *config) validateClientIDMetadataDocuments() error {
 	}
 	for _, p := range c.profiles {
 		if profile.IsFAPI(p) {
-			return newConfigurationError("WithClientIDMetadataDocuments is incompatible with FAPI profile "+p.String(), nil)
+			return newConfigurationError("WithClientIDMetadataDocuments is incompatible with FAPI profile "+profileOptionName(p), nil)
 		}
 	}
 	if p, ok := profileWithoutNoneAuth(c.profiles, profile.AllowedClientAuthMethods); ok {
-		return newConfigurationError("WithClientIDMetadataDocuments requires the none client authentication method, which WithProfile "+
-			p.String()+" removes; private_key_jwt-only client ID metadata documents are not offered", nil)
+		return newConfigurationError("WithClientIDMetadataDocuments requires the none client authentication method, which "+
+			withProfileName(p)+" removes; private_key_jwt-only client ID metadata documents are not offered", nil)
 	}
 	return nil
 }
@@ -102,21 +126,21 @@ func (c *config) validateProfiles() error {
 // (Access Token TTL, refresh grace, client auth method, …).
 func (c *config) validateProfile(p profile.Profile, enabled map[feature.Flag]struct{}) error {
 	if c.issuingAlg() == AlgRS256 && profile.IsFAPI(p) {
-		return newConfigurationError("WithProfile "+p.String()+
+		return newConfigurationError(withProfileName(p)+
 			" does not permit WithSigningAlgorithm(RS256); FAPI 2.0 Security Profile §5.4.1 allows PS256, ES256 or EdDSA", nil)
 	}
 	for _, req := range profile.RequiredFeatures(p) {
 		if _, ok := enabled[req]; ok {
 			continue
 		}
-		return newConfigurationError("WithProfile "+p.String()+
+		return newConfigurationError(withProfileName(p)+
 			" requires WithFeature("+req.String()+")", nil)
 	}
 	for _, anyOf := range profile.RequiredAnyOf(p) {
 		if anyEnabled(enabled, anyOf) {
 			continue
 		}
-		return newConfigurationError("WithProfile "+p.String()+
+		return newConfigurationError(withProfileName(p)+
 			" requires at least one of WithFeature("+
 			strings.Join(featureFlagNames(anyOf), ") or WithFeature(")+")", nil)
 	}
@@ -134,12 +158,12 @@ func (c *config) validateProfile(p profile.Profile, enabled map[feature.Flag]str
 // in the same order.
 func (c *config) validateProfileTiming(p profile.Profile, enabled map[feature.Flag]struct{}) error {
 	if maxTTL := profile.MaxAccessTokenTTL(p); maxTTL > 0 && c.accessTokenTTL > maxTTL {
-		return newConfigurationError("WithProfile "+p.String()+
+		return newConfigurationError(withProfileName(p)+
 			" caps WithAccessTokenTTL at "+maxTTL.String()+
 			"; got "+c.accessTokenTTL.String(), nil)
 	}
 	if ceiling := profile.PARLifetimeCeiling(p); ceiling > 0 && c.parLifetime >= ceiling {
-		return newConfigurationError("WithProfile "+p.String()+
+		return newConfigurationError(withProfileName(p)+
 			" requires WithPARLifetime below "+ceiling.String()+
 			"; got "+c.parLifetime.String(), nil)
 	}
@@ -149,8 +173,8 @@ func (c *config) validateProfileTiming(p profile.Profile, enabled map[feature.Fl
 		}
 	}
 	if profileForcesDPoPNonce(p) && hasDPoPFeature(enabled) && c.dpopNonces == nil {
-		return newConfigurationError("WithProfile "+p.String()+
-			" requires WithDPoPNonceSource when WithFeature(DPoP) is active", nil)
+		return newConfigurationError(withProfileName(p)+
+			" requires WithDPoPNonceSource because DPoP is active (enabled by the profile or by WithFeature)", nil)
 	}
 	// The bound is the window the profile itself resolves to when the
 	// option is absent, not a strict zero. FAPI 2.0 §3.1.7 argues for
@@ -163,7 +187,7 @@ func (c *config) validateProfileTiming(p profile.Profile, enabled map[feature.Fl
 	// a five-second window back onto the sixty-second default.
 	if isFAPI2Profile(p) && c.refreshGracePeriodSet &&
 		c.refreshGracePeriod > refresh.GraceTTLDefault {
-		return newConfigurationError("WithProfile "+p.String()+
+		return newConfigurationError(withProfileName(p)+
 			" caps WithRefreshGracePeriod at "+
 			refresh.GraceTTLDefault.String()+"; got "+
 			c.refreshGracePeriod.String(), nil)
@@ -185,7 +209,7 @@ func (c *config) validateFAPICIBAExpiry() error {
 		{"WithCIBAMaxExpiresIn", c.cibaMaxExpiresIn},
 	} {
 		if v.value > limit {
-			return newConfigurationError("WithProfile "+profile.FAPICIBA.String()+
+			return newConfigurationError(withProfileName(profile.FAPICIBA)+
 				" caps "+v.option+" at "+limit.String()+
 				"; got "+v.value.String(), nil)
 		}
@@ -211,7 +235,7 @@ func (c *config) validateProfileGrants(p profile.Profile) error {
 		if slices.Contains(c.grants, want) {
 			continue
 		}
-		return newConfigurationError("WithProfile "+p.String()+
+		return newConfigurationError(withProfileName(p)+
 			" requires the "+want.String()+" grant; enable it with "+
 			grantActivationOption(want), nil)
 	}

@@ -44,6 +44,22 @@ func serveWithHeaders(t *testing.T, h http.Handler, headers map[string]string) {
 	h.ServeHTTP(httptest.NewRecorder(), req)
 }
 
+// TestUntrustedForwardedWarning_StartupLogger pins that the warning is wired
+// to the startup logger: without WithLogger the operational logger discards
+// everything, so the warning would be lost.
+func TestUntrustedForwardedWarning_StartupLogger(t *testing.T) {
+	t.Parallel()
+
+	cfg := &config{}
+	cfg.applyDefaults()
+	if cfg.logger.Enabled(context.Background(), slog.LevelWarn) {
+		t.Fatal("operational logger should discard without WithLogger")
+	}
+	if !cfg.startupLog().Enabled(context.Background(), slog.LevelWarn) {
+		t.Fatal("startup logger must deliver warnings without WithLogger")
+	}
+}
+
 func TestUntrustedForwardedWarning(t *testing.T) {
 	t.Parallel()
 

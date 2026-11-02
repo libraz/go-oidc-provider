@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/libraz/go-oidc-provider/op/grant"
 	"github.com/libraz/go-oidc-provider/op/store"
 	"github.com/libraz/go-oidc-provider/op/storeadapter/inmem"
 )
@@ -21,6 +22,37 @@ type narrowRevocations struct{ store.GrantRevocationStore }
 
 func (s wrappedRevocationsStore) GrantRevocations() store.GrantRevocationStore {
 	return narrowRevocations{s.Store.GrantRevocations()}
+}
+
+// nilSubstoresStore returns nil for the Clients and ConsumedJTIs substores.
+type nilSubstoresStore struct {
+	*inmem.Store
+}
+
+func (nilSubstoresStore) Clients() store.ClientStore           { return nil }
+func (nilSubstoresStore) ConsumedJTIs() store.ConsumedJTIStore { return nil }
+
+// TestValidateStoreCapabilities_ReportsEveryMissingSubstore pins that all
+// nil substores are named in one run, not one per construction attempt.
+func TestValidateStoreCapabilities_ReportsEveryMissingSubstore(t *testing.T) {
+	t.Parallel()
+
+	c := &config{
+		store:  nilSubstoresStore{inmem.New()},
+		grants: []grant.Type{grant.ClientCredentials},
+	}
+	err := c.validateStoreCapabilities()
+	if err == nil {
+		t.Fatal("validateStoreCapabilities: want error, got nil")
+	}
+	for _, want := range []string{"Store.ClientStore() returned nil", "Store.ConsumedJTIStore() returned nil"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error does not name %q; got:\n%v", want, err)
+		}
+	}
+	if !IsServerError(err) {
+		t.Errorf("joined error must still classify as a server-side configuration error: %v", err)
+	}
 }
 
 // TestInfoMissingStoreCapabilities pins that a capability hidden by a

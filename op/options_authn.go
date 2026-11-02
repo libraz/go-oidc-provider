@@ -17,6 +17,9 @@ import (
 // login surface — unless [WithSPAUI] is configured, in which case the
 // default falls away and the embedder's SPA owns rendering over the JSON
 // state endpoints. SSR or framework-specific Drivers replace it.
+// Combined with [WithSPAUI] the driver no longer renders or parses
+// prompts; it only renders /authorize error pages (through
+// [interaction.ErrorRenderer]), and [New] logs a warning saying so.
 // Stable since v1.0.
 func WithInteractionDriver(d interaction.Driver) Option {
 	return optionFunc(func(c *config) error {
@@ -128,12 +131,10 @@ const mfaEncryptionKeyLen = 32
 // there relies on the lockout policy of whatever it verifies against.
 //
 // Automatic wiring — when this option is not set and the [WithStore]
-// value exposes an AuthnLockouts() [store.AuthnLockoutStore] method
-// (the in-memory, SQL and DynamoDB adapters do, and composite.Store
-// forwards its Users backend's), that store is used. An explicit
-// option always wins. If no store resolves while the login flow has a
-// counter-consuming step, [New] logs one warning that brute-force
-// limiting is disabled.
+// value implements [store.AuthnLockoutProvider] (an AuthnLockouts()
+// [store.AuthnLockoutStore] method; the in-memory, SQL and DynamoDB
+// adapters do, and composite.Store forwards its Users backend's), that
+// store is used. An explicit option always wins.
 //
 // The attachment is to the [Step], not to the factor. An authenticator
 // built directly — [NewEmailOTPAuthenticator] with an

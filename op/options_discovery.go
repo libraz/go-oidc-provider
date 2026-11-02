@@ -459,7 +459,7 @@ func WithProfile(p profile.Profile) Option {
 		}
 		for _, existing := range c.profiles {
 			if existing == p {
-				return newConfigurationError("WithProfile received duplicate profile "+p.String(), nil)
+				return newConfigurationError("WithProfile received duplicate profile "+profileOptionName(p), nil)
 			}
 		}
 		c.profiles = append(c.profiles, p)

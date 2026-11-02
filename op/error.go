@@ -258,13 +258,14 @@ var ErrLoginFlowRequired = &Error{
 }
 
 // ErrAuthnLockoutStoreRequired is returned by [New] when the [LoginFlow]
-// has a password or second-factor step but no cross-factor lockout store
+// has a step that counts failures (a password or second-factor step, or an
+// [ExternalStep] with CountFailures) but no cross-factor lockout store
 // resolves. Match it with [errors.Is].
 //
 // Stable since v1.5.
 var ErrAuthnLockoutStoreRequired = &Error{
 	Code:        codeConfiguration,
-	Description: "the login flow has a password or second-factor step but no authn lockout store resolves; pass a WithStore value implementing store.AuthnLockoutProvider or configure WithAuthnLockoutStore",
+	Description: "the login flow has a step that counts failures (password, second factor, or ExternalStep with CountFailures) but no authn lockout store resolves; pass a WithStore value implementing store.AuthnLockoutProvider or configure WithAuthnLockoutStore",
 }
 
 // ErrDynamicRegistrationDisabled is returned by

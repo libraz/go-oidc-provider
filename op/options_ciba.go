@@ -328,8 +328,8 @@ func (c *config) validateCIBAGrant() error {
 	}
 	if nilcheck.IsNil(c.store.CIBARequests()) {
 		return newConfigurationError("the CIBA grant requires the configured Store to provide "+
-			"a non-nil CIBARequests substore (storeadapter/inmem ships one; "+
-			"SQL / Redis adapters require an explicit implementation)", nil)
+			"a non-nil CIBARequests substore (the inmem, sql and dynamodb adapters ship one; "+
+			"the redis adapter does not — route this substore to another backend through storeadapter/composite)", nil)
 	}
 	if nilcheck.IsNil(c.cibaHintResolver) {
 		return newConfigurationError("the CIBA grant requires a HintResolver; supply one through "+

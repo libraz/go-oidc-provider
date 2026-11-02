@@ -322,6 +322,7 @@ func (c *config) emitPartialWiringWarnings() {
 			"option", "WithFeature",
 		)
 	}
+	c.warnDriverShadowedBySPA()
 	c.warnUserStoreMismatch()
 	c.infoMissingStoreCapabilities()
 	c.warnSessionDurabilityMismatch()
@@ -478,4 +479,18 @@ func rendersWithoutScript(d interaction.Driver) bool {
 	default:
 		return false
 	}
+}
+
+// warnDriverShadowedBySPA logs that WithSPAUI leaves a configured
+// interaction driver only the /authorize error pages.
+func (c *config) warnDriverShadowedBySPA() {
+	if !c.spaUISet || c.interactionD == nil {
+		return
+	}
+	c.startupLog().Warn(
+		"WithInteractionDriver is configured but WithSPAUI is active; "+
+			"the SPA owns the login, consent and chooser prompts, so the driver "+
+			"renders only /authorize error pages (when it implements interaction.ErrorRenderer)",
+		"option", "WithInteractionDriver",
+	)
 }

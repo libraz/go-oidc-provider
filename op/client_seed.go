@@ -211,9 +211,11 @@ func (c PublicClient) seed() (store.Client, error) {
 // the hash field.
 // AuthMethod selects the credential transport:
 // [AuthClientSecretBasic] (the default) or [AuthClientSecretPost].
-// Other [AuthMethod] values are accepted by the type but the
-// downstream wiring will treat them as unknown for credential
-// negotiation.
+// Any other value is written to the record verbatim and then checked by
+// [New]: client_secret_jwt and unrecognised values fail construction with a
+// configuration error, as does a method the active [WithProfile] excludes.
+// private_key_jwt and none pass that check, but [PrivateKeyJWTClient] and
+// [PublicClient] are the builders for them.
 //
 //	op.WithStaticClients(
 //	    op.ConfidentialClient{

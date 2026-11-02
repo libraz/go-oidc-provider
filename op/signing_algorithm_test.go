@@ -108,6 +108,11 @@ func TestWithSigningAlgorithm(t *testing.T) {
 		wantIs error
 		want   string // empty means New succeeds
 	}
+	identifiers := map[profile.Profile]string{
+		profile.FAPI2Baseline:       "profile.FAPI2Baseline",
+		profile.FAPI2MessageSigning: "profile.FAPI2MessageSigning",
+		profile.FAPICIBA:            "profile.FAPICIBA",
+	}
 	fapiCase := func(p profile.Profile) signingAlgCase {
 		return signingAlgCase{
 			name: "RS256 with " + p.String(),
@@ -118,7 +123,7 @@ func TestWithSigningAlgorithm(t *testing.T) {
 					op.WithProfile(p),
 				}
 			},
-			want: "WithProfile " + p.String() + " does not permit WithSigningAlgorithm(RS256); " +
+			want: "WithProfile(" + identifiers[p] + ") does not permit WithSigningAlgorithm(RS256); " +
 				"FAPI 2.0 Security Profile §5.4.1 allows PS256, ES256 or EdDSA",
 		}
 	}

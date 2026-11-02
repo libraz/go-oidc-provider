@@ -281,8 +281,8 @@ func TestWithAccessTokenTTL_FAPI2BaselineRejectsTooLong(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error for TTL above FAPI2 cap, got nil")
 	}
-	if !strings.Contains(err.Error(), "fapi2-baseline") || !strings.Contains(err.Error(), "10m") {
-		t.Errorf("err = %v, want it to mention fapi2-baseline and the 10m cap", err)
+	if !strings.Contains(err.Error(), "profile.FAPI2Baseline") || !strings.Contains(err.Error(), "10m") {
+		t.Errorf("err = %v, want it to mention profile.FAPI2Baseline and the 10m cap", err)
 	}
 }
 
@@ -312,8 +312,8 @@ func TestWithPARLifetime_FAPIProfilesRejectTenMinutesOrMore(t *testing.T) {
 		if err == nil {
 			t.Fatalf("WithPARLifetime(%s) under fapi2-baseline: expected error, got nil", ttl)
 		}
-		if !strings.Contains(err.Error(), "fapi2-baseline") || !strings.Contains(err.Error(), "WithPARLifetime") {
-			t.Errorf("err = %v, want it to name fapi2-baseline and WithPARLifetime", err)
+		if !strings.Contains(err.Error(), "profile.FAPI2Baseline") || !strings.Contains(err.Error(), "WithPARLifetime") {
+			t.Errorf("err = %v, want it to name profile.FAPI2Baseline and WithPARLifetime", err)
 		}
 	}
 	if _, err := op.New(append(validBaseOptsWithInmem(t),

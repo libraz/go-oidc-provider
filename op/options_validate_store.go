@@ -1,6 +1,7 @@
 package op
 
 import (
+	"errors"
 	"slices"
 
 	"github.com/libraz/go-oidc-provider/internal/nilcheck"
@@ -40,15 +41,34 @@ var storeCapabilityReasons = map[string]struct{ desc, because string }{
 // always-on substores (Clients, ConsumedJTIs, Users, AuthorizationCodes,
 // RefreshTokens, Grants) and the grant-gated specialty substores
 // (DeviceCodes, CIBARequests, PushedAuthRequests).
+//
+// Every gap is reported in one joined error so a store built from
+// scratch sees them all in a single run.
 func (c *config) validateStoreCapabilities() error {
+	errs := c.nilSubstoreErrors()
+	if err := c.validateRefreshRetryStoreCapability(); err != nil {
+		errs = append(errs, err)
+	}
+	if grantsRequireAuthorizeEndpoint(c.grants) {
+		if err := c.validateAuthorizeEndpointStoreCapabilities(); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	return errors.Join(errs...)
+}
+
+// nilSubstoreErrors returns one configuration error per substore the
+// active configuration needs but the store returns nil for.
+func (c *config) nilSubstoreErrors() []error {
+	var errs []error
 	for _, row := range storeTableManifest {
 		reason, ok := storeCapabilityReasons[row.label]
 		if !ok || (row.when != nil && !row.when(c)) {
 			continue
 		}
 		if nilcheck.IsNil(row.store(c.store)) {
-			return newConfigurationError("Store."+reason.desc+"() returned nil but "+
-				reason.because, nil)
+			errs = append(errs, newConfigurationError("Store."+reason.desc+"() returned nil but "+
+				reason.because, nil))
 		}
 	}
 	for _, check := range []struct {
@@ -80,17 +100,11 @@ func (c *config) validateStoreCapabilities() error {
 			continue
 		}
 		if nilcheck.IsNil(check.got) {
-			return newConfigurationError("Store."+check.desc+"() returned nil but "+
-				check.because, nil)
+			errs = append(errs, newConfigurationError("Store."+check.desc+"() returned nil but "+
+				check.because, nil))
 		}
 	}
-	if err := c.validateRefreshRetryStoreCapability(); err != nil {
-		return err
-	}
-	if grantsRequireAuthorizeEndpoint(c.grants) {
-		return c.validateAuthorizeEndpointStoreCapabilities()
-	}
-	return nil
+	return errs
 }
 
 // validateRefreshRetryStoreCapability enforces [store.RefreshRetryResponseStore]
@@ -123,25 +137,26 @@ func (c *config) validateRefreshRetryStoreCapability() error {
 // substore must implement [store.InteractionStoreCAS], and its grant substore
 // must implement [store.GrantClientLister].
 func (c *config) validateAuthorizeEndpointStoreCapabilities() error {
+	var errs []error
 	if tx := transactionalStore(c.store); nilcheck.IsNil(tx) {
-		return newConfigurationError("Store must implement store.Transactional because "+
-			"a grant that mounts the browser authorize endpoint is enabled", nil)
+		errs = append(errs, newConfigurationError("Store must implement store.Transactional because "+
+			"a grant that mounts the browser authorize endpoint is enabled", nil))
 	}
 	if interactions := c.store.Interactions(); !nilcheck.IsNil(interactions) {
 		if _, ok := interactions.(store.InteractionStoreCAS); !ok {
-			return newConfigurationError("Store.Interactions() must implement "+
+			errs = append(errs, newConfigurationError("Store.Interactions() must implement "+
 				"store.InteractionStoreCAS because a grant that mounts "+
-				"the browser authorize endpoint is enabled", nil)
+				"the browser authorize endpoint is enabled", nil))
 		}
 	}
 	if grants := c.store.Grants(); !nilcheck.IsNil(grants) {
 		if _, ok := grants.(store.GrantClientLister); !ok {
-			return newConfigurationError("Store.Grants() must implement "+
+			errs = append(errs, newConfigurationError("Store.Grants() must implement "+
 				"store.GrantClientLister because a grant that mounts "+
-				"the browser authorize endpoint is enabled", nil)
+				"the browser authorize endpoint is enabled", nil))
 		}
 	}
-	return nil
+	return errors.Join(errs...)
 }
 
 // needsGrantStore reports whether the configured grant set requires a

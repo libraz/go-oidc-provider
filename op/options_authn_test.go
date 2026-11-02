@@ -676,6 +676,42 @@ func TestWithChooserUI_AcceptsAlongsideSPAUI(t *testing.T) {
 	}
 }
 
+// TestNew_WarnsWhenDriverShadowedBySPAUI pins the startup warning for an
+// explicit driver combined with WithSPAUI, in either option order, and its
+// absence for each option alone.
+func TestNew_WarnsWhenDriverShadowedBySPAUI(t *testing.T) {
+	t.Parallel()
+
+	const marker = "WithInteractionDriver is configured but WithSPAUI is active"
+	spa := op.WithSPAUI(op.SPAUI{LoginMount: "/login"})
+	drv := op.WithInteractionDriver(interaction.JSONDriver{})
+	cases := []struct {
+		name string
+		opts []op.Option
+		want bool
+	}{
+		{name: "driver then SPA", opts: []op.Option{drv, spa}, want: true},
+		{name: "SPA then driver", opts: []op.Option{spa, drv}, want: true},
+		{name: "SPA only", opts: []op.Option{spa}},
+		{name: "driver only", opts: []op.Option{drv}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			var buf bytes.Buffer
+			logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelWarn}))
+			opts := append(validBaseOpts(t), op.WithLogger(logger))
+			if _, err := op.New(append(opts, tc.opts...)...); err != nil {
+				t.Fatalf("op.New: %v", err)
+			}
+			if got := strings.Contains(buf.String(), marker); got != tc.want {
+				t.Fatalf("warning present = %v, want %v; log:\n%s", got, tc.want, buf.String())
+			}
+		})
+	}
+}
+
 func TestNew_WithSPAUISuppressesDefaultDriver(t *testing.T) {
 	t.Parallel()
 

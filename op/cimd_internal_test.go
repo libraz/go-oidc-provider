@@ -22,7 +22,7 @@ func TestCIMD_Validate_RejectsFAPIProfiles(t *testing.T) {
 			t.Errorf("%s: CIMD accepted under a FAPI profile", p)
 			continue
 		}
-		if !strings.Contains(err.Error(), "FAPI") || !strings.Contains(err.Error(), p.String()) {
+		if !strings.Contains(err.Error(), "FAPI") || !strings.Contains(err.Error(), profileOptionName(p)) {
 			t.Errorf("%s: error %q must name the FAPI profile", p, err)
 		}
 	}
