@@ -63,6 +63,7 @@ func ssfControlKey(kind store.SSFEventKind, streamID string) map[string]types.At
 	switch kind {
 	case store.SSFEventKindVerification, store.SSFEventKindStreamUpdated:
 		return ssfKey(ssfQueueKey(streamID), string(kind))
+	case store.SSFEventKindEvent:
 	}
 	return nil
 }
@@ -476,25 +477,38 @@ func (s *ssfEventStore) ClaimDue(ctx context.Context, now time.Time, n, perStrea
 		if err != nil {
 			return nil, wrapErr("ssfEvents.ClaimDue", err)
 		}
-		for _, candidate := range page.Items {
-			streamID := readS(candidate, attrStreamID)
-			if len(out) == n || taken[streamID] == perStream {
-				continue
-			}
-			ev, won, err := s.claim(ctx, candidate, leased)
-			if err != nil {
-				return nil, err
-			}
-			if won {
-				taken[streamID]++
-				out = append(out, ev)
-			}
+		out, err = s.claimPage(ctx, page.Items, n, perStream, leased, taken, out)
+		if err != nil {
+			return nil, err
 		}
 		if len(out) == n || len(page.LastEvaluatedKey) == 0 {
 			return out, nil
 		}
 		start = page.LastEvaluatedKey
 	}
+}
+
+// claimPage leases the candidates of one ssf_due page in order, skipping
+// a stream that already holds perStream in the claim, until out holds n.
+func (s *ssfEventStore) claimPage(
+	ctx context.Context, candidates []map[string]types.AttributeValue, n, perStream int, leased time.Time,
+	taken map[string]int, out []*store.SSFEvent,
+) ([]*store.SSFEvent, error) {
+	for _, candidate := range candidates {
+		streamID := readS(candidate, attrStreamID)
+		if len(out) == n || taken[streamID] == perStream {
+			continue
+		}
+		ev, won, err := s.claim(ctx, candidate, leased)
+		if err != nil {
+			return nil, err
+		}
+		if won {
+			taken[streamID]++
+			out = append(out, ev)
+		}
+	}
+	return out, nil
 }
 
 // dueCandidates reads one page of ssf_due: events due at now, earliest
@@ -793,21 +807,11 @@ func (s *ssfEventStore) DeleteExpired(ctx context.Context, now time.Time) (int, 
 			return deleted, wrapErr("ssfEvents.DeleteExpired", err)
 		}
 		for _, entry := range page.Items {
-			sk := readS(entry, attrSSFSort)
-			_, err := s.parent.api.DeleteItem(ctx, &dynamodb.DeleteItemInput{
-				TableName:                 aws.String(s.table()),
-				Key:                       ssfKey(readS(entry, attrPK), sk),
-				ConditionExpression:       aws.String("attribute_exists(#pk) AND " + expiredAtOrBeforeCondition),
-				ExpressionAttributeNames:  map[string]string{"#pk": attrPK, "#expires": attrExpiresAt},
-				ExpressionAttributeValues: values,
-			})
-			if isConditionalCheckFailed(err) {
-				continue
-			}
+			counted, err := s.deleteExpiredItem(ctx, entry, values)
 			if err != nil {
 				return deleted, wrapErr("ssfEvents.DeleteExpired", err)
 			}
-			if strings.HasPrefix(sk, ssfEventPrefix) {
+			if counted {
 				deleted++
 			}
 		}
@@ -816,6 +820,26 @@ func (s *ssfEventStore) DeleteExpired(ctx context.Context, now time.Time) (int, 
 		}
 		start = page.LastEvaluatedKey
 	}
+}
+
+// deleteExpiredItem deletes entry under the expiry condition and reports
+// whether it was an event whose delete landed.
+func (s *ssfEventStore) deleteExpiredItem(ctx context.Context, entry item, values map[string]types.AttributeValue) (bool, error) {
+	sk := readS(entry, attrSSFSort)
+	_, err := s.parent.api.DeleteItem(ctx, &dynamodb.DeleteItemInput{
+		TableName:                 aws.String(s.table()),
+		Key:                       ssfKey(readS(entry, attrPK), sk),
+		ConditionExpression:       aws.String("attribute_exists(#pk) AND " + expiredAtOrBeforeCondition),
+		ExpressionAttributeNames:  map[string]string{"#pk": attrPK, "#expires": attrExpiresAt},
+		ExpressionAttributeValues: values,
+	})
+	if isConditionalCheckFailed(err) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return strings.HasPrefix(sk, ssfEventPrefix), nil
 }
 
 // expiredAtOrBeforeCondition holds for an item whose expiry is set and at

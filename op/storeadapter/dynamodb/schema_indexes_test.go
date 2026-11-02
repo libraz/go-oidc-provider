@@ -60,7 +60,7 @@ func TestEveryProvisionedIndexIsQueried(t *testing.T) {
 	}
 	declared := 0
 	for _, def := range s.TableDefinitions() {
-		var names []string
+		names := make([]string, 0, len(def.GlobalSecondaryIndexes)+len(def.LocalSecondaryIndexes))
 		for _, idx := range def.GlobalSecondaryIndexes {
 			names = append(names, aws.ToString(idx.IndexName))
 		}
