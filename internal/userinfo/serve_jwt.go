@@ -64,16 +64,9 @@ func writeUserInfoJWT(
 	client *store.Client,
 	body map[string]any,
 ) {
-	// Stamp iss / aud on the signed body. The handler does not overwrite
-	// an existing iss / aud (the assembler does not currently emit either,
-	// but a future scope projection could; respecting prior values keeps
-	// the splice future-proof).
-	if _, ok := body["iss"]; !ok && deps.Issuer != "" {
-		body["iss"] = deps.Issuer
-	}
-	if _, ok := body["aud"]; !ok && clientID != "" {
-		body["aud"] = clientID
-	}
+	// iss and aud are the OP's to assert; nothing in body may stand in for them.
+	body["iss"] = deps.Issuer
+	body["aud"] = clientID
 
 	signed, err := signUserInfoJWT(deps.Keys, body)
 	if err != nil {

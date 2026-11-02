@@ -21,6 +21,7 @@ import (
 	"errors"
 
 	"github.com/libraz/go-oidc-provider/internal/authorize"
+	"github.com/libraz/go-oidc-provider/internal/tokens"
 	"github.com/libraz/go-oidc-provider/internal/userclaims"
 )
 
@@ -82,7 +83,7 @@ func Build(in Input) (map[string]any, error) {
 	}
 	allowed := userclaims.ScopeClaimNames(in.Scopes, in.CustomScopeClaims)
 	for name := range allowed {
-		if name == "sub" {
+		if tokens.IsIDTokenReservedClaim(name) {
 			continue
 		}
 		v, ok := in.Source[name]
@@ -110,13 +111,14 @@ func Build(in Input) (map[string]any, error) {
 //
 // "sub" is never overwritten — it is the only claim Build always emits
 // regardless of scope, and §5.5 explicitly notes that requesting sub
-// is a no-op.
+// is a no-op. The other JWT-reserved names (iss, aud, exp, ...) are
+// never released from Source either.
 func projectRequestedClaims(out map[string]any, in Input) {
 	if in.Claims == nil || len(in.Claims.UserInfo) == 0 {
 		return
 	}
 	for name, spec := range in.Claims.UserInfo {
-		if name == "sub" {
+		if tokens.IsIDTokenReservedClaim(name) {
 			continue
 		}
 		if _, already := out[name]; already {
