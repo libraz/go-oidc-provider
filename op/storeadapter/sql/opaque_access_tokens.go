@@ -4,7 +4,6 @@ import (
 	"context"
 	databasesql "database/sql"
 	"errors"
-	"fmt"
 	"time"
 
 	"github.com/libraz/go-oidc-provider/op/store"
@@ -45,13 +44,13 @@ func (s *opaqueAccessTokenStore) Save(ctx context.Context, tok *store.OpaqueAcce
 		return errors.New("oidcsql: OpaqueAccessToken requires a non-empty ID")
 	}
 	hash := s.digest(tok.ID)
-	details, err := encodeObjectArray(tok.AuthorizationDetails)
+	details, err := encodeObjectArrayFor("opaqueAccessTokens.Save", "authorization details", tok.AuthorizationDetails)
 	if err != nil {
-		return fmt.Errorf("oidcsql: opaqueAccessTokens.Save authorization details: %w", err)
+		return err
 	}
-	claims, err := encodeMap(tok.Claims)
+	claims, err := encodeMapFor("opaqueAccessTokens.Save", "claims", tok.Claims)
 	if err != nil {
-		return fmt.Errorf("oidcsql: opaqueAccessTokens.Save claims: %w", err)
+		return err
 	}
 	_, err = s.runner().ExecContext(ctx, s.parent.queries.opaqueAccessTokenSave,
 		hash, tok.GrantID, tok.Subject, tok.ClientID, tok.Audience,
@@ -158,14 +157,10 @@ func (s *opaqueAccessTokenStore) RevokeByGrant(ctx context.Context, grantID stri
 	if grantID == "" {
 		return 0, nil
 	}
-	res, err := s.runner().ExecContext(ctx,
+	n, err := execCount(ctx, s.runner(), "opaqueAccessTokens.RevokeByGrant",
 		s.parent.queries.opaqueAccessTokenRevokeByGrant, grantID)
 	if err != nil {
-		return 0, wrapErr("opaqueAccessTokens.RevokeByGrant", err)
-	}
-	n, err := res.RowsAffected()
-	if err != nil {
-		return 0, wrapErr("opaqueAccessTokens.RevokeByGrant.RowsAffected", err)
+		return 0, err
 	}
 	return int(n), nil
 }
@@ -175,14 +170,10 @@ func (s *opaqueAccessTokenStore) RevokeByChain(ctx context.Context, grantID, cha
 	if grantID == "" || chainID == "" {
 		return 0, nil
 	}
-	res, err := s.runner().ExecContext(ctx,
+	n, err := execCount(ctx, s.runner(), "opaqueAccessTokens.RevokeByChain",
 		s.parent.queries.opaqueAccessTokenRevokeByChain, grantID, chainID)
 	if err != nil {
-		return 0, wrapErr("opaqueAccessTokens.RevokeByChain", err)
-	}
-	n, err := res.RowsAffected()
-	if err != nil {
-		return 0, wrapErr("opaqueAccessTokens.RevokeByChain.RowsAffected", err)
+		return 0, err
 	}
 	return int(n), nil
 }
@@ -204,14 +195,10 @@ func (s *opaqueAccessTokenStore) RevokeByClient(ctx context.Context, clientID st
 // GC implements [store.OpaqueAccessTokenStore]. Drops every row whose
 // expires_at is strictly before cutoff.
 func (s *opaqueAccessTokenStore) GC(ctx context.Context, cutoff time.Time) (int, error) {
-	res, err := s.runner().ExecContext(ctx,
+	n, err := execCount(ctx, s.runner(), "opaqueAccessTokens.GC",
 		s.parent.queries.opaqueAccessTokenGC, timeToInt64(cutoff))
 	if err != nil {
-		return 0, wrapErr("opaqueAccessTokens.GC", err)
-	}
-	n, err := res.RowsAffected()
-	if err != nil {
-		return 0, wrapErr("opaqueAccessTokens.GC.RowsAffected", err)
+		return 0, err
 	}
 	return int(n), nil
 }

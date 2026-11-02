@@ -388,13 +388,9 @@ func (s *ssfEventStore) Pending(ctx context.Context, streamID string, n int) ([]
 }
 
 func (s *ssfEventStore) DeleteExpired(ctx context.Context, now time.Time) (int, error) {
-	res, err := s.parent.db.ExecContext(ctx, s.parent.queries.ssfEventDeleteExpired, timeToInt64(now))
+	n, err := execCount(ctx, s.parent.db, "ssf_events.DeleteExpired", s.parent.queries.ssfEventDeleteExpired, timeToInt64(now))
 	if err != nil {
-		return 0, wrapErr("ssf_events.DeleteExpired", err)
-	}
-	n, err := res.RowsAffected()
-	if err != nil {
-		return 0, wrapErr("ssf_events.DeleteExpired.RowsAffected", err)
+		return 0, err
 	}
 	return int(n), nil
 }

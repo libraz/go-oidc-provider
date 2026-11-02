@@ -72,18 +72,12 @@ func (s *deviceCodeStore) gcExpired(ctx context.Context) error {
 
 func (s *deviceCodeStore) FindByDeviceCode(ctx context.Context, deviceCode string) (*store.DeviceCode, error) {
 	idDigest := patterns.Digest(deviceCode)
-	rec, stored, err := s.scanOne(ctx, s.parent.queries.deviceCodeFind, idDigest)
+	rec, err := findByDigest(s.parent.clock, idDigest, func(r *store.DeviceCode) time.Time { return r.ExpiresAt },
+		func() (*store.DeviceCode, string, error) {
+			return s.scanOne(ctx, s.parent.queries.deviceCodeFind, idDigest)
+		})
 	if err != nil {
 		return nil, err
-	}
-	// Constant-time compare against the stored digest so a future
-	// refactor that swaps the equality predicate for a slice scan
-	// still fails closed in the presence of a timing oracle.
-	if !patterns.ConstantTimeKeyMatch(stored, idDigest) {
-		return nil, store.ErrNotFound
-	}
-	if isExpired(rec.ExpiresAt, s.parent.clock) {
-		return nil, store.ErrNotFound
 	}
 	rec.ID = deviceCode
 	return rec, nil
@@ -148,15 +142,11 @@ func (s *deviceCodeStore) DenyByUserCode(ctx context.Context, userCode, reason s
 
 func (s *deviceCodeStore) Revoke(ctx context.Context, deviceCode, reason string) error {
 	idDigest := patterns.Digest(deviceCode)
-	res, err := s.runner().ExecContext(ctx, s.parent.queries.deviceCodeRevoke,
+	n, err := execCount(ctx, s.runner(), "deviceCodes.Revoke", s.parent.queries.deviceCodeRevoke,
 		int64(store.DeviceCodeStatusDenied), reason, idDigest,
 		int64(store.DeviceCodeStatusPending), int64(store.DeviceCodeStatusApproved), s.now())
 	if err != nil {
-		return wrapErr("deviceCodes.Revoke", err)
-	}
-	n, err := res.RowsAffected()
-	if err != nil {
-		return wrapErr("deviceCodes.Revoke.RowsAffected", err)
+		return err
 	}
 	if n > 0 {
 		return nil
@@ -202,26 +192,20 @@ func (s *deviceCodeStore) IncrementPollViolation(ctx context.Context, deviceCode
 
 func (s *deviceCodeStore) Consume(ctx context.Context, deviceCode string) (*store.DeviceCode, error) {
 	idDigest := patterns.Digest(deviceCode)
-	rec, _, err := s.scanOne(ctx, s.parent.queries.deviceCodeFind, idDigest)
-	if err != nil {
-		return nil, err
+	scan := func() (*store.DeviceCode, string, error) {
+		return s.scanOne(ctx, s.parent.queries.deviceCodeFind, idDigest)
 	}
-	if isExpired(rec.ExpiresAt, s.parent.clock) {
-		return nil, store.ErrNotFound
-	}
-	switch rec.Status {
-	case store.DeviceCodeStatusConsumed:
-		return nil, store.ErrAlreadyConsumed
-	case store.DeviceCodeStatusApproved:
-		// fall through to the compare-and-swap below.
-	default:
-		return nil, store.ErrConflict
-	}
-	err = consumeUpdate(ctx, s.runner(), s.parent.queries.deviceCodeConsume, "deviceCodes.Consume", idDigest,
-		int64(store.DeviceCodeStatusConsumed), int64(store.DeviceCodeStatusApproved), s.now(),
-		func() bool {
-			replay, _, findErr := s.scanOne(ctx, s.parent.queries.deviceCodeFind, idDigest)
-			return findErr == nil && replay.Status == store.DeviceCodeStatusConsumed
+	rec, err := consumeApproved(s.parent.clock,
+		func(r *store.DeviceCode) time.Time { return r.ExpiresAt },
+		func(r *store.DeviceCode) store.DeviceCodeStatus { return r.Status },
+		store.DeviceCodeStatusApproved, store.DeviceCodeStatusConsumed, scan,
+		func() error {
+			return consumeUpdate(ctx, s.runner(), s.parent.queries.deviceCodeConsume, "deviceCodes.Consume", idDigest,
+				int64(store.DeviceCodeStatusConsumed), int64(store.DeviceCodeStatusApproved), s.now(),
+				func() bool {
+					replay, _, findErr := scan()
+					return findErr == nil && replay.Status == store.DeviceCodeStatusConsumed
+				})
 		})
 	if err != nil {
 		return nil, err

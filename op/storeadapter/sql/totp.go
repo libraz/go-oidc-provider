@@ -68,13 +68,9 @@ func (s *totpStore) Accept(ctx context.Context, r *store.TOTPRecord) error {
 	args := totpValues(r)
 	args = append(args, version, r.Subject, r.LastAcceptedStep,
 		nonNilBytes(r.SecretCiphertext), timeToInt64(r.ConfirmedAt), current)
-	res, err := s.parent.db.ExecContext(ctx, s.parent.queries.totpAccept, args...)
+	n, err := execCount(ctx, s.parent.db, "totp.Accept", s.parent.queries.totpAccept, args...)
 	if err != nil {
-		return wrapErr("totp.Accept", err)
-	}
-	n, err := res.RowsAffected()
-	if err != nil {
-		return wrapErr("totp.Accept.RowsAffected", err)
+		return err
 	}
 	if n > 0 {
 		return nil

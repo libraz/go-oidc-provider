@@ -87,13 +87,9 @@ func versionedSwap(
 // changed a row. The label names the operation in a wrapped backend
 // error.
 func execAffects(ctx context.Context, e execer, query, label string, args []any) (bool, error) {
-	res, err := e.ExecContext(ctx, query, args...)
+	n, err := execCount(ctx, e, label, query, args...)
 	if err != nil {
-		return false, wrapErr(label, err)
-	}
-	n, err := res.RowsAffected()
-	if err != nil {
-		return false, wrapErr(label+".RowsAffected", err)
+		return false, err
 	}
 	return n > 0, nil
 }

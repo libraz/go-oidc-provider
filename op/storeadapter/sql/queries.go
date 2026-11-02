@@ -363,7 +363,6 @@ func buildQueries(d Dialect, n nameMap) (queries, error) {
 	}
 
 	clientCols := joinColumns(clientColumns)
-	clientPlaceholders := placeholders(len(clientColumns))
 	clientUpdateSets := updateSetList(clientColumns, "id")
 
 	// counterCeiling is the largest value the uint8 strike and violation
@@ -387,6 +386,17 @@ func buildQueries(d Dialect, n nameMap) (queries, error) {
 	const refreshFindCols = "id, client_id, subject, subject_public, grant_id, scope, resource, origin, auth_time, acr, amr, authorization_details, access_token_extra, claims, authorization_recorded, chain_id, parent_id, consumed_at, expires_at, created_at, dpop_jkt, mtls_cert_thumbprint, nonce, revoked"
 	//nolint:gosec // a column list naming the token-hash column, not a credential.
 	const opaqueAccessTokenCols = "token_hash, grant_id, subject, client_id, audience, scope, acr, amr, auth_time, authorization_details, claims, authorization_recorded, chain_id, dpop_jkt, mtls_cert_thumb, issued_at, expires_at, revoked"
+	const refreshSaveCols = "id, client_id, grant_id, parent_id, subject, subject_public, scope, resource, origin, auth_time, acr, amr, authorization_details, access_token_extra, claims, authorization_recorded, chain_id, dpop_jkt, mtls_cert_thumbprint, nonce, revoked, expires_at, consumed_at, created_at"
+	//nolint:gosec // a column list, not a credential.
+	const accessTokenCols = "jti, grant_id, subject, client_id, scopes, issued_at, expires_at, revoked"
+	const grantTombstoneCols = "grant_id, revoked_at, access_revoked_at, expires_at, reason"
+	const revokedJTICols = "jti, grant_id, expires_at"
+	const parCols = "uri, client_id, raw_params, expires_at, consumed_at, created_at"
+	const interactionCols = "id, client_id, step, raw_state, expires_at, created_at, updated_at"
+	const iatCols = "id, hashed_value, max_uses, uses, allowed_scopes, tag, expires_at, created_at"
+	const ratCols = "client_id, hashed_value, allowed_scopes, created_at"
+	const recoveryCols = "subject, slot_index, code_hash, consumed_at, generated_at"
+	const lockoutCols = "subject, failed_count, record_version, first_failure_at, locked_until"
 	const cibaCols = "id, client_id, subject, scope, resource, acr_values, acr, binding_message, user_code, dpop_jkt, mtls_cert_thumbprint, poll_interval, status, auth_time, deny_reason, poll_violations, last_polled_at, expires_at, issued_at"
 
 	q := queries{
@@ -401,7 +411,7 @@ func buildQueries(d Dialect, n nameMap) (queries, error) {
 			"SELECT 1 FROM " + n.clients + " WHERE id = ?",
 		),
 		clientInsert: d.rebind(
-			"INSERT INTO " + n.clients + " (" + clientCols + ") VALUES (" + clientPlaceholders + ")",
+			insertInto(n.clients, clientCols),
 		),
 		clientUpdate: d.rebind(
 			"UPDATE " + n.clients + " SET " + clientUpdateSets + " WHERE id = ?",
@@ -412,9 +422,7 @@ func buildQueries(d Dialect, n nameMap) (queries, error) {
 
 		// authorization codes
 		authCodeSave: d.rebind(
-			"INSERT INTO " + n.authCodes +
-				" (" + authCodeCols + ")" +
-				" VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+			insertInto(n.authCodes, authCodeCols),
 		),
 		authCodeFind: d.rebind(
 			"SELECT " + authCodeCols +
@@ -429,9 +437,7 @@ func buildQueries(d Dialect, n nameMap) (queries, error) {
 
 		// refresh tokens
 		refreshSave: d.rebind(
-			"INSERT INTO " + n.refreshes +
-				" (id, client_id, grant_id, parent_id, subject, subject_public, scope, resource, origin, auth_time, acr, amr, authorization_details, access_token_extra, claims, authorization_recorded, chain_id, dpop_jkt, mtls_cert_thumbprint, nonce, revoked, expires_at, consumed_at, created_at)" +
-				" VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+			insertInto(n.refreshes, refreshSaveCols),
 		),
 		refreshFind: d.rebind(
 			"SELECT " + refreshFindCols +
@@ -524,12 +530,10 @@ func buildQueries(d Dialect, n nameMap) (queries, error) {
 
 		// access tokens
 		accessTokenRegister: d.rebind(
-			"INSERT INTO " + n.accessTokens +
-				" (jti, grant_id, subject, client_id, scopes, issued_at, expires_at, revoked)" +
-				" VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+			insertInto(n.accessTokens, accessTokenCols),
 		),
 		accessTokenFind: d.rebind(
-			"SELECT jti, grant_id, subject, client_id, scopes, issued_at, expires_at, revoked" +
+			"SELECT " + accessTokenCols +
 				" FROM " + n.accessTokens + " WHERE jti = ?",
 		),
 		accessTokenRevokeByJTI: d.rebind(
@@ -549,9 +553,7 @@ func buildQueries(d Dialect, n nameMap) (queries, error) {
 		// bearer ID; callers hash before binding so the raw secret never
 		// touches the wire to the database.
 		opaqueAccessTokenSave: d.rebind(
-			"INSERT INTO " + n.opaqueAccessTokens +
-				" (" + opaqueAccessTokenCols + ")" +
-				" VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+			insertInto(n.opaqueAccessTokens, opaqueAccessTokenCols),
 		),
 		opaqueAccessTokenFind: d.rebind(
 			"SELECT " + opaqueAccessTokenCols +
@@ -587,9 +589,7 @@ func buildQueries(d Dialect, n nameMap) (queries, error) {
 		// the column its scope names and leaves the other at 0, which the
 		// GREATEST merge keeps from rewinding the stored value.
 		grantTombstoneUpsert: d.rebind(
-			"INSERT INTO " + n.grantTombstones +
-				" (grant_id, revoked_at, access_revoked_at, expires_at, reason)" +
-				" VALUES (?, ?, ?, ?, ?)" + d.upsertAlias() +
+			insertInto(n.grantTombstones, grantTombstoneCols) + d.upsertAlias() +
 				d.upsertOnConflict("grant_id",
 					"revoked_at="+d.greatestExpr(d.excludedRef("revoked_at"), d.existingRef(n.grantTombstones, "revoked_at"))+
 						", access_revoked_at="+d.greatestExpr(d.excludedRef("access_revoked_at"), d.existingRef(n.grantTombstones, "access_revoked_at"))+
@@ -602,9 +602,7 @@ func buildQueries(d Dialect, n nameMap) (queries, error) {
 			"DELETE FROM " + n.grantTombstones + " WHERE " + sweepGuard,
 		),
 		revokedJTIInsert: d.rebind(
-			"INSERT INTO " + n.revokedJTIs +
-				" (jti, grant_id, expires_at)" +
-				" VALUES (?, ?, ?)" + d.upsertAlias() +
+			insertInto(n.revokedJTIs, revokedJTICols) + d.upsertAlias() +
 				d.upsertDoNothingQualified("jti", n.revokedJTIs),
 		),
 		revokedJTIFind: d.rebind(
@@ -616,9 +614,7 @@ func buildQueries(d Dialect, n nameMap) (queries, error) {
 
 		// grants (upsert keyed on id)
 		grantSave: d.rebind(
-			"INSERT INTO " + n.grants +
-				" (" + grantCols + ")" +
-				" VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)" + d.upsertAlias() +
+			insertInto(n.grants, grantCols) + d.upsertAlias() +
 				d.upsertOnConflict("id",
 					"subject="+d.excludedRef("subject")+
 						", client_id="+d.excludedRef("client_id")+
@@ -667,9 +663,7 @@ func buildQueries(d Dialect, n nameMap) (queries, error) {
 
 		// sessions (upsert keyed on id)
 		sessionSave: d.rebind(
-			"INSERT INTO " + n.sessions +
-				" (" + sessionCols + ")" +
-				" VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)" + d.upsertAlias() +
+			insertInto(n.sessions, sessionCols) + d.upsertAlias() +
 				d.upsertOnConflict("id",
 					"subject="+d.excludedRef("subject")+
 						", auth_time="+d.excludedRef("auth_time")+
@@ -699,12 +693,10 @@ func buildQueries(d Dialect, n nameMap) (queries, error) {
 
 		// PAR
 		parSave: d.rebind(
-			"INSERT INTO " + n.pars +
-				" (uri, client_id, raw_params, expires_at, consumed_at, created_at)" +
-				" VALUES (?, ?, ?, ?, ?, ?)",
+			insertInto(n.pars, parCols),
 		),
 		parFind: d.rebind(
-			"SELECT uri, client_id, raw_params, expires_at, consumed_at, created_at" +
+			"SELECT " + parCols +
 				" FROM " + n.pars + " WHERE uri = ?",
 		),
 		parConsume: d.rebind(
@@ -716,9 +708,7 @@ func buildQueries(d Dialect, n nameMap) (queries, error) {
 
 		// interactions (upsert keyed on id)
 		interactionSave: d.rebind(
-			"INSERT INTO " + n.interactions +
-				" (id, client_id, step, raw_state, expires_at, created_at, updated_at)" +
-				" VALUES (?, ?, ?, ?, ?, ?, ?)" + d.upsertAlias() +
+			insertInto(n.interactions, interactionCols) + d.upsertAlias() +
 				d.upsertOnConflict("id",
 					"client_id="+d.excludedRef("client_id")+
 						", step="+d.excludedRef("step")+
@@ -751,7 +741,7 @@ func buildQueries(d Dialect, n nameMap) (queries, error) {
 			"DELETE FROM " + n.jtis + " WHERE jti = ? AND expires_at > 0 AND expires_at <= ?",
 		),
 		jtiMark: d.rebind(
-			"INSERT INTO " + n.jtis + " (jti, expires_at) VALUES (?, ?)",
+			insertInto(n.jtis, "jti, expires_at"),
 		),
 		jtiHas: d.rebind(
 			"SELECT expires_at FROM " + n.jtis + " WHERE jti = ?",
@@ -774,14 +764,14 @@ func buildQueries(d Dialect, n nameMap) (queries, error) {
 			"UPDATE " + n.users + " SET password_hash = ? WHERE subject = ?",
 		),
 		userPut: d.rebind(
-			"INSERT INTO " + n.users + " (subject, claims, updated_at) VALUES (?, ?, ?)" +
+			insertInto(n.users, "subject, claims, updated_at") +
 				d.upsertAlias() +
 				d.upsertOnConflict("subject",
 					"claims="+d.excludedRef("claims")+
 						", updated_at="+d.excludedRef("updated_at")),
 		),
 		userPutWithPassword: d.rebind(
-			"INSERT INTO " + n.users + " (subject, claims, updated_at, username, password_hash) VALUES (?, ?, ?, ?, ?)" +
+			insertInto(n.users, "subject, claims, updated_at, username, password_hash") +
 				d.upsertAlias() +
 				d.upsertOnConflict("subject",
 					"claims="+d.excludedRef("claims")+
@@ -792,12 +782,10 @@ func buildQueries(d Dialect, n nameMap) (queries, error) {
 
 		// initial access tokens
 		iatPut: d.rebind(
-			"INSERT INTO " + n.iats +
-				" (id, hashed_value, max_uses, uses, allowed_scopes, tag, expires_at, created_at)" +
-				" VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+			insertInto(n.iats, iatCols),
 		),
 		iatGetByHash: d.rebind(
-			"SELECT id, hashed_value, max_uses, uses, allowed_scopes, tag, expires_at, created_at" +
+			"SELECT " + iatCols +
 				" FROM " + n.iats + " WHERE hashed_value = ?",
 		),
 		iatIncrementUsesRead: d.rebind(
@@ -812,15 +800,14 @@ func buildQueries(d Dialect, n nameMap) (queries, error) {
 
 		// registration access tokens
 		ratPut: d.rebind(
-			"INSERT INTO " + n.rats +
-				" (client_id, hashed_value, allowed_scopes, created_at) VALUES (?, ?, ?, ?)" + d.upsertAlias() +
+			insertInto(n.rats, ratCols) + d.upsertAlias() +
 				d.upsertOnConflict("client_id",
 					"hashed_value="+d.excludedRef("hashed_value")+
 						", allowed_scopes="+d.excludedRef("allowed_scopes")+
 						", created_at="+d.excludedRef("created_at")),
 		),
 		ratGetByClientID: d.rebind(
-			"SELECT client_id, hashed_value, allowed_scopes, created_at FROM " + n.rats + " WHERE client_id = ?",
+			"SELECT " + ratCols + " FROM " + n.rats + " WHERE client_id = ?",
 		),
 		ratDelete: d.rebind(
 			"DELETE FROM " + n.rats + " WHERE client_id = ?",
@@ -831,7 +818,7 @@ func buildQueries(d Dialect, n nameMap) (queries, error) {
 			"SELECT meta_value FROM " + n.metadata + " WHERE meta_key = ?",
 		),
 		metadataSet: d.rebind(
-			"INSERT INTO " + n.metadata + " (meta_key, meta_value) VALUES (?, ?)" + d.upsertAlias() +
+			insertInto(n.metadata, "meta_key, meta_value") + d.upsertAlias() +
 				d.upsertOnConflict("meta_key", "meta_value="+d.excludedRef("meta_value")),
 		),
 
@@ -839,8 +826,7 @@ func buildQueries(d Dialect, n nameMap) (queries, error) {
 		// digest of the wire device_code; the substore hashes before
 		// every bind so the raw bearer secret never reaches the DB.
 		deviceCodeSave: d.rebind(
-			"INSERT INTO " + n.deviceCodes + " (" + deviceCodeCols + ")" +
-				" VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+			insertInto(n.deviceCodes, deviceCodeCols),
 		),
 		deviceCodeFind: d.rebind(
 			"SELECT " + deviceCodeCols + " FROM " + n.deviceCodes + " WHERE id = ?",
@@ -906,8 +892,7 @@ func buildQueries(d Dialect, n nameMap) (queries, error) {
 		// hashes before every bind so the raw bearer secret never
 		// reaches the DB.
 		cibaSave: d.rebind(
-			"INSERT INTO " + n.cibaRequests + " (" + cibaCols + ")" +
-				" VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+			insertInto(n.cibaRequests, cibaCols),
 		),
 		cibaFind: d.rebind(
 			"SELECT " + cibaCols + " FROM " + n.cibaRequests + " WHERE id = ?",
@@ -947,9 +932,7 @@ func buildQueries(d Dialect, n nameMap) (queries, error) {
 				" FROM " + n.totpSecrets + " WHERE subject = ?",
 		),
 		totpPut: d.rebind(
-			"INSERT INTO " + n.totpSecrets +
-				" (subject, row_version, " + joinColumns(totpValueColumns) + ")" +
-				" VALUES (" + placeholders(2+len(totpValueColumns)) + ")" + d.upsertAlias() +
+			insertInto(n.totpSecrets, "subject, row_version, "+joinColumns(totpValueColumns)) + d.upsertAlias() +
 				d.upsertOnConflict("subject", versionedUpsertSet(d, totpValueColumns)),
 		),
 		// row_version is the SQL representation of the public opaque Version
@@ -990,9 +973,7 @@ func buildQueries(d Dialect, n nameMap) (queries, error) {
 				" FROM " + n.passkeys + " WHERE subject = ? ORDER BY created_at, credential_id",
 		),
 		passkeyInsert: d.rebind(
-			"INSERT INTO " + n.passkeys +
-				" (credential_id, " + joinColumns(passkeyValueColumns) + ")" +
-				" VALUES (" + placeholders(1+len(passkeyValueColumns)) + ")",
+			insertInto(n.passkeys, "credential_id, "+joinColumns(passkeyValueColumns)),
 		),
 		// The subject is the predicate, not an assignment: a rewrite
 		// lands only on a row its own subject already holds.
@@ -1023,9 +1004,7 @@ func buildQueries(d Dialect, n nameMap) (queries, error) {
 			"DELETE FROM " + n.recoveryCodes + " WHERE subject = ?",
 		),
 		recoveryInsert: d.rebind(
-			"INSERT INTO " + n.recoveryCodes +
-				" (subject, slot_index, code_hash, consumed_at, generated_at)" +
-				" VALUES (?, ?, ?, ?, ?)",
+			insertInto(n.recoveryCodes, recoveryCols),
 		),
 		// The hash predicate is what makes regenerating a batch revoke
 		// the codes it replaced: a slot whose hash has moved on refuses
@@ -1042,9 +1021,7 @@ func buildQueries(d Dialect, n nameMap) (queries, error) {
 				" FROM " + n.emailOTPs + " WHERE subject = ?",
 		),
 		emailOTPPut: d.rebind(
-			"INSERT INTO " + n.emailOTPs +
-				" (subject, row_version, " + joinColumns(emailOTPValueColumns) + ")" +
-				" VALUES (" + placeholders(2+len(emailOTPValueColumns)) + ")" + d.upsertAlias() +
+			insertInto(n.emailOTPs, "subject, row_version, "+joinColumns(emailOTPValueColumns)) + d.upsertAlias() +
 				d.upsertOnConflict("subject", versionedUpsertSet(d, emailOTPValueColumns)),
 		),
 		// The nil-previous form of the compare-and-swap reserves the
@@ -1062,9 +1039,7 @@ func buildQueries(d Dialect, n nameMap) (queries, error) {
 		// from "matched one and changed nothing" on a connection that
 		// asked for matched rows (MySQL's CLIENT_FOUND_ROWS).
 		emailOTPInsertIfAbsent: d.rebind(
-			"INSERT INTO " + n.emailOTPs +
-				" (subject, row_version, " + joinColumns(emailOTPValueColumns) + ")" +
-				" VALUES (" + placeholders(2+len(emailOTPValueColumns)) + ")",
+			insertInto(n.emailOTPs, "subject, row_version, "+joinColumns(emailOTPValueColumns)),
 		),
 		// A row past its retention horizon no longer holds the key. The
 		// predicate is evaluated against the current row version, so of
@@ -1106,9 +1081,7 @@ func buildQueries(d Dialect, n nameMap) (queries, error) {
 		// row, and only the engine's duplicate-key refusal reports that
 		// independently of how the connection counts affected rows.
 		lockoutInsert: d.rebind(
-			"INSERT INTO " + n.authnLockouts +
-				" (subject, failed_count, record_version, first_failure_at, locked_until)" +
-				" VALUES (?, ?, ?, ?, ?)",
+			insertInto(n.authnLockouts, lockoutCols),
 		),
 		lockoutUpdate: d.rebind(
 			"UPDATE " + n.authnLockouts +
@@ -1137,7 +1110,7 @@ func addSSFQueries(q *queries, d Dialect, n nameMap) {
 	eventCols := joinColumns(ssfEventColumns)
 
 	q.ssfStreamInsert = d.rebind(
-		"INSERT INTO " + n.ssfStreams + " (" + streamCols + ") VALUES (" + placeholders(len(ssfStreamColumns)) + ")",
+		insertInto(n.ssfStreams, streamCols),
 	)
 	q.ssfStreamGet = d.rebind("SELECT " + streamCols + " FROM " + n.ssfStreams + " WHERE id = ?")
 	q.ssfStreamGetByClient = d.rebind("SELECT " + streamCols + " FROM " + n.ssfStreams + " WHERE client_id = ?")
@@ -1150,7 +1123,7 @@ func addSSFQueries(q *queries, d Dialect, n nameMap) {
 	q.ssfStreamDelete = d.rebind("DELETE FROM " + n.ssfStreams + " WHERE id = ?")
 
 	q.ssfEventInsert = d.rebind(
-		"INSERT INTO " + n.ssfEvents + " (" + eventCols + ") VALUES (" + placeholders(len(ssfEventColumns)) + ")",
+		insertInto(n.ssfEvents, eventCols),
 	)
 	// The JTI just inserted is excluded so a duplicate cannot delete its
 	// own predecessor before the insert is refused.
@@ -1216,6 +1189,13 @@ func addSSFQueries(q *queries, d Dialect, n nameMap) {
 // caller input.
 func joinColumns(cols []string) string {
 	return strings.Join(cols, ", ")
+}
+
+// insertInto renders "INSERT INTO table (cols) VALUES (?, ...)" with one
+// placeholder per column of the comma-separated list cols, so the two
+// lists cannot drift apart.
+func insertInto(table, cols string) string {
+	return "INSERT INTO " + table + " (" + cols + ") VALUES (" + placeholders(strings.Count(cols, ",")+1) + ")"
 }
 
 // placeholders returns "?, ?, ..., ?" with n entries. The caller-side

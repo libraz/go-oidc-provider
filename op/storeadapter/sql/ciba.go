@@ -68,15 +68,12 @@ func (s *cibaRequestStore) gcExpired(ctx context.Context) error {
 
 func (s *cibaRequestStore) FindByAuthReqID(ctx context.Context, authReqID string) (*store.CIBARequest, error) {
 	idDigest := patterns.Digest(authReqID)
-	rec, stored, err := s.scanOne(ctx, s.parent.queries.cibaFind, idDigest)
+	rec, err := findByDigest(s.parent.clock, idDigest, func(r *store.CIBARequest) time.Time { return r.ExpiresAt },
+		func() (*store.CIBARequest, string, error) {
+			return s.scanOne(ctx, s.parent.queries.cibaFind, idDigest)
+		})
 	if err != nil {
 		return nil, err
-	}
-	if !patterns.ConstantTimeKeyMatch(stored, idDigest) {
-		return nil, store.ErrNotFound
-	}
-	if isExpired(rec.ExpiresAt, s.parent.clock) {
-		return nil, store.ErrNotFound
 	}
 	rec.ID = authReqID
 	return rec, nil
@@ -121,26 +118,20 @@ func (s *cibaRequestStore) IncrementPollViolation(ctx context.Context, authReqID
 
 func (s *cibaRequestStore) Consume(ctx context.Context, authReqID string) (*store.CIBARequest, error) {
 	idDigest := patterns.Digest(authReqID)
-	rec, _, err := s.scanOne(ctx, s.parent.queries.cibaFind, idDigest)
-	if err != nil {
-		return nil, err
+	scan := func() (*store.CIBARequest, string, error) {
+		return s.scanOne(ctx, s.parent.queries.cibaFind, idDigest)
 	}
-	if isExpired(rec.ExpiresAt, s.parent.clock) {
-		return nil, store.ErrNotFound
-	}
-	switch rec.Status {
-	case store.CIBARequestStatusConsumed:
-		return nil, store.ErrAlreadyConsumed
-	case store.CIBARequestStatusApproved:
-		// fall through to the compare-and-swap below.
-	default:
-		return nil, store.ErrConflict
-	}
-	err = consumeUpdate(ctx, s.runner(), s.parent.queries.cibaConsume, "ciba.Consume", idDigest,
-		int64(store.CIBARequestStatusConsumed), int64(store.CIBARequestStatusApproved), s.now(),
-		func() bool {
-			replay, _, findErr := s.scanOne(ctx, s.parent.queries.cibaFind, idDigest)
-			return findErr == nil && replay.Status == store.CIBARequestStatusConsumed
+	rec, err := consumeApproved(s.parent.clock,
+		func(r *store.CIBARequest) time.Time { return r.ExpiresAt },
+		func(r *store.CIBARequest) store.CIBARequestStatus { return r.Status },
+		store.CIBARequestStatusApproved, store.CIBARequestStatusConsumed, scan,
+		func() error {
+			return consumeUpdate(ctx, s.runner(), s.parent.queries.cibaConsume, "ciba.Consume", idDigest,
+				int64(store.CIBARequestStatusConsumed), int64(store.CIBARequestStatusApproved), s.now(),
+				func() bool {
+					replay, _, findErr := scan()
+					return findErr == nil && replay.Status == store.CIBARequestStatusConsumed
+				})
 		})
 	if err != nil {
 		return nil, err

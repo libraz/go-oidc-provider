@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/libraz/go-oidc-provider/op/store"
+	"github.com/libraz/go-oidc-provider/op/storeadapter/patterns"
 )
 
 // Helpers shared by the device-code and CIBA substores, whose rows are
@@ -81,6 +82,59 @@ func transitionMiss(res databasesql.Result, op string, clock Clock, expiry func(
 	return store.ErrConflict
 }
 
+// findByDigest reads a record through scan and applies the checks every
+// digest-keyed lookup shares: the stored digest must match idDigest and
+// the record must not be expired. The caller swaps the stored digest for
+// the wire id.
+func findByDigest[T any](clock Clock, idDigest string, expiresAt func(*T) time.Time, scan func() (*T, string, error)) (*T, error) {
+	rec, stored, err := scan()
+	if err != nil {
+		return nil, err
+	}
+	// Constant-time compare against the stored digest so a future
+	// refactor that swaps the equality predicate for a slice scan
+	// still fails closed in the presence of a timing oracle.
+	if !patterns.ConstantTimeKeyMatch(stored, idDigest) {
+		return nil, store.ErrNotFound
+	}
+	if isExpired(expiresAt(rec), clock) {
+		return nil, store.ErrNotFound
+	}
+	return rec, nil
+}
+
+// consumeApproved reads a record through scan, requires it to be live
+// and approved, and runs cas, the approved to consumed compare-and-swap.
+// An already consumed record reports ErrAlreadyConsumed and any other
+// status ErrConflict. The caller stamps the returned record.
+func consumeApproved[T any, S comparable](
+	clock Clock,
+	expiresAt func(*T) time.Time,
+	statusOf func(*T) S,
+	approved, consumed S,
+	scan func() (*T, string, error),
+	cas func() error,
+) (*T, error) {
+	rec, _, err := scan()
+	if err != nil {
+		return nil, err
+	}
+	if isExpired(expiresAt(rec), clock) {
+		return nil, store.ErrNotFound
+	}
+	switch statusOf(rec) {
+	case consumed:
+		return nil, store.ErrAlreadyConsumed
+	case approved:
+	default:
+		return nil, store.ErrConflict
+	}
+	if err := cas(); err != nil {
+		return nil, err
+	}
+	return rec, nil
+}
+
 // recordPollUpdate runs the RecordPoll UPDATE and resolves a zero-row
 // result. MySQL reports zero affected rows when a valid poll repeats the
 // exact same timestamp and interval, so find (the substore's own
@@ -95,13 +149,9 @@ func recordPollUpdate(
 	now int64,
 	find func() error,
 ) error {
-	res, err := r.ExecContext(ctx, query, timeToInt64(when), int64(nextInterval), int64(nextInterval), key, now)
+	n, err := execCount(ctx, r, op, query, timeToInt64(when), int64(nextInterval), int64(nextInterval), key, now)
 	if err != nil {
-		return wrapErr(op, err)
-	}
-	n, err := res.RowsAffected()
-	if err != nil {
-		return wrapErr(op+".RowsAffected", err)
+		return err
 	}
 	if n > 0 {
 		return nil
@@ -126,13 +176,9 @@ func consumeUpdate(
 	now int64,
 	replayConsumed func() bool,
 ) error {
-	res, err := r.ExecContext(ctx, query, consumed, key, approved, now)
+	n, err := execCount(ctx, r, op, query, consumed, key, approved, now)
 	if err != nil {
-		return wrapErr(op, err)
-	}
-	n, err := res.RowsAffected()
-	if err != nil {
-		return wrapErr(op+".RowsAffected", err)
+		return err
 	}
 	if n > 0 {
 		return nil

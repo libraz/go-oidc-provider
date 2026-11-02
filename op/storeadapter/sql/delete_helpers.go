@@ -14,16 +14,26 @@ type execer interface {
 	ExecContext(ctx context.Context, query string, args ...any) (databasesql.Result, error)
 }
 
-// execDeleteOne runs a DELETE and reports [store.ErrNotFound] when it
-// removed no row.
-func execDeleteOne(ctx context.Context, e execer, op, query string, args ...any) error {
+// execCount runs a write and returns the number of rows it affected.
+// The affected-row failure is reported under op+".RowsAffected".
+func execCount(ctx context.Context, e execer, op, query string, args ...any) (int64, error) {
 	res, err := e.ExecContext(ctx, query, args...)
 	if err != nil {
-		return wrapErr(op, err)
+		return 0, wrapErr(op, err)
 	}
 	n, err := res.RowsAffected()
 	if err != nil {
-		return wrapErr(op+".RowsAffected", err)
+		return 0, wrapErr(op+".RowsAffected", err)
+	}
+	return n, nil
+}
+
+// execDeleteOne runs a DELETE and reports [store.ErrNotFound] when it
+// removed no row.
+func execDeleteOne(ctx context.Context, e execer, op, query string, args ...any) error {
+	n, err := execCount(ctx, e, op, query, args...)
+	if err != nil {
+		return err
 	}
 	if n == 0 {
 		return store.ErrNotFound

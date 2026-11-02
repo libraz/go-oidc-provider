@@ -99,13 +99,9 @@ func (s *parStore) Consume(ctx context.Context, uri string) (*store.PushedAuthRe
 	}
 	now := s.parent.clock.Now()
 	uriDigest := patterns.Digest(uri)
-	res, err := s.runner().ExecContext(ctx, s.parent.queries.parConsume, timeToInt64(now), uriDigest)
+	n, err := execCount(ctx, s.runner(), "par.Consume", s.parent.queries.parConsume, timeToInt64(now), uriDigest)
 	if err != nil {
-		return nil, wrapErr("par.Consume", err)
-	}
-	n, err := res.RowsAffected()
-	if err != nil {
-		return nil, wrapErr("par.Consume.RowsAffected", err)
+		return nil, err
 	}
 	if n == 0 {
 		return nil, store.ErrAlreadyConsumed

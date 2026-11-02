@@ -57,13 +57,9 @@ func (s *userStore) ReadPasswordHash(ctx context.Context, subject string) ([]byt
 // UpdatePasswordHash implements [store.UserPasswordHashUpdater]. It
 // returns [store.ErrNotFound] when no row carries the subject.
 func (s *userStore) UpdatePasswordHash(ctx context.Context, subject string, encoded []byte) error {
-	res, err := s.runner().ExecContext(ctx, s.parent.queries.userUpdatePasswordHash, encoded, subject)
+	n, err := execCount(ctx, s.runner(), "users.UpdatePasswordHash", s.parent.queries.userUpdatePasswordHash, encoded, subject)
 	if err != nil {
-		return wrapErr("users.UpdatePasswordHash", err)
-	}
-	n, err := res.RowsAffected()
-	if err != nil {
-		return wrapErr("users.UpdatePasswordHash.RowsAffected", err)
+		return err
 	}
 	if n == 0 {
 		// MySQL counts changed rather than matched rows, so rewriting the

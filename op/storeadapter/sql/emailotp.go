@@ -166,13 +166,9 @@ func (s *emailOTPStore) Consume(ctx context.Context, r *store.EmailOTPRecord) er
 		nonNilBytes(r.CodeHash),
 		current,
 		timeToInt64(s.parent.clock.Now()))
-	res, err := s.parent.db.ExecContext(ctx, s.parent.queries.emailOTPConsume, args...)
+	n, err := execCount(ctx, s.parent.db, "emailOTPs.Consume", s.parent.queries.emailOTPConsume, args...)
 	if err != nil {
-		return wrapErr("emailOTPs.Consume", err)
-	}
-	n, err := res.RowsAffected()
-	if err != nil {
-		return wrapErr("emailOTPs.Consume.RowsAffected", err)
+		return err
 	}
 	if n > 0 {
 		return nil

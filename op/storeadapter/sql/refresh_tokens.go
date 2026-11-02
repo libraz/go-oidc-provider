@@ -4,7 +4,6 @@ import (
 	"context"
 	databasesql "database/sql"
 	"errors"
-	"fmt"
 
 	"github.com/libraz/go-oidc-provider/op/store"
 	"github.com/libraz/go-oidc-provider/op/storeadapter/patterns"
@@ -161,17 +160,17 @@ func (s *refreshStore) LoadRetryResponse(ctx context.Context, predecessorID stri
 func (s *refreshStore) insert(ctx context.Context, run runner, t *store.RefreshToken) error {
 	idDigest := patterns.Digest(t.ID)
 	parentDigest := digestNullableID(t.ParentID)
-	details, err := encodeObjectArray(t.AuthorizationDetails)
+	details, err := encodeObjectArrayFor("refreshes.Save", "authorization details", t.AuthorizationDetails)
 	if err != nil {
-		return fmt.Errorf("oidcsql: refreshes.Save authorization details: %w", err)
+		return err
 	}
-	extra, err := encodeMap(t.AccessTokenExtra)
+	extra, err := encodeMapFor("refreshes.Save", "access token extra", t.AccessTokenExtra)
 	if err != nil {
-		return fmt.Errorf("oidcsql: refreshes.Save access token extra: %w", err)
+		return err
 	}
-	claims, err := encodeMap(t.Claims)
+	claims, err := encodeMapFor("refreshes.Save", "claims", t.Claims)
 	if err != nil {
-		return fmt.Errorf("oidcsql: refreshes.Save claims: %w", err)
+		return err
 	}
 	_, err = run.ExecContext(ctx, s.parent.queries.refreshSave,
 		idDigest, t.ClientID, t.GrantID, parentDigest, t.Subject,
@@ -405,14 +404,10 @@ func (s *refreshStore) Consume(ctx context.Context, id string) (*store.RefreshTo
 	// a concurrent rotation can win the write while a stale snapshot still
 	// reports the predecessor as unconsumed. The update itself serialises the
 	// one winner and also rejects naturally expired rows.
-	res, err := s.runner().ExecContext(ctx, s.parent.queries.refreshConsume,
+	n, err := execCount(ctx, s.runner(), "refreshes.Consume", s.parent.queries.refreshConsume,
 		timeToInt64(now), patterns.Digest(id), timeToInt64(now))
 	if err != nil {
-		return nil, wrapErr("refreshes.Consume", err)
-	}
-	n, err := res.RowsAffected()
-	if err != nil {
-		return nil, wrapErr("refreshes.Consume.RowsAffected", err)
+		return nil, err
 	}
 	// A locking read after the write sees the current committed version even
 	// inside a repeatable-read transaction. SQLite has no FOR UPDATE suffix,

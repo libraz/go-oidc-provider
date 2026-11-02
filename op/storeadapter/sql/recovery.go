@@ -92,14 +92,10 @@ func (s *recoveryStore) Consume(ctx context.Context, b *store.RecoveryBatch, ind
 		return store.ErrNotFound
 	}
 	slot := b.Codes[index]
-	res, err := s.parent.db.ExecContext(ctx, s.parent.queries.recoveryConsume,
+	n, err := execCount(ctx, s.parent.db, "recoveryCodes.Consume", s.parent.queries.recoveryConsume,
 		timeToInt64(consumeStamp(slot.ConsumedAt, s.parent.clock)), b.Subject, index, slot.Hash)
 	if err != nil {
-		return wrapErr("recoveryCodes.Consume", err)
-	}
-	n, err := res.RowsAffected()
-	if err != nil {
-		return wrapErr("recoveryCodes.Consume.RowsAffected", err)
+		return err
 	}
 	if n > 0 {
 		return nil

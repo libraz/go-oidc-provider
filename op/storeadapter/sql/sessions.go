@@ -58,14 +58,10 @@ func (s *sessionStore) Touch(ctx context.Context, id string, expiresAt, updatedA
 	if isExpired(cur.ExpiresAt, s.parent.clock) {
 		return store.ErrNotFound
 	}
-	res, err := s.runner().ExecContext(ctx, s.parent.queries.sessionTouch,
+	n, err := execCount(ctx, s.runner(), "sessions.Touch", s.parent.queries.sessionTouch,
 		timeToInt64(expiresAt), timeToInt64(updatedAt), id)
 	if err != nil {
-		return wrapErr("sessions.Touch", err)
-	}
-	n, err := res.RowsAffected()
-	if err != nil {
-		return wrapErr("sessions.Touch.RowsAffected", err)
+		return err
 	}
 	if n == 0 {
 		// MySQL counts changed rows rather than matched ones, so a Touch

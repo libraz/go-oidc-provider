@@ -21,13 +21,13 @@ func newGrantStore(s *Store, tx *databasesql.Tx) *grantStore {
 func (s *grantStore) runner() runner { return pickRunner(s.parent, s.tx) }
 
 func (s *grantStore) Save(ctx context.Context, g *store.Grant) error {
-	claims, err := encodeMap(g.Claims)
+	claims, err := encodeMapFor("grants.Save", "claims", g.Claims)
 	if err != nil {
-		return fmt.Errorf("oidcsql: grants.Save claims: %w", err)
+		return err
 	}
-	details, err := encodeObjectArray(g.AuthorizationDetails)
+	details, err := encodeObjectArrayFor("grants.Save", "authorization details", g.AuthorizationDetails)
 	if err != nil {
-		return fmt.Errorf("oidcsql: grants.Save authorization details: %w", err)
+		return err
 	}
 	_, err = s.runner().ExecContext(ctx, s.parent.queries.grantSave,
 		g.ID, g.Subject, g.ClientID,

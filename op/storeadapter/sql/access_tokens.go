@@ -72,13 +72,9 @@ func (s *accessTokenStore) RevokeByJTI(ctx context.Context, jti string) error {
 }
 
 func (s *accessTokenStore) RevokeByGrant(ctx context.Context, grantID string) (int, error) {
-	res, err := s.runner().ExecContext(ctx, s.parent.queries.accessTokenRevokeByGrant, grantID)
+	n, err := execCount(ctx, s.runner(), "accessTokens.RevokeByGrant", s.parent.queries.accessTokenRevokeByGrant, grantID)
 	if err != nil {
-		return 0, wrapErr("accessTokens.RevokeByGrant", err)
-	}
-	n, err := res.RowsAffected()
-	if err != nil {
-		return 0, wrapErr("accessTokens.RevokeByGrant.RowsAffected", err)
+		return 0, err
 	}
 	return int(n), nil
 }
@@ -98,13 +94,9 @@ func (s *accessTokenStore) RevokeByClient(ctx context.Context, clientID string) 
 }
 
 func (s *accessTokenStore) GC(ctx context.Context, cutoff time.Time) (int, error) {
-	res, err := s.runner().ExecContext(ctx, s.parent.queries.accessTokenGC, timeToInt64(cutoff))
+	n, err := execCount(ctx, s.runner(), "accessTokens.GC", s.parent.queries.accessTokenGC, timeToInt64(cutoff))
 	if err != nil {
-		return 0, wrapErr("accessTokens.GC", err)
-	}
-	n, err := res.RowsAffected()
-	if err != nil {
-		return 0, wrapErr("accessTokens.GC.RowsAffected", err)
+		return 0, err
 	}
 	return int(n), nil
 }

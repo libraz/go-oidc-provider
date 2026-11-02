@@ -281,13 +281,9 @@ func (s *clientStore) Update(ctx context.Context, c *store.Client) error {
 	// args[1:] is a fresh subslice the caller does not retain, so the
 	// in-place append is safe.
 	bind := append(args[1:], c.ID) //nolint:gocritic // see comment.
-	res, err := s.runner().ExecContext(ctx, s.parent.queries.clientUpdate, bind...)
+	n, err := execCount(ctx, s.runner(), "clients.Update", s.parent.queries.clientUpdate, bind...)
 	if err != nil {
-		return wrapErr("clients.Update", err)
-	}
-	n, err := res.RowsAffected()
-	if err != nil {
-		return wrapErr("clients.Update.RowsAffected", err)
+		return err
 	}
 	if n == 0 {
 		// MySQL counts changed rows rather than matched rows, so an

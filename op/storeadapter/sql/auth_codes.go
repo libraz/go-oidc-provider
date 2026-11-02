@@ -4,7 +4,6 @@ import (
 	"context"
 	databasesql "database/sql"
 	"errors"
-	"fmt"
 
 	"github.com/libraz/go-oidc-provider/op/store"
 	"github.com/libraz/go-oidc-provider/op/storeadapter/patterns"
@@ -29,13 +28,13 @@ func (s *authCodeStore) runner() runner { return pickRunner(s.parent, s.tx) }
 // backup leak yields one-way digests that cannot be redeemed.
 func (s *authCodeStore) Save(ctx context.Context, code *store.AuthorizationCode) error {
 	idDigest := patterns.Digest(code.ID)
-	details, err := encodeObjectArray(code.AuthorizationDetails)
+	details, err := encodeObjectArrayFor("authCodes.Save", "authorization details", code.AuthorizationDetails)
 	if err != nil {
-		return fmt.Errorf("oidcsql: authCodes.Save authorization details: %w", err)
+		return err
 	}
-	claims, err := encodeMap(code.Claims)
+	claims, err := encodeMapFor("authCodes.Save", "claims", code.Claims)
 	if err != nil {
-		return fmt.Errorf("oidcsql: authCodes.Save claims: %w", err)
+		return err
 	}
 	_, err = s.runner().ExecContext(ctx, s.parent.queries.authCodeSave,
 		idDigest, code.ClientID, code.GrantID, code.Subject, code.RedirectURI,
@@ -144,13 +143,9 @@ func (s *authCodeStore) Consume(ctx context.Context, id string) (*store.Authoriz
 	}
 	now := s.parent.clock.Now()
 	idDigest := patterns.Digest(id)
-	res, err := s.runner().ExecContext(ctx, s.parent.queries.authCodeConsume, timeToInt64(now), idDigest)
+	n, err := execCount(ctx, s.runner(), "authCodes.Consume", s.parent.queries.authCodeConsume, timeToInt64(now), idDigest)
 	if err != nil {
-		return nil, wrapErr("authCodes.Consume", err)
-	}
-	n, err := res.RowsAffected()
-	if err != nil {
-		return nil, wrapErr("authCodes.Consume.RowsAffected", err)
+		return nil, err
 	}
 	if n == 0 {
 		// Lost the compare-and-swap to a concurrent Consume.

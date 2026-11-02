@@ -68,6 +68,26 @@ func encodeMap(m map[string]any) ([]byte, error) {
 	return b, nil
 }
 
+// encodeMapFor is [encodeMap] for a Save: a failure names the substore
+// operation and the field that could not be encoded.
+func encodeMapFor(op, field string, m map[string]any) ([]byte, error) {
+	b, err := encodeMap(m)
+	if err != nil {
+		return nil, fmt.Errorf("oidcsql: %s %s: %w", op, field, err)
+	}
+	return b, nil
+}
+
+// encodeObjectArrayFor is [encodeObjectArray] with the error context of
+// [encodeMapFor].
+func encodeObjectArrayFor(op, field string, a []map[string]any) ([]byte, error) {
+	b, err := encodeObjectArray(a)
+	if err != nil {
+		return nil, fmt.Errorf("oidcsql: %s %s: %w", op, field, err)
+	}
+	return b, nil
+}
+
 // decodeMap deserialises a column written by encodeMap. The literal
 // JSON null decodes to a nil map, mirroring the inmem reference.
 //

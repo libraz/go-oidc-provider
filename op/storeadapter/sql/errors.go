@@ -12,6 +12,14 @@ import (
 // language the server was configured to speak.
 const pgUniqueViolation = "23505"
 
+// MySQL server error numbers go-sql-driver renders as "Error <number>".
+const (
+	mysqlDupEntry        = "1062" // ER_DUP_ENTRY
+	mysqlDupEntryWithKey = "1586" // ER_DUP_ENTRY_WITH_KEY_NAME
+	mysqlLockDeadlock    = "1213" // ER_LOCK_DEADLOCK
+	mysqlLockWaitTimeout = "1205" // ER_LOCK_WAIT_TIMEOUT
+)
+
 // isDuplicate reports whether err describes a unique-constraint or
 // primary-key collision on the underlying driver.
 //
@@ -44,7 +52,7 @@ func isDuplicate(err error) bool {
 	root := strings.ToLower(rootError(err).Error())
 	// ER_DUP_ENTRY and its named-key variant, both rendered by the
 	// driver rather than by the server.
-	if hasMySQLErrorNumber(root, "1062") || hasMySQLErrorNumber(root, "1586") {
+	if hasMySQLErrorNumber(root, mysqlDupEntry) || hasMySQLErrorNumber(root, mysqlDupEntryWithKey) {
 		return true
 	}
 	if strings.Contains(msg, "sqlstate "+pgUniqueViolation) {
@@ -96,8 +104,7 @@ func isLockConflict(err error) bool {
 	}
 	msg := strings.ToLower(err.Error())
 	root := strings.ToLower(rootError(err).Error())
-	// ER_LOCK_DEADLOCK and ER_LOCK_WAIT_TIMEOUT.
-	if hasMySQLErrorNumber(root, "1213") || hasMySQLErrorNumber(root, "1205") {
+	if hasMySQLErrorNumber(root, mysqlLockDeadlock) || hasMySQLErrorNumber(root, mysqlLockWaitTimeout) {
 		return true
 	}
 	// The needles are lowered alongside the message: unlike the
