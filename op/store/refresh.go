@@ -126,11 +126,9 @@ type RefreshToken struct {
 	// a client cert whose DER bytes hash to this value, and the
 	// rotated access token is re-bound to the same thumbprint.
 	//
-	// MTLSCertThumbprint and DPoPJKT are mutually exclusive in
-	// practice: a chain is bound by one method or neither, never
-	// both. The wire format keeps the fields independent so a future
-	// release that admits dual binding does not need a contract
-	// change.
+	// MTLSCertThumbprint and DPoPJKT are independent: a chain issued
+	// to a request that presented both a DPoP proof and a client cert
+	// carries both, and every refresh must satisfy each.
 	MTLSCertThumbprint string
 
 	// Nonce is the OpenID Connect Core 1.0 §3.1.2.1 nonce value the

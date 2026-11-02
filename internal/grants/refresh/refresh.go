@@ -190,8 +190,9 @@ type IssueInput struct {
 	// on every refresh request. Empty means the refresh chain is
 	// not mTLS-bound.
 	//
-	// MTLSCertThumbprint and DPoPJKT are mutually exclusive on a
-	// single record; the token endpoint never issues both at once.
+	// A record may carry both MTLSCertThumbprint and DPoPJKT when the
+	// issuing request presented both a DPoP proof and a client cert;
+	// rotation then enforces each binding independently.
 	MTLSCertThumbprint string
 
 	// Nonce is the OIDC Core 1.0 §3.1.2.1 nonce value from the

@@ -94,10 +94,9 @@ type OpaqueAccessToken struct {
 	// means every use MUST present a client cert whose DER bytes hash
 	// to this value.
 	//
-	// MTLSCertThumbprint and DPoPJKT are mutually exclusive in
-	// practice; the wire format keeps the fields independent so a
-	// future release that admits dual binding does not need a contract
-	// change.
+	// MTLSCertThumbprint and DPoPJKT are independent: a token issued
+	// to a request that presented both a DPoP proof and a client cert
+	// carries both, and every use must satisfy each.
 	MTLSCertThumbprint string
 
 	// ChainID is the [RefreshToken.ChainID] of the refresh chain the

@@ -26,10 +26,13 @@ import (
 //
 // The device_code and CIBA grants record a grant at redemption, and a
 // token exchange issues under the grant of its subject_token, so their
-// credentials are retired here too. Credentials a [CustomGrantHandler]
-// issues are NOT reached: the handler, not a grant record, vouches for
-// their subject, and they stop only when they expire or are revoked
-// individually.
+// credentials are retired here too. Credentials issued without a grant
+// record are NOT reached: those a [CustomGrantHandler] issues, whose
+// subject the handler rather than a grant record vouches for, and the
+// access tokens of the jwt-bearer grant ([WithJWTBearerGrant]), ID-JAG
+// redemptions included. They stop only when they expire or are revoked
+// individually; for jwt-bearer, the next redemption is refused once the
+// subject resolver or the UserStore no longer knows the subject.
 //
 // Browser sessions are not touched: the session store has no subject
 // index. A session left behind cannot mint tokens once its grants are
