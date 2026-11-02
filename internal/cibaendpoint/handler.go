@@ -54,6 +54,12 @@ type Deps struct {
 	// Requests carrying login_hint or login_hint_token are unaffected.
 	Keys *keys.Set
 
+	// SubjectProjector maps the OP-internal subject onto the "sub" the
+	// client sees in its id_token. A non-identity projection makes an
+	// id_token_hint's sub unusable as an internal subject, so such
+	// requests are refused. A nil projector is the identity.
+	SubjectProjector func(ctx context.Context, raw string, client *store.Client) (string, error)
+
 	// Clock supplies the current wall-clock reading. A nil Clock
 	// falls back to [timex.SystemClock].
 	Clock Clock

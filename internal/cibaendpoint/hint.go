@@ -98,6 +98,10 @@ const pairwiseSubjectType = "pairwise"
 // so the request is rejected with a description that names the
 // supported alternative.
 //
+// Clients whose "sub" is otherwise projected from the internal subject
+// (a custom subject generator) are refused the same way: the verified
+// sub is not the value the resolver is documented to receive.
+//
 // The bool is false when the function wrote the response.
 func verifyIDTokenHint(
 	ctx context.Context,
@@ -133,7 +137,25 @@ func verifyIDTokenHint(
 			"id_token_hint is not an id_token this OP issued to this client")
 		return "", false
 	}
+	if !subjectIsInternal(ctx, deps, subject, client) {
+		emitRejected(ctx, deps, client.ID, "id_token_hint not accepted", "id_token_hint_projected_subject")
+		endpointsupport.WriteOAuthError(w, http.StatusBadRequest, errInvalidRequest,
+			"id_token_hint is not accepted from a client whose subject identifiers are projected; "+
+				"use login_hint or login_hint_token")
+		return "", false
+	}
 	return subject, true
+}
+
+// subjectIsInternal reports whether the id_token sub is the OP-internal
+// subject: a nil [Deps.SubjectProjector] or one that leaves the value
+// unchanged. A projection error counts as "not provable".
+func subjectIsInternal(ctx context.Context, deps Deps, subject string, client *store.Client) bool {
+	if deps.SubjectProjector == nil {
+		return true
+	}
+	projected, err := deps.SubjectProjector(ctx, subject, client)
+	return err == nil && projected == subject
 }
 
 // resolveHint runs the OP-side id_token_hint verification and then
