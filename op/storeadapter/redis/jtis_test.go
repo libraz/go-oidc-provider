@@ -2,6 +2,7 @@ package oidcredis //nolint:testpackage // tests exercise unexported JTI marker h
 
 import (
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 )
@@ -56,5 +57,16 @@ func TestCeilMillisNeverShortensTheTTL(t *testing.T) {
 		if got := ceilMillis(tc.ttl); got != tc.want {
 			t.Errorf("ceilMillis(%v) = %d, want %d", tc.ttl, got, tc.want)
 		}
+	}
+}
+
+// TestMarkJTILuaMatchesTheExpiringPrefix pins that the script recognises
+// a stored expiry by the same prefix Mark writes, so changing the Go
+// constant cannot leave the script reading every marker as foreign.
+func TestMarkJTILuaMatchesTheExpiringPrefix(t *testing.T) {
+	t.Parallel()
+
+	if want := `"^` + expiringJTIPrefix + `(%-?%d+)$"`; !strings.Contains(markJTILua, want) {
+		t.Fatalf("markJTILua does not match on %s:\n%s", want, markJTILua)
 	}
 }

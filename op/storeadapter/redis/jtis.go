@@ -66,7 +66,7 @@ type jtiStore struct {
 const markJTILua = `
 local current = redis.call("GET", KEYS[1])
 if current then
-	local expiry = string.match(current, "^e(%-?%d+)$")
+	local expiry = string.match(current, "^` + expiringJTIPrefix + `(%-?%d+)$")
 	if not expiry or tonumber(expiry) > tonumber(ARGV[2]) then
 		return 0
 	end

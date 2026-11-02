@@ -201,6 +201,12 @@ func (s *sessionStore) Save(ctx context.Context, sess *store.Session) error {
 	return nil
 }
 
+// expired re-evaluates the record's own ExpiresAt against the adapter's
+// clock, as [interactionStore.expired] does.
+func (s *sessionStore) expired(rec *sessionRecord) bool {
+	return patterns.IsExpiredInclusive(rec.ExpiresAt, s.parent.clock.Now())
+}
+
 // Find returns the session identified by id, or [store.ErrNotFound]
 // when no such session exists. Redis evicts expired keys lazily, so
 // a Find against an expired ID returns ErrNotFound automatically.
@@ -212,7 +218,7 @@ func (s *sessionStore) Find(ctx context.Context, id string) (*store.Session, err
 	if err != nil {
 		return nil, err
 	}
-	if patterns.IsExpiredInclusive(rec.ExpiresAt, s.parent.clock.Now()) {
+	if s.expired(rec) {
 		return nil, store.ErrNotFound
 	}
 	return decode(rec), nil
@@ -248,7 +254,7 @@ func (s *sessionStore) touchOnce(ctx context.Context, id string, expiresAt, upda
 	if err != nil {
 		return err
 	}
-	if patterns.IsExpiredInclusive(rec.ExpiresAt, s.parent.clock.Now()) {
+	if s.expired(rec) {
 		return store.ErrNotFound
 	}
 	rec.ExpiresAt = expiresAt
@@ -311,7 +317,7 @@ func (s *sessionStore) Delete(ctx context.Context, id string) error {
 	if fetchErr != nil {
 		return fetchErr
 	}
-	expired := patterns.IsExpiredInclusive(rec.ExpiresAt, s.parent.clock.Now())
+	expired := s.expired(rec)
 
 	pipe := s.parent.client.TxPipeline()
 	delCmd := pipe.Del(ctx, s.sessionKey(id))

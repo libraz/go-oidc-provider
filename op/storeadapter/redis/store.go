@@ -29,6 +29,14 @@ import (
 // microsecond epoch.
 const MaxValueBytes = 64 * 1024
 
+// The bounds WithMaxValueBytes accepts, and how long New waits for the
+// server to answer its first PING.
+const (
+	minMaxValueBytes = 1024
+	maxMaxValueBytes = 1024 * 1024
+	pingTimeout      = 5 * time.Second
+)
+
 // DefaultKeyPrefix is the namespace every key is rooted under unless
 // the embedder supplies [WithKeyPrefix]. The prefix gives operators a
 // single grep target when sharing a Redis instance with unrelated
@@ -179,8 +187,8 @@ func WithDevModeAllowPlaintext(warnSink func(string)) Option {
 // protection.
 func WithMaxValueBytes(n int) Option {
 	return func(cfg *config) {
-		if n < 1024 || n > 1024*1024 {
-			cfg.setOptionErr(fmt.Errorf("oidcredis: WithMaxValueBytes(%d) is outside [1024, 1048576]", n))
+		if n < minMaxValueBytes || n > maxMaxValueBytes {
+			cfg.setOptionErr(fmt.Errorf("oidcredis: WithMaxValueBytes(%d) is outside [%d, %d]", n, minMaxValueBytes, maxMaxValueBytes))
 			return
 		}
 		cfg.maxValueBytes = n
@@ -234,7 +242,7 @@ func New(ctx context.Context, opts ...Option) (*Store, error) {
 	}
 
 	client := redis.NewClient(rawOpts)
-	pingCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	pingCtx, cancel := context.WithTimeout(ctx, pingTimeout)
 	defer cancel()
 	if err := client.Ping(pingCtx).Err(); err != nil {
 		_ = client.Close()

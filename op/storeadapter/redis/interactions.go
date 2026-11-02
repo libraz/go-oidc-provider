@@ -33,15 +33,21 @@ func newInteractionStore(parent *Store) *interactionStore {
 	}
 }
 
-// compareAndSwapInteractionLua replaces the stored interaction when its
-// id and raw state still match (ARGV[1], ARGV[2]). It returns -1 for an
-// absent key, 0 for a mismatch and 1 on success.
-const compareAndSwapInteractionLua = `
+// matchInteractionLua opens both interaction scripts: it returns -1 for
+// an absent key and 0 unless the stored id and raw state equal ARGV[1]
+// and ARGV[2].
+const matchInteractionLua = `
 local current = redis.call("GET", KEYS[1])
 if not current then return -1 end
 local decoded = cjson.decode(current)
 local raw = decoded["raw"] or ""
 if decoded["id"] ~= ARGV[1] or raw ~= ARGV[2] then return 0 end
+`
+
+// compareAndSwapInteractionLua replaces the stored interaction when its
+// id and raw state still match (ARGV[1], ARGV[2]). It returns -1 for an
+// absent key, 0 for a mismatch and 1 on success.
+const compareAndSwapInteractionLua = matchInteractionLua + `
 redis.call("SET", KEYS[1], ARGV[3], "PX", ARGV[4])
 return 1
 `
@@ -49,12 +55,7 @@ return 1
 // deleteInteractionIfUnchangedLua deletes the stored interaction when
 // its id and raw state still match; the return codes mirror
 // compareAndSwapInteractionLua.
-const deleteInteractionIfUnchangedLua = `
-local current = redis.call("GET", KEYS[1])
-if not current then return -1 end
-local decoded = cjson.decode(current)
-local raw = decoded["raw"] or ""
-if decoded["id"] ~= ARGV[1] or raw ~= ARGV[2] then return 0 end
+const deleteInteractionIfUnchangedLua = matchInteractionLua + `
 redis.call("DEL", KEYS[1])
 return 1
 `
@@ -145,7 +146,13 @@ func (s *interactionStore) CompareAndSwap(
 	if err != nil {
 		return fmt.Errorf("oidcredis: CAS interaction: %w", err)
 	}
-	switch result {
+	return interactionScriptResult(result)
+}
+
+// interactionScriptResult maps the return code of the interaction
+// scripts onto the store contract's error set.
+func interactionScriptResult(code int) error {
+	switch code {
 	case 1:
 		return nil
 	case -1:
@@ -175,14 +182,7 @@ func (s *interactionStore) DeleteIfUnchanged(
 	if err != nil {
 		return fmt.Errorf("oidcredis: conditional DEL interaction: %w", err)
 	}
-	switch result {
-	case 1:
-		return nil
-	case -1:
-		return store.ErrNotFound
-	default:
-		return store.ErrConflict
-	}
+	return interactionScriptResult(result)
 }
 
 func marshalInteraction(i *store.Interaction) ([]byte, error) {
