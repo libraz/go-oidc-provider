@@ -165,6 +165,30 @@ func TestGetClient_TimeoutIsNetworkFailure(t *testing.T) {
 	}
 }
 
+// countingListener is a loopback TCP listener that counts accepted
+// connections and closes each at once.
+func countingListener(t *testing.T) (port string, accepts *atomic.Int32) {
+	t.Helper()
+	ln, err := (&net.ListenConfig{}).Listen(t.Context(), "tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	t.Cleanup(func() { _ = ln.Close() })
+	accepts = new(atomic.Int32)
+	go func() {
+		for {
+			conn, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			accepts.Add(1)
+			_ = conn.Close()
+		}
+	}()
+	_, port, _ = net.SplitHostPort(ln.Addr().String())
+	return port, accepts
+}
+
 // TestGetClient_LoopbackRefusedWithoutAllowPrivate drives the SSRF gate on
 // the client_id path: a public https name resolving to loopback is refused
 // before any connection when the dev opt-in is off.
@@ -190,6 +214,42 @@ func TestGetClient_LoopbackRefusedWithoutAllowPrivate(t *testing.T) {
 	failed := h.rec.named(auditevent.AuditCIMDFetchFailed)
 	if len(failed) != 1 || failed[0].Extras["reason"] != reasonNetwork {
 		t.Fatalf("cimd.fetch_failed events=%+v, want one with reason network", failed)
+	}
+}
+
+// TestGetClient_LoopbackLiteralOpensNoConnectionWithoutAllowPrivate asserts
+// the gate refuses a loopback https target before connecting. The opted-in
+// control proves the listener is reachable, so the zero count is not vacuous.
+func TestGetClient_LoopbackLiteralOpensNoConnectionWithoutAllowPrivate(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name         string
+		allowPrivate bool
+	}{
+		{name: "refused", allowPrivate: false},
+		{name: "opted_in_control", allowPrivate: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			port, accepts := countingListener(t)
+			h := newHarness(t, func(c *Config) { c.AllowPrivate = tc.allowPrivate })
+			id := "https://127.0.0.1:" + port + "/client.json"
+
+			if _, err := h.store.GetClient(context.Background(), id); !errors.Is(err, store.ErrNotFound) {
+				t.Fatalf("err=%v, want ErrNotFound", err)
+			}
+			got := accepts.Load()
+			if !tc.allowPrivate && got != 0 {
+				t.Fatalf("accepted %d connections with the dev opt-in off, want 0", got)
+			}
+			if tc.allowPrivate && got == 0 {
+				t.Fatal("control accepted no connection; the listener is unreachable and the gate assertion is vacuous")
+			}
+			failed := h.rec.named(auditevent.AuditCIMDFetchFailed)
+			if len(failed) != 1 || failed[0].Extras["reason"] != reasonNetwork {
+				t.Fatalf("cimd.fetch_failed events=%+v, want one with reason network", failed)
+			}
+		})
 	}
 }
 
