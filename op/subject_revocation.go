@@ -26,7 +26,11 @@ import (
 //
 // The device_code and CIBA grants record a grant at redemption, and a
 // token exchange issues under the grant of its subject_token, so their
-// credentials are retired here too. Credentials issued without a grant
+// credentials are retired here too; a poll redeeming while the call runs
+// is refused and its credentials retired. A device code or CIBA request
+// approved but not yet redeemed records no grant and is not reached: its
+// redemption is refused once the UserStore no longer knows the subject,
+// as for browser sessions below. Credentials issued without a grant
 // record are NOT reached: those a [CustomGrantHandler] issues, whose
 // subject the handler rather than a grant record vouches for, and the
 // access tokens of the jwt-bearer grant ([WithJWTBearerGrant]), ID-JAG

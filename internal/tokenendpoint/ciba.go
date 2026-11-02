@@ -90,6 +90,11 @@ func handleCIBA(w http.ResponseWriter, r *http.Request, deps Deps) {
 		issued.cleanup(ctx, deps)
 		return
 	}
+	// A RevokeSubject that listed the grant while the credentials were being
+	// persisted could not retire what was written after it; refuse here.
+	if !refuseIssuanceUnderClosedGrant(ctx, w, deps, issued.issuedUnder(rec.IssuedAt), "auth_req_id rejected") {
+		return
+	}
 	emitCIBAIssued(ctx, deps, cibaIssuedExtras{
 		ClientID:         client.ID,
 		Subject:          authorized.Subject,

@@ -122,8 +122,8 @@ issuer. A DynamoDB deployment must create the new `cascade_links` table (from
   pick used to complete the login without them. A pick that re-authenticates
   rotates the picked session with the new `auth_time`, `acr` and `amr`.
 
-- A grant revoked while a code exchange, refresh or token exchange is in
-  flight no longer leaves a live credential: the token endpoint re-checks
+- A grant revoked while a code exchange, refresh, token exchange, or
+  device_code or CIBA poll is in flight no longer leaves a live credential: the token endpoint re-checks
   the grant after persisting and revokes what it just issued. Grant
   revocation now records this under every access-token revocation strategy.
 

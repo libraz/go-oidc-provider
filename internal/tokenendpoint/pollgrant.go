@@ -128,6 +128,18 @@ type preparedPolledResponse struct {
 	discardOnClean bool
 }
 
+// issuedUnder names the prepared credentials for the grant-closure check.
+// issuedAt is the redeemed record's IssuedAt: a revocation that completed
+// after the authorization started closes the grant to this redemption.
+func (p preparedPolledResponse) issuedUnder(issuedAt time.Time) issuedUnderGrant {
+	return issuedUnderGrant{
+		GrantID:      p.grantID,
+		IssuedAt:     issuedAt,
+		AccessToken:  p.response.AccessToken,
+		RefreshToken: p.response.RefreshToken,
+	}
+}
+
 func (p preparedPolledResponse) cleanup(ctx context.Context, deps Deps) {
 	cleanupPreparedCredentials(ctx, deps, p.response.AccessToken, p.response.RefreshToken, p.opaque)
 	if p.discardOnClean {
