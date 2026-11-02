@@ -226,6 +226,8 @@ func (n nameMap) checkCollisions() error {
 	seen := make(map[string]string, len(names))
 	for i, name := range names {
 		label := logicalKeyAt(i)
+		// SQLite and unquoted PostgreSQL identifiers compare case-insensitively.
+		name = strings.ToLower(name)
 		if prior, ok := seen[name]; ok {
 			return fmt.Errorf(
 				"oidcsql: WithNaming collision: logical tables %q and %q both resolve to physical name %q",
@@ -335,7 +337,7 @@ var knownNamingKeys = []string{
 // [regexp.Regexp.ReplaceAllStringFunc]. Matching the exact names — not
 // whole identifier tokens — is required because the DDL embeds a table
 // name inside its secondary-index names (e.g.
-// "idx_oidc_access_tokens_expires_at"), and those occurrences must be
+// "idx_oidc_access_tokens_expires"), and those occurrences must be
 // rewritten alongside the CREATE TABLE statement so the schema stays
 // internally consistent. A sequence of independent strings.ReplaceAll
 // calls is unsafe here: if one override's resolved value contains

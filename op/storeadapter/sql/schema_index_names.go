@@ -7,7 +7,7 @@ import (
 )
 
 var (
-	createIndexNameRE = regexp.MustCompile(`(?i)CREATE (?:UNIQUE )?INDEX (?:IF NOT EXISTS )?(\w+) ON (\w+)`)
+	createIndexNameRE = regexp.MustCompile(`(?i)CREATE (?:UNIQUE )?INDEX (?:IF NOT EXISTS )?(\w+)\s+ON\s+(\w+)`)
 	inlineIndexNameRE = regexp.MustCompile(`(?im)^\s*(?:UNIQUE )?(?:INDEX|KEY) (\w+)\s*\(`)
 )
 

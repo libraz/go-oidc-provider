@@ -68,8 +68,9 @@ there are no down files.
 
 On PostgreSQL in a schema other than `public`, the adapter resolves tables
 through the connection's `search_path`, so set `search_path` on the DSN or
-connection. The schema check locates each table the way an unqualified
-statement does, in the first `search_path` schema that holds it, and a missing
+connection. The schema check locates each table in the first
+`search_path` schema that holds an ordinary or partitioned table of that name
+(views are not considered), and a missing
 table is reported with the schemas it looked in (on MySQL, the database name).
 Table names passed to `WithNaming`, and the prefix passed to `WithTablePrefix`,
 are plain identifiers, never schema-qualified.

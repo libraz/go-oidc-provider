@@ -54,9 +54,11 @@ func WithClock(c Clock) Option {
 // default is "oidc_", producing names like "oidc_authorization_codes"; the
 // empty prefix produces "authorization_codes". A deployment that shares a
 // database with its application, or runs several OPs in one schema, gives
-// each its own prefix. The prefix reaches the queries, [Store.Schema],
-// [Store.Migrations], [Store.Migrate], the schema checks and [Store.GC]
-// alike, and the DDL's index names follow the table names. [WithNaming]
+// each its own prefix; an empty or generic prefix there collides with the
+// application's own tables (users, sessions, clients). The prefix reaches
+// the queries, [Store.Schema], [Store.Migrations], [Store.Migrate], the
+// schema checks and [Store.GC] alike, and the DDL's index names follow the
+// table names. [WithNaming]
 // entries still override individual tables outright, prefix or not.
 //
 // The prefix is validated like a [WithNaming] value (ASCII letters, digits
@@ -268,7 +270,17 @@ func (s *Store) Schema() string {
 // IF NOT EXISTS deliberately does not alter an existing table; this check
 // therefore makes a forgotten explicit ALTER fail at startup rather than
 // surfacing as a less actionable query error later.
+//
+// Before executing any statement, Migrate checks every adapter table that
+// already exists for the columns the adapter requires and refuses, having
+// changed nothing, when one lacks them: the name is then another
+// application's table (an empty or generic [WithTablePrefix], a [WithNaming]
+// value), or a table from an older release, whose migrations must be applied
+// first because Migrate cannot add columns.
 func (s *Store) Migrate(ctx context.Context) error {
+	if err := s.checkExistingTablesBeforeDDL(ctx); err != nil {
+		return err
+	}
 	stmts := splitStatements(s.Schema())
 	for _, stmt := range stmts {
 		if stmt == "" {
@@ -279,6 +291,29 @@ func (s *Store) Migrate(ctx context.Context) error {
 		}
 	}
 	return s.ValidateSchema(ctx)
+}
+
+// checkExistingTablesBeforeDDL fails when an existing adapter table lacks
+// required columns, so Migrate never runs its CREATE INDEX statements against
+// a table that is not the adapter's.
+func (s *Store) checkExistingTablesBeforeDDL(ctx context.Context) error {
+	required := ddlColumns(s.dialect)
+	var gap releaseGap
+	for _, key := range knownNamingKeys {
+		table := s.names.byKey(key)
+		cols, err := s.columnSet(ctx, table)
+		if err != nil {
+			return err
+		}
+		if len(cols) == 0 {
+			continue
+		}
+		if err := s.checkColumns(key, table, cols, required[key], &gap); err != nil {
+			return fmt.Errorf("oidcsql: Migrate changed nothing: table %s exists but is not the adapter's table, "+
+				"or is from an older release whose migrations must be applied first (Migrate cannot add columns): %w", table, err)
+		}
+	}
+	return nil
 }
 
 // ValidateSchema checks every table the adapter owns, whether or not the

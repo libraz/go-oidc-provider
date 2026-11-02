@@ -114,3 +114,28 @@ func TestWithTablePrefix_RejectsInvalid(t *testing.T) {
 		}
 	}
 }
+
+// Migrate must refuse before executing any statement when a name the adapter
+// would use is an application table, leaving that table and its indexes alone.
+func TestMigrate_RefusesForeignTableWithoutChangingIt(t *testing.T) {
+	t.Parallel()
+
+	db := openMigrationSQLite(t)
+	ctx := t.Context()
+	execAll(t, db, "CREATE TABLE users (id INTEGER PRIMARY KEY, email TEXT)")
+	s, err := New(db, SQLite(), WithTablePrefix(""))
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	err = s.Migrate(ctx)
+	if err == nil || !strings.Contains(err.Error(), "users") || !strings.Contains(err.Error(), "not the adapter's table") {
+		t.Fatalf("Migrate error = %v, want it to name users and say it is not the adapter's table", err)
+	}
+	var n int
+	if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM sqlite_master WHERE name <> 'users'`).Scan(&n); err != nil {
+		t.Fatalf("count schema objects: %v", err)
+	}
+	if n != 0 {
+		t.Errorf("Migrate created %d object(s) before refusing", n)
+	}
+}

@@ -150,6 +150,20 @@ func TestApplyOverrides_CollisionBetweenTwoOverridesRejected(t *testing.T) {
 	}
 }
 
+// Table names compare case-insensitively on SQLite and unquoted PostgreSQL,
+// so names differing only in case collide.
+func TestApplyOverrides_CaseOnlyDifferenceCollides(t *testing.T) {
+	t.Parallel()
+	n := defaultNames()
+	err := n.applyOverrides(map[string]string{
+		"clients": "Partner",
+		"grants":  "partner",
+	})
+	if err == nil {
+		t.Fatal("want collision error, got nil")
+	}
+}
+
 // TestApplyOverrides_CollisionWithUnoverriddenDefaultRejected proves
 // the collision check also fires when only one side of the clash was
 // explicitly overridden — the other logical table kept its default

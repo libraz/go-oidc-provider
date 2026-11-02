@@ -12,9 +12,10 @@ import (
 )
 
 var (
-	createIndexRE = regexp.MustCompile(`(?i)CREATE (?:UNIQUE )?INDEX (?:IF NOT EXISTS )?\w+ ON (\w+)\s*\(\s*(\w+)`)
-	inlineIndexRE = regexp.MustCompile(`(?i)^\s*(?:UNIQUE )?(?:INDEX|KEY) \w+ \(\s*(\w+)`)
+	createIndexRE = regexp.MustCompile(`(?i)CREATE (?:UNIQUE )?INDEX (?:IF NOT EXISTS )?\w+\s+ON\s+(\w+)\s*\(\s*(\w+)`)
+	inlineIndexRE = regexp.MustCompile(`(?i)^\s*(?:UNIQUE )?(?:INDEX|KEY) \w+\s*\(\s*(\w+)`)
 	tablePKRE     = regexp.MustCompile(`(?i)^\s*PRIMARY KEY\s*\(\s*(\w+)`)
+	columnUniqRE  = regexp.MustCompile(`(?i)^\s*(\w+)\s+[^-]*\bUNIQUE\b`)
 )
 
 // parseDDLIndexColumns maps each table to the set of columns that lead an
@@ -53,7 +54,7 @@ func parseDDLIndexColumns(schema []byte) map[string]map[string]bool {
 
 // ddlLineIndexLead returns the column a CREATE TABLE body line leads an
 // index with (an inline INDEX/KEY, a PRIMARY KEY constraint, or a column
-// declared PRIMARY KEY), or "" for any other line.
+// declared PRIMARY KEY or UNIQUE), or "" for any other line.
 func ddlLineIndexLead(line string) string {
 	trimmed := strings.TrimSpace(line)
 	if trimmed == "" || strings.HasPrefix(trimmed, "--") {
@@ -67,6 +68,9 @@ func ddlLineIndexLead(line string) string {
 	}
 	if strings.Contains(strings.ToUpper(line), "PRIMARY KEY") {
 		return strings.Fields(trimmed)[0]
+	}
+	if m := columnUniqRE.FindStringSubmatch(line); m != nil && !strings.EqualFold(m[1], "UNIQUE") {
+		return m[1]
 	}
 	return ""
 }

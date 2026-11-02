@@ -30,25 +30,21 @@ var testdataFS embed.FS
 // check. It is deliberately name-based — an index no migration names cannot
 // reach an existing database, whatever the surrounding SQL does.
 
-var (
-	// standaloneIndexRE matches the SQLite / PostgreSQL spelling. The
-	// whitespace before ON is \s+ rather than a literal space because
-	// v1.sql writes the statement on one line while some migrations wrap
-	// the target table onto the next — the same statement either way.
-	standaloneIndexRE = regexp.MustCompile(`(?i)CREATE (?:UNIQUE )?INDEX (?:IF NOT EXISTS )?(\w+)\s+ON\s`)
-	// alterAddIndexRE matches the MySQL migration form.
-	alterAddIndexRE = regexp.MustCompile(`(?i)ADD (?:UNIQUE )?INDEX (\w+) *\(`)
-)
+// alterAddIndexRE matches the MySQL migration form.
+var alterAddIndexRE = regexp.MustCompile(`(?i)ADD (?:UNIQUE )?INDEX (\w+) *\(`)
 
-// declaredIndexNames returns every index name the DDL names, across the two
-// spellings the dialects use. Names are unique across the schema, so a set of
-// names is enough to compare a shipped schema against its migrations.
+// declaredIndexNames returns every index name the DDL names, across the
+// spellings the dialects use: the production parser for CREATE INDEX and
+// inline INDEX/KEY clauses, plus MySQL's ALTER TABLE ... ADD INDEX. Names are
+// unique across the schema, so a set of names is enough to compare a shipped
+// schema against its migrations.
 func declaredIndexNames(ddl []byte) map[string]bool {
 	out := map[string]bool{}
-	for _, re := range []*regexp.Regexp{standaloneIndexRE, inlineIndexNameRE, alterAddIndexRE} {
-		for _, m := range re.FindAllStringSubmatch(string(ddl), -1) {
-			out[m[1]] = true
-		}
+	for _, idx := range parseDDLIndexNames(string(ddl)) {
+		out[idx.name] = true
+	}
+	for _, m := range alterAddIndexRE.FindAllStringSubmatch(string(ddl), -1) {
+		out[m[1]] = true
 	}
 	return out
 }
@@ -219,5 +215,24 @@ ALTER TABLE t_inline ADD INDEX idx_altered_expires (expires_at);
 		if got[absent] {
 			t.Errorf("%q reported as an index name; it is a table or column", absent)
 		}
+	}
+}
+
+// A migration may wrap ON onto the next line; the production parser must see
+// the statement as it does for the single-line form.
+func TestParseDDLIndexNames_ReadsWrappedStatements(t *testing.T) {
+	t.Parallel()
+
+	got := parseDDLIndexNames("CREATE INDEX IF NOT EXISTS idx_wrapped\n    ON t_wrapped (a);\n" +
+		"CREATE TABLE t_inline (\n    a INT,\n    INDEX idx_spaced   (a)\n);\n")
+	want := map[string]string{"idx_wrapped": "t_wrapped", "idx_spaced": "t_inline"}
+	for _, idx := range got {
+		if want[idx.name] != idx.table {
+			t.Errorf("index %s reported on %s", idx.name, idx.table)
+		}
+		delete(want, idx.name)
+	}
+	if len(want) > 0 {
+		t.Errorf("indexes not reported: %v", want)
 	}
 }

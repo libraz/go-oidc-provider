@@ -84,6 +84,12 @@ CREATE TABLE IF NOT EXISTS t_bare (
     expires_at BIGINT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS t_unique (
+    id TEXT PRIMARY KEY,
+    token TEXT NOT NULL UNIQUE, -- inline unique
+    other TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS t_composite (
     -- PRIMARY KEY in a comment names no column
     owner TEXT NOT NULL,
@@ -99,6 +105,7 @@ CREATE TABLE IF NOT EXISTS t_composite (
 		{"t_standalone", "id"},
 		{"t_standalone", "expires_at"},
 		{"t_bare", "id"},
+		{"t_unique", "token"},
 	} {
 		if !got[want.table][want.column] {
 			t.Errorf("%s(%s) not reported as indexed", want.table, want.column)
@@ -108,6 +115,7 @@ CREATE TABLE IF NOT EXISTS t_composite (
 		{"t_inline", "unswept"},
 		{"t_standalone", "unswept"},
 		{"t_bare", "expires_at"},
+		{"t_unique", "other"},
 		{"t_composite", "slot"},
 		{"t_composite", "--"},
 		{"t_composite", "PRIMARY"},
