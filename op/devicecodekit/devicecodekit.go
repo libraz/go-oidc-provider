@@ -576,9 +576,17 @@ func pendingRecord(rec *store.DeviceCode, lookupErr error) (*store.DeviceCode, e
 
 // VerifyUserCodeByUserCode is the user_code-keyed variant of
 // [VerifyUserCode]. It lets a verification page identify the pending
-// record by a normalised user_code (for example one carried in a
-// session-bound browser flow or QR-code URL) without ever receiving the
-// polling bearer device_code.
+// record by a normalised user_code without ever receiving the polling
+// bearer device_code.
+//
+// recordUserCode MUST come from server-side, session-bound state (for
+// example a record the page already resolved for this browser session),
+// never from a request-controlled value such as a URL query or form
+// field. The per-record strike budget only bounds guesses made against a
+// record the caller already chose; a request that supplies both the
+// locator and the submitted code is not brute-force bounded. First-entry
+// and URL-supplied codes (verification_uri_complete) go through
+// [VerifyUserCodeByAttemptKey].
 func VerifyUserCodeByUserCode(ctx context.Context, deps *Deps, recordUserCode, submittedUserCode string) (matched bool, err error) {
 	if deps == nil || nilcheck.IsNil(deps.DeviceCodes) {
 		return false, ErrInvalidArgument

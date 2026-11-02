@@ -197,12 +197,13 @@ func (set ScopeSet) String() string {
 	return strings.Join(tokens, " ")
 }
 
-// Claims is the map of claim name to claim value released to a relying
-// party. Values are JSON-encoded as-is; callers SHOULD use the standard
-// claim types (string, bool, int64, time.Time, []string, map[string]any).
+// Claims is a map of claim name to claim value. The claims the OP releases
+// to a relying party come from store.User.Claims, not from this type.
+// Values are JSON-encoded as-is; use JSON-native types (string, bool,
+// numbers, []string, map[string]any). A claim the OP types as a number, such
+// as updated_at, must be a number, not a time.Time.
 //
-// The library treats the map as read-only after it leaves the
-// [interaction.Driver]; backends MUST NOT mutate it.
+// The library treats the map as read-only; backends MUST NOT mutate it.
 type Claims map[string]any
 
 // Get returns the value stored under name and a flag indicating presence.

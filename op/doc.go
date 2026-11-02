@@ -44,7 +44,8 @@
 //
 // [New] returns a [*Provider], which serves as the [http.Handler] above and
 // carries the one lifecycle seam the library has: [Provider.Shutdown] waits
-// for back-channel logout deliveries that are still in flight. /end_session
+// for back-channel logout deliveries that are still in flight and, under
+// [WithSharedSignals], stops the background SSF push worker. /end_session
 // answers the user without waiting for the relying parties to be notified, so
 // a process that exits the moment its listener closes can drop signed Logout
 // Tokens that were already queued. Stop accepting requests first, then drain:

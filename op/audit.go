@@ -650,15 +650,16 @@ const (
 	// Stable since v1.5.
 	AuditSSFPushRejected = AuditEvent(auditevent.AuditSSFPushRejected)
 
-	// AuditSSFPushRetried fires when a push fails transiently (5xx, 429,
-	// network) and the SET is rescheduled.
+	// AuditSSFPushRetried fires when a push does not end in 202 or 400 (any
+	// other status, or a transport failure) and the SET is rescheduled.
 	//
 	// Stable since v1.5.
 	AuditSSFPushRetried = AuditEvent(auditevent.AuditSSFPushRetried)
 
 	// AuditSSFPushAbandoned fires when a SET is dropped after its last
-	// retry, or when its stream's authorization header can no longer be
-	// unsealed (Extras["reason"] = "seal").
+	// retry, when its stream's authorization header can no longer be
+	// unsealed (Extras["reason"] = "seal"), or when its claims cannot be
+	// signed (Extras["reason"] = "claims").
 	//
 	// Stable since v1.5.
 	AuditSSFPushAbandoned = AuditEvent(auditevent.AuditSSFPushAbandoned)

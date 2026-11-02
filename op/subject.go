@@ -27,14 +27,14 @@ type SubjectGenerator = subject.Generator
 // [github.com/libraz/go-oidc-provider/op/subject.GeneratorInput].
 type SubjectGeneratorInput = subject.GeneratorInput
 
-// Identity is the bundle of subject-scoped facts the library needs
-// to issue tokens and render UserInfo: the canonical [Subject], the
-// authentication context the user satisfied, and the claim values
-// keyed by claim name.
+// Identity is the view of an authenticated subject that login-flow rule
+// predicates and the ACR resolver evaluate: the canonical [Subject], the
+// authentication context the user satisfied, and claim values keyed by
+// claim name.
 //
-// Identity is constructed by the user's [interaction.Driver] after a
-// successful authentication and consumed by the token endpoint and
-// the /userinfo endpoint. It is never stored by the library.
+// Claims released to a relying party (ID token, /userinfo) do not come from
+// Identity; they come from store.User.Claims as returned by
+// store.UserStore.FindBySubject. Identity is never stored by the library.
 type Identity struct {
 	// Subject is the OP-internal "sub" value. It MUST be non-empty.
 	Subject Subject
@@ -44,8 +44,8 @@ type Identity struct {
 	// tokens.
 	AuthenticationContext AuthContext
 
-	// Claims is the map of claim name to claim value. The map MAY be
-	// nil; only requested claims are released to a given client.
+	// Claims is the map of claim name to claim value the rule predicates
+	// see. The map MAY be nil. It is not a release source.
 	Claims Claims
 }
 

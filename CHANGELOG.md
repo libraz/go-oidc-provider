@@ -267,8 +267,8 @@ issuer.
 
 - SQL deployments must add two columns to `oidc_clients`,
   `previous_secret_hash` and `previous_secret_expires_at`, before upgrading;
-  the statements per dialect are in the v1.5.0 section of
-  `op/storeadapter/sql/schema/MIGRATIONS.md`.
+  the statements per dialect are in `000006_v1.5.0.up.sql` under
+  `op/storeadapter/sql/schema/migrations/`.
   `ValidateSchema` reports both as missing until they exist. A bring-your-own
   `store.ClientStore` that does not persist the new `store.Client` fields keeps
   working; it only cannot honour a previous secret.
@@ -635,8 +635,8 @@ issuer.
 
 - `oidcsql.Store.ValidateSchema` checks that the database schema matches
   what the adapter expects, without migrating. One error lists every missing
-  table and column, and a missing column's line names the `MIGRATIONS.md`
-  section that adds it.
+  table and column, and a missing column's line names the migration file that
+  adds it.
 
 - `oidcsql.Store.RunGC` sweeps at startup and then on an interval until its
   context ends, reporting each sweep's `GCStats` to a callback. It blocks on
@@ -644,13 +644,13 @@ issuer.
 
 - `op/storeadapter/sql/schema/TABLES.md` lists every adapter table with its
   `WithNaming` key, what it holds, the option or login step that makes the OP
-  use it, and its columns, generated from the adapter source. Every table must
-  exist; one whose feature is not configured stays empty, including
-  `oidc_users` when users come from your own `store.UserStore`.
+  use it, and its columns, generated from the adapter source. `op.New` checks
+  only the tables the configuration uses, so `oidc_users` is not needed when
+  users come from your own `store.UserStore`.
 
-- `op/storeadapter/sql/schema/MIGRATIONS.md` is split into one section per
-  release that changed the schema. An existing database applies every section
-  after the release that created it, in order.
+- `op/storeadapter/sql/schema/MIGRATIONS.md` describes how to apply the
+  per-release files in `schema/migrations/<dialect>/`. An existing database
+  takes every file after the release that created it, in order.
 
 - `store.SessionDurabilityReporter`, an optional interface a session store
   implements to report whether its sessions survive a restart.

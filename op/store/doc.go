@@ -40,7 +40,8 @@
 //	-------------------------  ---------------------  --------------------------------
 //	Transactional              Store                  a grant mounts /authorize
 //	InteractionStoreCAS        Store.Interactions()   a grant mounts /authorize
-//	GrantClientLister          Store.Grants()         a grant mounts /authorize
+//	GrantClientLister          Store.Grants()         a grant mounts /authorize, or
+//	                                                  op.WithSharedSignals
 //	RefreshRetryResponseStore  Store.RefreshTokens()  grant.RefreshToken is enabled
 //	                                                  and cookie keys are configured
 //	ClientRegistry             Store                  op.WithDynamicRegistration
