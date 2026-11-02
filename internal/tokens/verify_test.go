@@ -15,6 +15,7 @@ import (
 	josev4 "github.com/go-jose/go-jose/v4"
 	"github.com/go-jose/go-jose/v4/jwt"
 
+	"github.com/libraz/go-oidc-provider/internal/jose"
 	"github.com/libraz/go-oidc-provider/internal/keys"
 	"github.com/libraz/go-oidc-provider/internal/tokens"
 )
@@ -924,5 +925,64 @@ func TestVerify_NilClockUsesSystemClock(t *testing.T) {
 	v := &tokens.AccessTokenVerifier{Keys: set, Issuer: "https://op.example.com"}
 	if _, _, err := v.Verify(context.Background(), jws); err != nil {
 		t.Fatalf("Verify with nil Clock: %v", err)
+	}
+}
+
+// TestVerifyAccessToken_RejectsHeaderAlgMismatch pins that the header alg
+// is bound to the key entry: a JWS the RSA key signed under PS256 verifies
+// cryptographically but names an alg the key is not used with.
+func TestVerifyAccessToken_RejectsHeaderAlgMismatch(t *testing.T) {
+	t.Parallel()
+
+	entry, err := keys.GenerateRS256("rsa-kid")
+	if err != nil {
+		t.Fatalf("GenerateRS256: %v", err)
+	}
+	set, err := keys.NewSet([]keys.Entry{entry}, keys.WithSigningAlg(jose.AlgRS256))
+	if err != nil {
+		t.Fatalf("NewSet: %v", err)
+	}
+	now := time.Date(2026, 4, 26, 12, 0, 0, 0, time.UTC)
+	claims := tokens.AccessTokenClaims{
+		Issuer:    "https://op.example.com",
+		Subject:   "user-1",
+		Audience:  []string{"client-1"},
+		ClientID:  "client-1",
+		IssuedAt:  now.Unix(),
+		ExpiresAt: now.Add(time.Hour).Unix(),
+		JTI:       "at-alg",
+	}
+	v := &tokens.AccessTokenVerifier{
+		Keys:   set,
+		Issuer: "https://op.example.com",
+		Clock:  fakeClock{now: now},
+	}
+
+	// Control: the OP's own RS256 token verifies under the same set.
+	if _, _, err := v.Verify(context.Background(), signed(t, entry, claims)); err != nil {
+		t.Fatalf("RS256 control: %v", err)
+	}
+
+	signer, err := josev4.NewSigner(
+		josev4.SigningKey{Algorithm: josev4.PS256, Key: entry.Signer},
+		(&josev4.SignerOptions{}).WithHeader("kid", entry.KeyID).WithType("at+jwt"),
+	)
+	if err != nil {
+		t.Fatalf("NewSigner: %v", err)
+	}
+	ps256, err := jwt.Signed(signer).Claims(map[string]any{
+		"iss":       claims.Issuer,
+		"sub":       claims.Subject,
+		"aud":       claims.Audience[0],
+		"client_id": claims.ClientID,
+		"iat":       claims.IssuedAt,
+		"exp":       claims.ExpiresAt,
+		"jti":       claims.JTI,
+	}).Serialize()
+	if err != nil {
+		t.Fatalf("Serialize: %v", err)
+	}
+	if _, _, err := v.Verify(context.Background(), ps256); !errors.Is(err, tokens.ErrAccessTokenSignature) {
+		t.Fatalf("PS256 header: err=%v want ErrAccessTokenSignature", err)
 	}
 }

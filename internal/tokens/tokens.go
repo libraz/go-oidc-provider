@@ -13,9 +13,10 @@
 //
 // # Algorithm policy
 //
-// The OP signs with ES256 and only ES256 (RFC 7518 §3.4). The package routes through
-// internal/jose / internal/keys so the algorithm allow-list and key
-// shape are enforced in one place; supplying a non-ECDSA key fails fast.
+// The OP signs with one alg, ES256 (the default) or RS256. [ResolveAlg]
+// derives the alg from the key shape or checks a stated one against it,
+// so a key can only ever sign with the single alg it is bound to; any
+// other key shape or alg fails fast.
 //
 // # Hash claims
 //
@@ -50,13 +51,12 @@ type SigningKey struct {
 	// KeyID becomes the "kid" header on every emitted JWS.
 	KeyID string
 
-	// Signer is the private key. v1.0 requires ECDSA P-256.
+	// Signer is the private key: ECDSA P-256 or RSA of at least 2048 bits.
 	Signer crypto.Signer
 
-	// Alg is the JWS signing algorithm advertised on every emitted JWS and
-	// used to select the matching SHA digest for [HashForAlg]. Empty
-	// defaults to "ES256" (the single-alg policy), so callers
-	// that build a SigningKey directly stay correct.
+	// Alg is the JWS alg stamped on every emitted JWS and used to select
+	// the digest for [HashForAlg]. Empty derives it from the key shape;
+	// a non-empty value must match the key shape. See [ResolveAlg].
 	Alg string
 }
 
@@ -196,7 +196,7 @@ func Confirmation(jkt, x5tS256 string) map[string]string {
 // cross-token confusion attacks (RFC 9068 §5).
 const accessTokenTypeHeader = "at+jwt"
 
-// SignIDToken serialises claims as an ES256-signed compact JWS. The
+// SignIDToken serialises claims as a compact JWS signed per [ResolveAlg]. The
 // "kid" header is set to key.KeyID; the "typ" header is "JWT" so RP
 // libraries that strict-check the type do not reject the token. The
 // expiry is encoded as an integer Unix timestamp.
@@ -224,7 +224,7 @@ func SignIDToken(key SigningKey, claims IDTokenClaims) (string, error) {
 	return serializeJWT(signer, merged)
 }
 
-// SignAccessToken serialises claims as an ES256-signed compact JWS. It
+// SignAccessToken serialises claims as a compact JWS signed per [ResolveAlg]. It
 // follows the same invariants as [SignIDToken]; "scope" is encoded as
 // the canonical space-delimited string per RFC 6749 §3.3. The "typ"
 // header is fixed to "at+jwt" per RFC 9068 §2.1: a resource server
@@ -518,10 +518,11 @@ func joinScope(scopes []string) string {
 // returned interface is intentional: josev4.Signer is the third-party
 // package's contract for stateful JWS signing.
 func NewSigner(key SigningKey, typ string) (josev4.Signer, error) {
-	alg := josev4.SignatureAlgorithm(key.Alg)
-	if alg == "" {
-		alg = josev4.ES256
+	resolved, err := ResolveAlg(key)
+	if err != nil {
+		return nil, err
 	}
+	alg := josev4.SignatureAlgorithm(resolved)
 	sk := josev4.SigningKey{
 		Algorithm: alg,
 		Key: josev4.JSONWebKey{
@@ -549,10 +550,39 @@ func serializeJWT(signer josev4.Signer, claims map[string]any) (string, error) {
 	return out, nil
 }
 
+// ErrSigningAlg is returned by [ResolveAlg] when the key shape or the
+// stated alg is not one the OP issues with.
+var ErrSigningAlg = errors.New("tokens: signing key is not an ES256 or RS256 key")
+
+// ResolveAlg returns the JWS alg key signs with. An empty key.Alg is
+// derived from the key shape; a non-empty one must match it. Either way
+// the result is ES256 or RS256: [jose.AssertAlgKeyShape] admits PS256
+// for an RSA key, so the closed set is checked explicitly.
+func ResolveAlg(key SigningKey) (string, error) {
+	if key.Signer == nil {
+		return "", ErrSignerInvalid
+	}
+	pub := key.Signer.Public()
+	alg := key.Alg
+	if alg == "" {
+		shape, _, _, ok := jose.KeyShape(pub)
+		if !ok {
+			return "", fmt.Errorf("%w: %w", ErrSigningAlg, jose.ErrUnsupportedKeyShape)
+		}
+		alg = shape
+	} else if err := jose.AssertAlgKeyShape(alg, pub); err != nil {
+		return "", fmt.Errorf("%w: %w", ErrSigningAlg, err)
+	}
+	if alg != string(jose.AlgES256) && alg != string(jose.AlgRS256) {
+		return "", fmt.Errorf("%w: alg %q", ErrSigningAlg, alg)
+	}
+	return alg, nil
+}
+
 // FromInternalEntry translates a [keys.Entry] into this package's local
 // [SigningKey].
 func FromInternalEntry(e keys.Entry) SigningKey {
-	return SigningKey{KeyID: e.KeyID, Signer: e.Signer, Alg: string(josev4.ES256)}
+	return SigningKey{KeyID: e.KeyID, Signer: e.Signer, Alg: e.Alg}
 }
 
 // TimeFromUnix converts a Unix-second claim to a UTC time; zero means the

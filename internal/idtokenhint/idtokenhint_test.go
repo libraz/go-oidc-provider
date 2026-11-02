@@ -11,6 +11,7 @@ import (
 
 	"github.com/libraz/go-oidc-provider/internal/backchannel"
 	"github.com/libraz/go-oidc-provider/internal/idtokenhint"
+	"github.com/libraz/go-oidc-provider/internal/jose"
 	"github.com/libraz/go-oidc-provider/internal/keys"
 	"github.com/libraz/go-oidc-provider/internal/tokens"
 )
@@ -506,6 +507,60 @@ func TestVerify_RejectsOtherOPTypedTokens(t *testing.T) {
 		) {
 			t.Errorf("%s: err=%v want %v", name, err, idtokenhint.ErrMalformed)
 		}
+	}
+}
+
+// TestIDTokenHint_RejectsHeaderAlgMismatch pins that the header alg is
+// bound to the key entry: a hint the OP's RSA key signed under PS256
+// verifies cryptographically but names an alg the key is not used with.
+func TestIDTokenHint_RejectsHeaderAlgMismatch(t *testing.T) {
+	t.Parallel()
+	entry, err := keys.GenerateRS256(hintKID)
+	if err != nil {
+		t.Fatalf("keys.GenerateRS256: %v", err)
+	}
+	set, err := keys.NewSet([]keys.Entry{entry}, keys.WithSigningAlg(jose.AlgRS256))
+	if err != nil {
+		t.Fatalf("keys.NewSet: %v", err)
+	}
+
+	// Control: the OP's own RS256 hint verifies under the same set.
+	if _, err := idtokenhint.Verify(context.Background(), set, hintIssuer, signHint(t, entry, baseHintClaims())); err != nil {
+		t.Fatalf("RS256 control: %v", err)
+	}
+
+	payload, err := json.Marshal(baseHintClaims())
+	if err != nil {
+		t.Fatalf("marshal payload: %v", err)
+	}
+	signer, err := josev4.NewSigner(
+		josev4.SigningKey{
+			Algorithm: josev4.PS256,
+			Key: josev4.JSONWebKey{
+				Key:       entry.Signer,
+				KeyID:     hintKID,
+				Algorithm: string(josev4.PS256),
+				Use:       "sig",
+			},
+		},
+		(&josev4.SignerOptions{}).WithType("JWT"),
+	)
+	if err != nil {
+		t.Fatalf("josev4.NewSigner: %v", err)
+	}
+	obj, err := signer.Sign(payload)
+	if err != nil {
+		t.Fatalf("sign payload: %v", err)
+	}
+	raw, err := obj.CompactSerialize()
+	if err != nil {
+		t.Fatalf("CompactSerialize: %v", err)
+	}
+
+	if _, err := idtokenhint.Verify(context.Background(), set, hintIssuer, raw); !errors.Is(
+		err, idtokenhint.ErrSignature,
+	) {
+		t.Fatalf("err=%v want %v", err, idtokenhint.ErrSignature)
 	}
 }
 

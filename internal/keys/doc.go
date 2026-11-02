@@ -1,6 +1,7 @@
 // Package keys owns the OP signing material at runtime. It accepts the
 // caller-supplied [SigningKey] entries from op.Keyset, validates the
-// alg policy (ES256-only, permanently), and exposes:
+// alg policy (one issuing alg per OP, ES256 or RS256; each key bound to
+// the single alg its shape implies), and exposes:
 //
 //   - the active signer used to mint ID tokens, access JWTs, and DPoP
 //     attestations

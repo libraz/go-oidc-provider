@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/libraz/go-oidc-provider/internal/jose"
 	"github.com/libraz/go-oidc-provider/internal/keys"
 )
 
@@ -82,7 +83,8 @@ func TestNewSet_RejectsBadShape(t *testing.T) {
 	}{
 		{"empty kid", keys.Entry{KeyID: "", Signer: priv}},
 		{"nil signer", keys.Entry{KeyID: "x", Signer: nil}},
-		{"non-p256", keys.Entry{KeyID: "x", Signer: rsaPriv}},
+		// The default signing alg is ES256, so an RSA active key does not match it.
+		{"rsa active under ES256", keys.Entry{KeyID: "x", Signer: rsaPriv}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -92,6 +94,159 @@ func TestNewSet_RejectsBadShape(t *testing.T) {
 				t.Errorf("err=%v want ErrInvalidKey", err)
 			}
 		})
+	}
+}
+
+func mustRSAEntry(tb testing.TB, kid string) keys.Entry {
+	tb.Helper()
+	e, err := keys.GenerateRS256(kid)
+	if err != nil {
+		tb.Fatalf("GenerateRS256: %v", err)
+	}
+	return e
+}
+
+func TestNewSet_RS256ActiveAccepted(t *testing.T) {
+	t.Parallel()
+
+	rsaEntry := mustRSAEntry(t, "rsa-1")
+	set, err := keys.NewSet([]keys.Entry{rsaEntry}, keys.WithSigningAlg(jose.AlgRS256))
+	if err != nil {
+		t.Fatalf("NewSet: %v", err)
+	}
+	if got := set.Active().Alg; got != "RS256" {
+		t.Errorf("Active().Alg=%q want RS256", got)
+	}
+	if got := set.JWKS().Keys[0].Algorithm; got != "RS256" {
+		t.Errorf("JWKS alg=%q want RS256", got)
+	}
+
+	// A P-256 active key does not match an RS256 OP.
+	_, err = keys.NewSet(
+		[]keys.Entry{{KeyID: "ec-1", Signer: mustECDSAKey(t)}},
+		keys.WithSigningAlg(jose.AlgRS256),
+	)
+	if !errors.Is(err, keys.ErrInvalidKey) {
+		t.Errorf("P-256 active under RS256: err=%v want ErrInvalidKey", err)
+	}
+}
+
+func TestNewSet_InactiveOtherTypeAccepted(t *testing.T) {
+	t.Parallel()
+
+	rsaEntry := mustRSAEntry(t, "rsa-1")
+	ecPriv := mustECDSAKey(t)
+	p384, err := ecdsa.GenerateKey(elliptic.P384(), rand.Reader)
+	if err != nil {
+		t.Fatalf("generate P-384: %v", err)
+	}
+
+	cases := []struct {
+		name    string
+		alg     jose.Algorithm
+		entries []keys.Entry
+		wantErr bool
+	}{
+		{
+			name:    "RS256 active, P-256 inactive",
+			alg:     jose.AlgRS256,
+			entries: []keys.Entry{rsaEntry, {KeyID: "ec-old", Signer: ecPriv}},
+		},
+		{
+			name:    "ES256 active, RSA inactive",
+			alg:     jose.AlgES256,
+			entries: []keys.Entry{{KeyID: "ec-1", Signer: ecPriv}, {KeyID: "rsa-old", Signer: rsaEntry.Signer}},
+		},
+		{
+			name:    "RS256 active, P-384 inactive",
+			alg:     jose.AlgRS256,
+			entries: []keys.Entry{rsaEntry, {KeyID: "p384-old", Signer: p384}},
+			wantErr: true,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			set, err := keys.NewSet(tc.entries, keys.WithSigningAlg(tc.alg))
+			if tc.wantErr {
+				if !errors.Is(err, keys.ErrInvalidKey) {
+					t.Fatalf("err=%v want ErrInvalidKey", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("NewSet: %v", err)
+			}
+			if got := set.Active().Alg; got != string(tc.alg) {
+				t.Errorf("Active().Alg=%q want %q", got, tc.alg)
+			}
+			inactive := tc.entries[1]
+			got, ok := set.Find(context.Background(), inactive.KeyID)
+			if !ok {
+				t.Fatalf("Find(%q) ok=false", inactive.KeyID)
+			}
+			wantAlg, _, _, _ := jose.KeyShape(inactive.Signer.Public())
+			if got.Alg != wantAlg {
+				t.Errorf("inactive Alg=%q want %q", got.Alg, wantAlg)
+			}
+			if jwkAlg := set.JWKS().Keys[1].Algorithm; jwkAlg != wantAlg {
+				t.Errorf("inactive JWKS alg=%q want %q", jwkAlg, wantAlg)
+			}
+		})
+	}
+}
+
+func TestNewSet_OverwritesEntryAlgFromKeyShape(t *testing.T) {
+	t.Parallel()
+
+	rsaEntry := mustRSAEntry(t, "rsa-1")
+	rsaEntry.Alg = "PS256"
+	set, err := keys.NewSet([]keys.Entry{rsaEntry}, keys.WithSigningAlg(jose.AlgRS256))
+	if err != nil {
+		t.Fatalf("NewSet: %v", err)
+	}
+	if got := set.Active().Alg; got != "RS256" {
+		t.Errorf("Active().Alg=%q want RS256", got)
+	}
+}
+
+func TestGenerate_FillsAlg(t *testing.T) {
+	t.Parallel()
+
+	ec, err := keys.GenerateES256("ec-1")
+	if err != nil {
+		t.Fatalf("GenerateES256: %v", err)
+	}
+	if ec.Alg != "ES256" {
+		t.Errorf("GenerateES256 Alg=%q want ES256", ec.Alg)
+	}
+	rsaEntry := mustRSAEntry(t, "rsa-1")
+	if rsaEntry.Alg != "RS256" {
+		t.Errorf("GenerateRS256 Alg=%q want RS256", rsaEntry.Alg)
+	}
+	pub, ok := rsaEntry.Signer.Public().(*rsa.PublicKey)
+	if !ok {
+		t.Fatalf("GenerateRS256 public key is %T, want *rsa.PublicKey", rsaEntry.Signer.Public())
+	}
+	if bits := pub.N.BitLen(); bits != 2048 {
+		t.Errorf("GenerateRS256 bits=%d want 2048", bits)
+	}
+	if _, err := keys.GenerateRS256(""); !errors.Is(err, keys.ErrInvalidKey) {
+		t.Errorf("GenerateRS256(\"\") err=%v want ErrInvalidKey", err)
+	}
+}
+
+func TestEntry_AcceptsAlg(t *testing.T) {
+	t.Parallel()
+
+	e := keys.Entry{Alg: "RS256"}
+	if !e.AcceptsAlg("RS256") {
+		t.Error("AcceptsAlg(RS256)=false want true")
+	}
+	for _, alg := range []string{"PS256", "ES256", "rs256", ""} {
+		if e.AcceptsAlg(alg) {
+			t.Errorf("AcceptsAlg(%q)=true want false", alg)
+		}
 	}
 }
 

@@ -550,3 +550,93 @@ func TestSignedToken_VerifiesAgainstJWKS(t *testing.T) {
 		t.Fatalf("Verify: %v", err)
 	}
 }
+
+func TestResolveAlg(t *testing.T) {
+	t.Parallel()
+
+	p256, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatalf("generate P-256: %v", err)
+	}
+	p384, err := ecdsa.GenerateKey(elliptic.P384(), rand.Reader)
+	if err != nil {
+		t.Fatalf("generate P-384: %v", err)
+	}
+	rsaEntry, err := keys.GenerateRS256("rsa")
+	if err != nil {
+		t.Fatalf("GenerateRS256: %v", err)
+	}
+	rsaPriv := rsaEntry.Signer
+
+	cases := []struct {
+		name    string
+		key     tokens.SigningKey
+		want    string
+		wantErr bool
+	}{
+		{name: "empty alg, P-256", key: tokens.SigningKey{Signer: p256}, want: "ES256"},
+		{name: "empty alg, RSA", key: tokens.SigningKey{Signer: rsaPriv}, want: "RS256"},
+		{name: "ES256, P-256", key: tokens.SigningKey{Signer: p256, Alg: "ES256"}, want: "ES256"},
+		{name: "RS256, RSA", key: tokens.SigningKey{Signer: rsaPriv, Alg: "RS256"}, want: "RS256"},
+		{name: "PS256, RSA", key: tokens.SigningKey{Signer: rsaPriv, Alg: "PS256"}, wantErr: true},
+		{name: "ES256, RSA", key: tokens.SigningKey{Signer: rsaPriv, Alg: "ES256"}, wantErr: true},
+		{name: "RS256, P-256", key: tokens.SigningKey{Signer: p256, Alg: "RS256"}, wantErr: true},
+		{name: "empty alg, P-384", key: tokens.SigningKey{Signer: p384}, wantErr: true},
+		{name: "ES384, P-384", key: tokens.SigningKey{Signer: p384, Alg: "ES384"}, wantErr: true},
+		{name: "nil signer", key: tokens.SigningKey{}, wantErr: true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			got, err := tokens.ResolveAlg(tc.key)
+			if tc.wantErr {
+				if err == nil {
+					t.Fatalf("ResolveAlg=%q want error", got)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("ResolveAlg: %v", err)
+			}
+			if got != tc.want {
+				t.Errorf("ResolveAlg=%q want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestSignIDToken_RSAKeySignsRS256(t *testing.T) {
+	t.Parallel()
+
+	entry, err := keys.GenerateRS256("rsa-kid")
+	if err != nil {
+		t.Fatalf("GenerateRS256: %v", err)
+	}
+	now := time.Date(2026, 4, 26, 12, 0, 0, 0, time.UTC)
+	claims := tokens.IDTokenClaims{
+		Issuer:    "https://op.example.com",
+		Subject:   "user-1",
+		Audience:  []string{"client-1"},
+		IssuedAt:  now.Unix(),
+		ExpiresAt: now.Add(time.Minute).Unix(),
+	}
+	for name, key := range map[string]tokens.SigningKey{
+		"from entry":      tokens.FromInternalEntry(entry),
+		"alg left empty":  {KeyID: "rsa-kid", Signer: entry.Signer},
+		"PS256 requested": {KeyID: "rsa-kid", Signer: entry.Signer, Alg: "PS256"},
+	} {
+		jws, err := tokens.SignIDToken(key, claims)
+		if name == "PS256 requested" {
+			if err == nil {
+				t.Errorf("%s: SignIDToken succeeded, want error", name)
+			}
+			continue
+		}
+		if err != nil {
+			t.Fatalf("%s: SignIDToken: %v", name, err)
+		}
+		if alg := decodeHeader(t, jws)["alg"]; alg != "RS256" {
+			t.Errorf("%s: alg=%v want RS256", name, alg)
+		}
+	}
+}

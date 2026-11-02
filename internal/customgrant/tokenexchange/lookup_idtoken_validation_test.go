@@ -8,6 +8,10 @@ import (
 	"testing"
 	"time"
 
+	josev4 "github.com/go-jose/go-jose/v4"
+	"github.com/go-jose/go-jose/v4/jwt"
+
+	"github.com/libraz/go-oidc-provider/internal/jose"
 	"github.com/libraz/go-oidc-provider/internal/keys"
 	"github.com/libraz/go-oidc-provider/internal/tokens"
 	"github.com/libraz/go-oidc-provider/op/store"
@@ -187,6 +191,72 @@ func TestLookupIDToken_RejectsCrossTokenConfusionAndInvalidLifetime(t *testing.T
 				t.Errorf("reason=%q want %q", result.reason, tc.wantReason)
 			}
 		})
+	}
+}
+
+// TestLookupIDToken_RejectsHeaderAlgMismatch pins that the header alg is
+// bound to the key entry: an id_token the OP's RSA key signed under PS256
+// verifies cryptographically but names an alg the key is not used with.
+func TestLookupIDToken_RejectsHeaderAlgMismatch(t *testing.T) {
+	t.Parallel()
+
+	entry, err := keys.GenerateRS256("tx-id-token-alg-kid")
+	if err != nil {
+		t.Fatalf("GenerateRS256: %v", err)
+	}
+	keySet, err := keys.NewSet([]keys.Entry{entry}, keys.WithSigningAlg(jose.AlgRS256))
+	if err != nil {
+		t.Fatalf("keys.NewSet: %v", err)
+	}
+	now := time.Unix(1_700_000_000, 0).UTC()
+	h := &Handler{
+		issuer: "https://op.example",
+		keys:   keySet,
+		clock:  fixedClock{now: now},
+		grants: staticGrantStore{grant: &store.Grant{
+			ID: "grant-alg", Subject: "user-123", ClientID: "caller-client", Scope: []string{"openid"},
+		}},
+	}
+	claims := map[string]any{
+		"iss": "https://op.example",
+		"sub": "user-123",
+		"aud": "caller-client",
+		"iat": now.Unix(),
+		"exp": now.Add(time.Hour).Unix(),
+	}
+
+	// Control: the OP's own RS256 id_token is accepted under the same set.
+	rs256, err := tokens.SignIDToken(tokens.FromInternalEntry(entry), tokens.IDTokenClaims{
+		Issuer:    "https://op.example",
+		Subject:   "user-123",
+		Audience:  []string{"caller-client"},
+		IssuedAt:  now.Unix(),
+		ExpiresAt: now.Add(time.Hour).Unix(),
+	})
+	if err != nil {
+		t.Fatalf("SignIDToken: %v", err)
+	}
+	if _, err := h.lookupIDToken(t.Context(), rs256); err != nil {
+		t.Fatalf("RS256 control: %v", err)
+	}
+
+	signer, err := josev4.NewSigner(
+		josev4.SigningKey{Algorithm: josev4.PS256, Key: entry.Signer},
+		(&josev4.SignerOptions{}).WithHeader("kid", entry.KeyID).WithType("JWT"),
+	)
+	if err != nil {
+		t.Fatalf("NewSigner: %v", err)
+	}
+	ps256, err := jwt.Signed(signer).Claims(claims).Serialize()
+	if err != nil {
+		t.Fatalf("Serialize: %v", err)
+	}
+	result, lookupErr := h.lookupIDToken(t.Context(), ps256)
+	if !errors.Is(lookupErr, errTokenInvalid) {
+		t.Fatalf("lookupIDToken err=%v want errTokenInvalid", lookupErr)
+	}
+	if result.reason != "signature" {
+		t.Errorf("reason=%q want signature", result.reason)
 	}
 }
 

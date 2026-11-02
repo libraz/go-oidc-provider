@@ -26,9 +26,14 @@ type Entry struct {
 	// every JWS the OP signs with this key.
 	KeyID string
 
-	// Signer is the private key. The library signs with ES256 and only
-	// ES256; non-P-256 keys are rejected at construction time.
+	// Signer is the private key: ECDSA P-256 or RSA of at least 2048 bits.
+	// [NewSet] requires the active entry to match the OP's signing alg.
 	Signer crypto.Signer
+
+	// Alg is the one JWS alg this key is used with ("ES256" or "RS256").
+	// [NewSet] overwrites it from the key shape, so a caller-supplied
+	// value never survives into a [Set].
+	Alg string
 
 	// NotAfter is the wall-clock instant after which this entry MUST NOT
 	// verify a presented JWS. The zero value (the default) means the
@@ -44,6 +49,11 @@ type Entry struct {
 	// reuses an old kid after the deadline cannot ride past [Set.Find].
 	NotAfter time.Time
 }
+
+// AcceptsAlg reports whether a JWS whose "alg" header is alg may be
+// verified with this entry. A key is bound to exactly one alg
+// (RFC 8725 §3.1), so the comparison is exact.
+func (e Entry) AcceptsAlg(alg string) bool { return alg == e.Alg }
 
 // RetiredKidObserver is the seam [Set.Find] and [EncryptionSet.Resolve]
 // notify when they reject a presented kid because the matching
@@ -74,14 +84,16 @@ type SetOption func(*setConfig)
 // setConfig is the internal mutable shape options write into. Kept
 // unexported so the option surface stays the only knob.
 type setConfig struct {
-	now      func() time.Time
-	observer RetiredKidObserver
-	jwe      jose.JWEPolicy
+	now        func() time.Time
+	observer   RetiredKidObserver
+	jwe        jose.JWEPolicy
+	signingAlg jose.Algorithm
 }
 
-// newSetConfig applies opts over the defaults (system clock, no observer).
+// newSetConfig applies opts over the defaults (system clock, no observer,
+// ES256 signing).
 func newSetConfig(opts []SetOption) setConfig {
-	cfg := setConfig{now: timex.SystemClock.Now}
+	cfg := setConfig{now: timex.SystemClock.Now, signingAlg: jose.AlgES256}
 	for _, opt := range opts {
 		if opt != nil {
 			opt(&cfg)
@@ -127,6 +139,17 @@ func WithJWEPolicy(p jose.JWEPolicy) SetOption {
 	}
 }
 
+// WithSigningAlg pins the JWS alg the OP issues with; [NewSet] requires
+// the active entry's key shape to match it. The default is ES256.
+//
+// Only [NewSet] reads the value; [NewEncryptionSet] accepts the option
+// and ignores it, the mirror of [WithJWEPolicy].
+func WithSigningAlg(alg jose.Algorithm) SetOption {
+	return func(c *setConfig) {
+		c.signingAlg = alg
+	}
+}
+
 // Set is the validated, immutable collection of signing keys the OP uses.
 // The first entry is the active signer; subsequent entries are retiring
 // keys still advertised in JWKS so RPs can verify recently-issued tokens.
@@ -138,17 +161,18 @@ type Set struct {
 }
 
 // NewSet validates entries and builds the runtime [Set]. It returns an
-// error wrapping [ErrInvalidKey] when any entry is missing fields, has a
-// duplicate KeyID, or carries a non-ES256 key shape. The caller (op.New)
-// has already performed the same checks; we re-validate here so that
-// internal callers cannot bypass the policy by constructing a Set
-// directly.
+// error wrapping [ErrInvalidKey] when any entry is missing fields or has
+// a duplicate KeyID, when the active entry (entries[0]) does not match
+// the signing alg set by [WithSigningAlg], or when any other entry is
+// neither an ES256 nor an RS256 key. Each entry's [Entry.Alg] is set
+// from its key shape. The caller (op.New) has already performed the
+// same checks, including the NotAfter requirement on entries of the
+// other key type; we re-validate the shapes here so that internal
+// callers cannot bypass the policy by constructing a Set directly.
 //
-// Variadic [SetOption] values customise the wall-clock seam and the
+// The remaining [SetOption] values customise the wall-clock seam and the
 // retired-kid observer; defaults are [timex.SystemClock] and a no-op
-// observer respectively, so a Set built without options behaves
-// identically to a pre-rotation-aware Set apart from honouring
-// [Entry.NotAfter] when present.
+// observer.
 func NewSet(entries []Entry, opts ...SetOption) (*Set, error) {
 	if len(entries) == 0 {
 		return nil, fmt.Errorf("%w: empty keyset", ErrInvalidKey)
@@ -168,16 +192,13 @@ func NewSet(entries []Entry, opts ...SetOption) (*Set, error) {
 		if e.Signer == nil {
 			return nil, fmt.Errorf("%w: entry %q has nil Signer", ErrInvalidKey, e.KeyID)
 		}
-		// Delegate the alg/kty/crv triple to the canonical
-		// [jose.KeyShape] matrix, then enforce the ES256-only
-		// constraint on top. The narrower constraint is intentional:
-		// every downstream package (jarm / dpop / tokens) hard-codes
-		// ES256 today, so admitting another shape here would cause a
-		// silent mismatch when those packages run against the new key.
 		pub := e.Signer.Public()
 		alg, _, _, shapeOK := jose.KeyShape(pub)
-		if !shapeOK || alg != "ES256" {
-			return nil, fmt.Errorf("%w: entry %q is not ECDSA P-256", ErrInvalidKey, e.KeyID)
+		if i == 0 && (!shapeOK || alg != string(cfg.signingAlg)) {
+			return nil, fmt.Errorf("%w: entry %q is not a %s key", ErrInvalidKey, e.KeyID, cfg.signingAlg)
+		}
+		if !shapeOK || (alg != string(jose.AlgES256) && alg != string(jose.AlgRS256)) {
+			return nil, fmt.Errorf("%w: entry %q has an unsupported key shape", ErrInvalidKey, e.KeyID)
 		}
 		jwks.Keys = append(jwks.Keys, josev4.JSONWebKey{
 			Key:       pub,
@@ -185,6 +206,7 @@ func NewSet(entries []Entry, opts ...SetOption) (*Set, error) {
 			Algorithm: alg,
 			Use:       "sig",
 		})
+		e.Alg = alg
 		out[i] = e
 	}
 	return &Set{entries: out, jwks: jwks, now: cfg.now, observer: cfg.observer}, nil

@@ -134,6 +134,11 @@ func (h *Handler) lookupIDToken(ctx context.Context, raw string) (lookupResult, 
 	if !ok {
 		return lookupResult{reason: "unknown_kid"}, fmt.Errorf("%w: kid not in keyset", errTokenInvalid)
 	}
+	// Each key verifies under exactly one alg (RFC 8725 §3.1); the reason
+	// matches the access-token path, which reports this as a signature failure.
+	if !entry.AcceptsAlg(jws.Signatures[0].Header.Algorithm) {
+		return lookupResult{reason: "signature"}, fmt.Errorf("%w: alg is not the key's alg", errTokenInvalid)
+	}
 	payload, err := jws.Verify(entry.Signer.Public())
 	if err != nil {
 		return lookupResult{reason: "signature"}, fmt.Errorf("%w: verify: %w", errTokenInvalid, err)

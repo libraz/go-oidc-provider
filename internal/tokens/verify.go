@@ -191,6 +191,10 @@ func (v *AccessTokenVerifier) Verify(ctx context.Context, raw string) (*AccessTo
 	if !ok {
 		return nil, "", ErrAccessTokenSignature
 	}
+	// Each key verifies under exactly one alg (RFC 8725 §3.1).
+	if !entry.AcceptsAlg(jws.Signatures[0].Header.Algorithm) {
+		return nil, "", ErrAccessTokenSignature
+	}
 
 	payload, err := jws.Verify(entry.Signer.Public())
 	if err != nil {

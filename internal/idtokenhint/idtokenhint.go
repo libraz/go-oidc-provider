@@ -48,8 +48,8 @@ var (
 	ErrMalformed = errors.New("idtokenhint: malformed")
 
 	// ErrSignature signals that signature verification failed, that the
-	// kid header is missing, or that the kid names no live entry in the
-	// OP keyset.
+	// kid header is missing, that the kid names no live entry in the OP
+	// keyset, or that the alg header is not the one that entry signs with.
 	ErrSignature = errors.New("idtokenhint: signature invalid")
 
 	// ErrIssuer signals that the payload's iss claim is missing or does
@@ -102,6 +102,10 @@ func Verify(ctx context.Context, set *keys.Set, issuer, raw string) (Claims, err
 	entry, ok := set.Find(ctx, kid)
 	if !ok {
 		return Claims{}, ErrSignature
+	}
+	// Each key verifies under exactly one alg (RFC 8725 §3.1).
+	if !entry.AcceptsAlg(jws.Signatures[0].Header.Algorithm) {
+		return Claims{}, fmt.Errorf("%w: alg is not the key's alg", ErrSignature)
 	}
 	payload, err := jws.Verify(entry.Signer.Public())
 	if err != nil {

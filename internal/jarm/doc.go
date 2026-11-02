@@ -40,8 +40,8 @@
 //
 // # Algorithm policy
 //
-// JARM responses are signed with ES256, using the OP's existing
-// access-token / id-token signing key. No new keyset is introduced —
+// JARM responses are signed with the OP's signing alg (ES256 or RS256),
+// using the OP's existing access-token / id-token signing key. No new keyset is introduced —
 // including for the encrypted variant, whose recipient key is the
 // client's, not the OP's.
 //

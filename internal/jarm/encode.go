@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"time"
 
-	josev4 "github.com/go-jose/go-jose/v4"
 	"github.com/go-jose/go-jose/v4/jwt"
 
 	"github.com/libraz/go-oidc-provider/internal/jose"
@@ -64,8 +63,8 @@ type Payload struct {
 // JWTs identify. Construct it once at startup with [NewSigner]; the
 // value is immutable and safe for concurrent use.
 type Signer struct {
+	// key carries the alg resolved by [tokens.ResolveAlg] at construction.
 	key    tokens.SigningKey
-	alg    josev4.SignatureAlgorithm
 	issuer string
 	clock  timex.Clock
 	expiry time.Duration
@@ -100,9 +99,8 @@ type SignerConfig struct {
 }
 
 // NewSigner builds a [*Signer] from cfg. It returns an error when a
-// required field is missing or when the supplied key cannot be mapped
-// onto a project-allowed JWS algorithm; the embedder fails fast at
-// startup rather than at the first response.
+// required field is missing or when [tokens.ResolveAlg] rejects the key;
+// the embedder fails fast at startup rather than at the first response.
 func NewSigner(cfg SignerConfig) (*Signer, error) {
 	if cfg.Key.Signer == nil {
 		return nil, errors.New("jarm: NewSigner requires Key.Signer")
@@ -110,49 +108,26 @@ func NewSigner(cfg SignerConfig) (*Signer, error) {
 	if cfg.Issuer == "" {
 		return nil, errors.New("jarm: NewSigner requires Issuer")
 	}
-	alg, err := deriveJWSAlgorithm(cfg.Key)
+	key := cfg.Key
+	alg, err := tokens.ResolveAlg(key)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("%w: %w", ErrEncode, err)
 	}
+	key.Alg = alg
 	clock := timex.OrSystem(cfg.Clock)
 	expiry := cfg.Expiry
 	if expiry <= 0 {
 		expiry = DefaultExpiry
 	}
 	return &Signer{
-		key:    cfg.Key,
-		alg:    alg,
+		key:    key,
 		issuer: cfg.Issuer,
 		clock:  clock,
 		expiry: expiry,
 	}, nil
 }
 
-// deriveJWSAlgorithm picks the JWS "alg" header for a [tokens.SigningKey]
-// based on the public key shape. The library signs with ECDSA P-256
-// only, and internal/keys.NewSet rejects every other key shape on
-// construction, so a key reaching this function MUST be a P-256 ECDSA
-// key. Delegating to [jose.KeyShape] keeps the
-// alg/key matrix in one place — the wrapper here surfaces "unknown key
-// shape" as a fail-fast [ErrEncode] at [NewSigner] time rather than
-// silently returning ES256 for the wrong key, while preserving the
-// internal/jose [jose.ErrUnsupportedKeyShape] sentinel for callers that
-// want the structural identity. The "alg" returned is the JWS
-// SIGNATURE algorithm — JARM does not encrypt the response, so the
-// FAPI 2.0 RSA-OAEP key-encryption discussion does not apply here.
-func deriveJWSAlgorithm(key tokens.SigningKey) (josev4.SignatureAlgorithm, error) {
-	pub := key.Signer.Public()
-	alg, _, _, ok := jose.KeyShape(pub)
-	if !ok {
-		return "", fmt.Errorf("%w: %w: key type %T (the OP signs with ECDSA P-256 only; see internal/keys.NewSet)", ErrEncode, jose.ErrUnsupportedKeyShape, pub)
-	}
-	if alg != string(josev4.ES256) {
-		return "", fmt.Errorf("%w: %w: alg %q is not ES256 (the OP signs with ECDSA P-256 only)", ErrEncode, jose.ErrUnsupportedKeyShape, alg)
-	}
-	return josev4.ES256, nil
-}
-
-// Sign serialises p as an ES256-signed compact JWS. The function
+// Sign serialises p as a compact JWS signed with the OP's alg. The function
 // validates that Issuer / Audience / ExpiresAt are set; on the success
 // path Code is also required; on the error path Error is required.
 //
@@ -204,9 +179,7 @@ func (s *Signer) Sign(p Payload) (string, error) {
 	if p.ErrorURI != "" {
 		claims["error_uri"] = p.ErrorURI
 	}
-	key := s.key
-	key.Alg = string(s.alg)
-	signer, err := tokens.NewSigner(key, jose.TypJWT)
+	signer, err := tokens.NewSigner(s.key, jose.TypJWT)
 	if err != nil {
 		return "", fmt.Errorf("%w: %w", ErrEncode, err)
 	}
