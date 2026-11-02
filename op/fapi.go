@@ -3,6 +3,8 @@ package op
 import (
 	"crypto/tls"
 	"encoding/json"
+	"errors"
+	"io/fs"
 	"os"
 	"path/filepath"
 )
@@ -65,6 +67,11 @@ func LoadPublicJWKS(path string) ([]byte, error) {
 	//nolint:gosec // G304: path is operator-supplied at construction time.
 	raw, err := os.ReadFile(path)
 	if err != nil {
+		// Keep only the underlying cause: *fs.PathError carries the full path.
+		var pathErr *fs.PathError
+		if errors.As(err, &pathErr) {
+			err = pathErr.Err
+		}
 		return nil, newConfigurationError("LoadPublicJWKS: read "+base, err)
 	}
 	var input struct {

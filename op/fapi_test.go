@@ -4,6 +4,7 @@ import (
 	"crypto/tls"
 	"encoding/json"
 	"errors"
+	"io/fs"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -287,7 +288,8 @@ func TestLoadPublicJWKS_RejectsUnsupportedKeyType(t *testing.T) {
 func TestLoadPublicJWKS_RejectsMissingFile(t *testing.T) {
 	t.Parallel()
 
-	_, err := op.LoadPublicJWKS(filepath.Join(t.TempDir(), "absent.json"))
+	path := filepath.Join(t.TempDir(), "absent.json")
+	_, err := op.LoadPublicJWKS(path)
 	if err == nil {
 		t.Fatal("expected error for missing file, got nil")
 	}
@@ -297,6 +299,12 @@ func TestLoadPublicJWKS_RejectsMissingFile(t *testing.T) {
 	}
 	if !strings.Contains(e.Description, "absent.json") {
 		t.Errorf("description=%q must mention the missing file path", e.Description)
+	}
+	if dir := filepath.Dir(path); strings.Contains(err.Error(), dir) {
+		t.Errorf("error %q leaks the directory %q", err, dir)
+	}
+	if !errors.Is(err, fs.ErrNotExist) {
+		t.Errorf("errors.Is(err, fs.ErrNotExist) = false for %v", err)
 	}
 }
 
