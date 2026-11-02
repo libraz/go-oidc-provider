@@ -535,8 +535,8 @@ func WithSPAUI(ui SPAUI) Option {
 		if err != nil {
 			return err
 		}
-		ui.ContentSecurityPolicy = policy
 		c.spaUI = ui
+		c.spaUI.ContentSecurityPolicy = policy
 		c.spaUISet = true
 		// In SPA mode the SPA owns the chooser surface via the JSON state
 		// envelope, so a chooser template configured alongside it is
@@ -638,8 +638,8 @@ func WithConsentUI(ui ConsentUI) Option {
 		if err != nil {
 			return err
 		}
-		ui.ContentSecurityPolicy = policy
 		c.consentUI = ui
+		c.consentUI.ContentSecurityPolicy = policy
 		c.consentUISet = true
 		return nil
 	})
@@ -670,8 +670,8 @@ func WithChooserUI(ui ChooserUI) Option {
 		if err != nil {
 			return err
 		}
-		ui.ContentSecurityPolicy = policy
 		c.chooserUI = ui
+		c.chooserUI.ContentSecurityPolicy = policy
 		c.chooserUISet = true
 		// In SPA mode the SPA owns the chooser surface via the JSON state
 		// envelope when [WithSPAUI] is also active. Stash the intent for

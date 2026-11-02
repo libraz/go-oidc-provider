@@ -79,17 +79,19 @@ func WithLogoutUI(ui LogoutUI) Option {
 		}
 		// Empty stays empty: the end-session pages then keep their own
 		// default policy, which differs from the interaction default.
-		if ui.ContentSecurityPolicy != "" {
-			policy, err := normalizeUICSP("WithLogoutUI", ui.ContentSecurityPolicy)
+		policy := ui.ContentSecurityPolicy
+		if policy != "" {
+			normalized, err := normalizeUICSP("WithLogoutUI", policy)
 			if err != nil {
 				return err
 			}
-			ui.ContentSecurityPolicy = policy
+			policy = normalized
 		}
 		if err := checkLogoutConfirmFields(ui.ConfirmTemplate); err != nil {
 			return err
 		}
 		c.logoutUI = ui
+		c.logoutUI.ContentSecurityPolicy = policy
 		return nil
 	})
 }
