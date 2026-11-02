@@ -38,6 +38,15 @@ const (
 	errorDrainBytes = 4 * 1024
 )
 
+// Schemes returns the URL schemes a fetch admits: https only, plus http
+// when allowHTTP is set (a development or loopback opt-in).
+func Schemes(allowHTTP bool) []string {
+	if allowHTTP {
+		return []string{"http", "https"}
+	}
+	return []string{"https"}
+}
+
 // Sentinel errors returned by the response-side gates. Callers branch
 // on these via [errors.Is] so they can map the failure onto a
 // per-package taxonomy (e.g. ErrJWKSFetch, ErrSectorFetch) without

@@ -129,3 +129,8 @@ func Parse(s string) []string {
 	}
 	return out
 }
+
+// Join renders scopes as the RFC 6749 §3.3 space-delimited wire form.
+func Join(scopes []string) string {
+	return strings.Join(scopes, " ")
+}

@@ -27,7 +27,25 @@ const (
 	// (RFC 6749 §5.2). 500 status; the description is left empty so
 	// the wire response does not leak internals.
 	ErrServerError = "server_error"
+
+	// ErrInvalidGrant is the RFC 6749 §5.2 "grant is invalid, expired,
+	// revoked or issued to another client" code. 400 status.
+	ErrInvalidGrant = "invalid_grant"
+
+	// ErrInvalidScope is the RFC 6749 §5.2 "requested scope is invalid
+	// or exceeds what was granted" code. 400 status.
+	ErrInvalidScope = "invalid_scope"
+
+	// ErrAccessDenied is the RFC 6749 §4.1.2.1 / RFC 8628 §3.5 "the
+	// resource owner denied the request" code.
+	ErrAccessDenied = "access_denied"
 )
+
+// WriteServerError emits the 500 "server_error" envelope with an empty
+// description so the response does not leak internals.
+func WriteServerError(w http.ResponseWriter) {
+	WriteOAuthError(w, http.StatusInternalServerError, ErrServerError, "")
+}
 
 // WriteOAuthError emits the RFC 6749 §5.2 envelope with the supplied
 // status, code, and description. The implementation delegates to

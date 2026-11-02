@@ -38,6 +38,20 @@ const (
 	AlgEdDSA Algorithm = "EdDSA"
 )
 
+// allowedAlgorithms lists, in advertisement order, every algorithm
+// [Algorithm.IsAllowed] admits.
+var allowedAlgorithms = [...]Algorithm{AlgRS256, AlgPS256, AlgES256, AlgEdDSA}
+
+// AllowedAlgorithmNames returns the wire names of every allowed algorithm,
+// as a fresh slice, for discovery documents and metadata validation.
+func AllowedAlgorithmNames() []string {
+	out := make([]string, len(allowedAlgorithms))
+	for i, a := range allowedAlgorithms {
+		out[i] = string(a)
+	}
+	return out
+}
+
 // IsAllowed reports whether a is one of the algorithms enabled in this
 // codebase. Symmetric algorithms (HS256/384/512) and "none" are never
 // allowed and therefore always return false. The check is constant-time

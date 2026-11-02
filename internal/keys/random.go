@@ -44,6 +44,10 @@ func RandomInt63Except(excluded int64) (int64, error) {
 	}
 }
 
+// IdentifierBytes is the entropy, 128 bits, of the opaque identifiers the OP
+// mints through [RandomBase64URL]: jtis, grant ids and interaction uids.
+const IdentifierBytes = 16
+
 // RandomBase64URL returns n bytes drawn from crypto/rand, encoded as
 // unpadded base64url. It is the single recipe behind the opaque
 // identifiers the OP mints (session ids, codes, jtis, opaque tokens). A

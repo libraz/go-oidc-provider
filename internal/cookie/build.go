@@ -97,3 +97,11 @@ func Clear(p Profile) (*http.Cookie, error) {
 	c.MaxAge = -1
 	return c, nil
 }
+
+// ClearOn writes the deletion cookie for p to w. A profile that cannot build
+// a cookie has nothing on the browser to delete, so the error is dropped.
+func ClearOn(w http.ResponseWriter, p Profile) {
+	if c, err := Clear(p); err == nil {
+		http.SetCookie(w, c)
+	}
+}
