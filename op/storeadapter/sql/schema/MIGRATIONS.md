@@ -37,7 +37,14 @@ fails either check with the migration that adds it, for example
 `oidcsql: schema for oidc_clients is missing required columns:
 previous_secret_hash, previous_secret_expires_at; apply migration 000006_v1.5.0
 (schema/migrations/mysql/000006_v1.5.0.up.sql)`. On MySQL both also check that
-the identifier columns use a binary collation. Neither checks indexes.
+the identifier columns use a binary collation. Both also check that every
+column `schema/<dialect>/v1.sql` leads an index with leads an index of the
+table, under any index name: an index of your own, or a composite one with the
+same leading column, passes. A missing one fails with `oidcsql: <table> has no
+index on <column>`; on MySQL, where `Store.Migrate` cannot add it to an existing
+table, apply the migration files. When everything missing was added by a later
+release, the error ends with the `migrate force <N>` number that records the
+schema's current release.
 
 The sections below explain what each release changes.
 

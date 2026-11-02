@@ -373,3 +373,35 @@ func TestMySQL_IdentifierCollation(t *testing.T) {
 		}
 	})
 }
+
+// TestMySQL_ValidateSchema_MissingIndex drops a sweep index, which Migrate
+// cannot restore on an existing table, and expects the check to name it and
+// say so; an index of the same leading column under another name passes.
+func TestMySQL_ValidateSchema_MissingIndex(t *testing.T) {
+	t.Parallel()
+	db := newMySQLDBFactory(t, false)(t)
+	s, err := oidcsql.New(db, oidcsql.MySQL())
+	if err != nil {
+		t.Fatalf("oidcsql.New: %v", err)
+	}
+	if err := s.Migrate(t.Context()); err != nil {
+		t.Fatalf("Migrate on a fresh database must pass the index check: %v", err)
+	}
+	if _, err := db.ExecContext(t.Context(), "DROP INDEX idx_oidc_refresh_tokens_expires ON oidc_refresh_tokens"); err != nil {
+		t.Fatalf("drop index: %v", err)
+	}
+	for _, want := range []string{
+		"oidcsql: oidc_refresh_tokens has no index on expires_at; create it from schema/mysql/v1.sql",
+		"Store.Migrate cannot add indexes to an existing table",
+	} {
+		if err := s.ValidateSchema(t.Context()); err == nil || !strings.Contains(err.Error(), want) {
+			t.Fatalf("ValidateSchema error = %v, want it to contain %q", err, want)
+		}
+	}
+	if _, err := db.ExecContext(t.Context(), "CREATE INDEX embedder_refresh_sweep ON oidc_refresh_tokens (expires_at, grant_id)"); err != nil {
+		t.Fatalf("create index: %v", err)
+	}
+	if err := s.ValidateSchema(t.Context()); err != nil {
+		t.Fatalf("ValidateSchema with an equivalent index under another name: %v", err)
+	}
+}

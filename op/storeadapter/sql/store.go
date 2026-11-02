@@ -259,9 +259,11 @@ func (s *Store) Migrate(ctx context.Context) error {
 // configuration uses it: each table must exist and carry every column the
 // reference DDL declares (columns an embedder added are allowed; types are not
 // checked), and on MySQL
-// the identifier columns must use a binary collation. It reads the catalog
+// the identifier columns must use a binary collation. Every column the
+// reference DDL leads an index with must lead some index of the table, under
+// any index name; an index an embedder added is allowed. It reads the catalog
 // only: it never creates, alters or drops anything, so the connecting role
-// needs no CREATE privilege. It does not check indexes.
+// needs no CREATE privilege.
 //
 // op.New already checks, at construction, the tables the configuration
 // uses, through each substore's own ValidateSchema. Call this full check
@@ -274,12 +276,32 @@ func (s *Store) Migrate(ctx context.Context) error {
 // migration under schema/migrations/<dialect> that adds it. When any table is
 // missing, one closing line says how to create it. Every gap is reported in the
 // one returned error, a line each, so a single run lists the whole
-// migration still to apply. [Store.Migrate] runs this check after applying
-// the DDL.
+// migration still to apply. A missing index is reported as "oidcsql: <table>
+// has no index on <columns>". When every gap is something a later release
+// added, a closing line gives the "migrate force" number for a database
+// golang-migrate does not track yet. [Store.Migrate] runs this check after
+// applying the DDL.
 //
 // Stable since v1.5.
 func (s *Store) ValidateSchema(ctx context.Context) error {
 	return s.validateKeys(ctx, knownNamingKeys...)
+}
+
+// checkColumns reports the required columns an existing table lacks, and
+// records the release that added each in gap.
+func (s *Store) checkColumns(key, table string, cols map[string]bool, required []string, gap *releaseGap) error {
+	var missing []string
+	for _, col := range required {
+		if !cols[col] {
+			missing = append(missing, col)
+			gap.add(columnAddedIn(key, col))
+		}
+	}
+	if len(missing) == 0 {
+		return nil
+	}
+	return fmt.Errorf("oidcsql: schema for %s is missing required columns: %s%s",
+		table, strings.Join(missing, ", "), migrationHint(s.dialect.name, key, missing))
 }
 
 // validateKeys runs the [Store.ValidateSchema] checks on the tables with
@@ -287,7 +309,8 @@ func (s *Store) ValidateSchema(ctx context.Context) error {
 func (s *Store) validateKeys(ctx context.Context, keys ...string) error {
 	required := ddlColumns(s.dialect)
 	var problems []error
-	var tableMissing bool
+	var tableMissing, tableFound bool
+	var gap releaseGap
 	for _, key := range keys {
 		table := s.names.byKey(key)
 		cols, err := s.columnSet(ctx, table)
@@ -296,27 +319,30 @@ func (s *Store) validateKeys(ctx context.Context, keys ...string) error {
 		}
 		if len(cols) == 0 {
 			tableMissing = true
+			gap.add(tableAddedIn(key))
 			problems = append(problems, fmt.Errorf("oidcsql: schema for %s is missing%s", table, tableMigrationHint(s.dialect.name, key)))
 			continue
 		}
-		var missing []string
-		for _, col := range required[key] {
-			if !cols[col] {
-				missing = append(missing, col)
-			}
-		}
-		if len(missing) > 0 {
-			problems = append(problems, fmt.Errorf("oidcsql: schema for %s is missing required columns: %s%s",
-				table, strings.Join(missing, ", "), migrationHint(s.dialect.name, key, missing)))
+		tableFound = true
+		if err := s.checkColumns(key, table, cols, required[key], &gap); err != nil {
+			problems = append(problems, err)
 		}
 		collationProblems, err := s.checkBinaryCollations(ctx, key, table)
 		if err != nil {
 			return err
 		}
 		problems = append(problems, collationProblems...)
+		indexProblems, err := s.checkIndexes(ctx, key, table)
+		if err != nil {
+			return err
+		}
+		problems = append(problems, indexProblems...)
 	}
 	if tableMissing {
 		problems = append(problems, errors.New(missingTableRemedy(s.dialect.name)))
+	}
+	if hint := gap.hint(); tableFound && hint != nil {
+		problems = append(problems, hint)
 	}
 	return errors.Join(problems...)
 }

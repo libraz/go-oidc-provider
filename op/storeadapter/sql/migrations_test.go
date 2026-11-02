@@ -14,10 +14,6 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-// baselineMigration is the file that creates the v1.0.0 schema; every later
-// file is one schemaReleases row.
-const baselineMigration = "000001_v1.0.0"
-
 // migrationStems lists every migration file stem in apply order.
 func migrationStems() []string {
 	out := make([]string, 0, 1+len(schemaReleases))

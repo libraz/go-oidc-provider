@@ -4,7 +4,6 @@ package oidcsql
 import (
 	"reflect"
 	"regexp"
-	"strings"
 	"testing"
 )
 
@@ -25,57 +24,10 @@ var (
 	// and both take the same locks. Matching only DELETE left the three
 	// revoking UPDATEs unchecked.
 	clientCascadeRE = regexp.MustCompile(`(?:DELETE FROM|UPDATE) (\w+)(?: SET [^;]*?)? WHERE client_id = `)
-	createIndexRE   = regexp.MustCompile(`(?i)CREATE (?:UNIQUE )?INDEX (?:IF NOT EXISTS )?\w+ ON (\w+)\s*\(\s*(\w+)`)
-	inlineIndexRE   = regexp.MustCompile(`(?i)^\s*(?:UNIQUE )?(?:INDEX|KEY) \w+ \(\s*(\w+)`)
 )
 
 func allDialects() map[string]Dialect {
 	return map[string]Dialect{"sqlite": SQLite(), "mysql": MySQL(), "postgres": Postgres()}
-}
-
-// indexedColumns maps each table to the set of columns that lead an
-// index on it, covering both DDL shapes the dialects use: standalone
-// CREATE INDEX (SQLite, PostgreSQL) and inline INDEX clauses inside
-// CREATE TABLE (MySQL, which has no CREATE INDEX IF NOT EXISTS and so
-// declares them with the table). A primary key counts too — its column
-// is the first one named in the table body.
-func indexedColumns(t *testing.T, schema []byte) map[string]map[string]bool {
-	t.Helper()
-
-	out := map[string]map[string]bool{}
-	add := func(table, column string) {
-		if out[table] == nil {
-			out[table] = map[string]bool{}
-		}
-		out[table][column] = true
-	}
-
-	for _, m := range createIndexRE.FindAllStringSubmatch(string(schema), -1) {
-		add(m[1], m[2])
-	}
-
-	// Walk each CREATE TABLE body for inline index clauses and the
-	// primary key.
-	text := string(schema)
-	for _, loc := range createTableRE.FindAllStringSubmatchIndex(text, -1) {
-		table := text[loc[2]:loc[3]]
-		body := text[loc[1]:]
-		if end := strings.Index(body, "\n);"); end >= 0 {
-			body = body[:end]
-		}
-		for _, line := range strings.Split(body, "\n") {
-			if m := inlineIndexRE.FindStringSubmatch(line); m != nil {
-				add(table, m[1])
-				continue
-			}
-			if strings.Contains(strings.ToUpper(line), "PRIMARY KEY") {
-				if fields := strings.Fields(strings.TrimSpace(line)); len(fields) > 0 {
-					add(table, strings.Trim(fields[0], "(,"))
-				}
-			}
-		}
-	}
-	return out
 }
 
 // sweptTables returns the tables the registry runs re's statement shape
@@ -104,14 +56,14 @@ func sweptTables(t *testing.T, re *regexp.Regexp) map[string]bool {
 	return tables
 }
 
-// indexedColumns is the whole basis of the checks below, so it is
+// parseDDLIndexColumns is the whole basis of the checks below, so it is
 // pinned against DDL whose answer is known — including the negative. A
 // parser that silently reported every column as indexed would leave
 // those checks passing on a schema with no indexes at all.
 func TestIndexedColumns_ReadsBothDDLShapes(t *testing.T) {
 	t.Parallel()
 
-	got := indexedColumns(t, []byte(`
+	got := parseDDLIndexColumns([]byte(`
 CREATE TABLE IF NOT EXISTS t_inline (
     id VARCHAR(64) NOT NULL PRIMARY KEY,
     expires_at BIGINT NOT NULL,
@@ -131,9 +83,17 @@ CREATE TABLE IF NOT EXISTS t_bare (
     id TEXT PRIMARY KEY,
     expires_at BIGINT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS t_composite (
+    -- PRIMARY KEY in a comment names no column
+    owner TEXT NOT NULL,
+    slot INTEGER NOT NULL,
+    PRIMARY KEY (owner, slot)
+);
 `))
 
 	for _, want := range []struct{ table, column string }{
+		{"t_composite", "owner"},
 		{"t_inline", "id"},
 		{"t_inline", "expires_at"},
 		{"t_standalone", "id"},
@@ -148,6 +108,9 @@ CREATE TABLE IF NOT EXISTS t_bare (
 		{"t_inline", "unswept"},
 		{"t_standalone", "unswept"},
 		{"t_bare", "expires_at"},
+		{"t_composite", "slot"},
+		{"t_composite", "--"},
+		{"t_composite", "PRIMARY"},
 	} {
 		if got[absent.table][absent.column] {
 			t.Errorf("%s(%s) reported as indexed; nothing in the DDL indexes it", absent.table, absent.column)
@@ -163,7 +126,7 @@ func TestSchema_EveryExpirySweepIsIndexed(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 
-			indexed := indexedColumns(t, dialect.schema)
+			indexed := parseDDLIndexColumns(dialect.schema)
 			for table := range tables {
 				if !indexed[table]["expires_at"] {
 					t.Errorf("%s sweeps %s on expires_at but the schema declares no index leading with that column", name, table)
@@ -197,7 +160,7 @@ func TestSchema_EveryClientCascadeIsIndexed(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 
-			indexed := indexedColumns(t, dialect.schema)
+			indexed := parseDDLIndexColumns(dialect.schema)
 			for table := range tables {
 				if !indexed[table]["client_id"] {
 					t.Errorf("%s cascades over %s on client_id but the schema declares no index leading with that column", name, table)
@@ -214,12 +177,12 @@ func TestSchema_EveryClientCascadeIsIndexed(t *testing.T) {
 func TestSchema_DialectsIndexTheSameColumns(t *testing.T) {
 	t.Parallel()
 
-	reference := indexedColumns(t, SQLite().schema)
+	reference := parseDDLIndexColumns(SQLite().schema)
 	for name, dialect := range allDialects() {
 		if name == "sqlite" {
 			continue
 		}
-		got := indexedColumns(t, dialect.schema)
+		got := parseDDLIndexColumns(dialect.schema)
 		for table, columns := range reference {
 			for column := range columns {
 				if !got[table][column] {

@@ -113,7 +113,9 @@ single-valued option twice, typically a shared base list followed by an
 override, must wrap the base in `op.WithDefaults`, or `op.New` refuses to
 start. `op.WithAllowInsecureBackchannelLogoutForDev` requires a development
 issuer. A DynamoDB deployment must create the new `cascade_links` table (from
-`Store.TableDefinitions`) before upgrading; `ValidateSchema` requires it.
+`Store.TableDefinitions`) before upgrading; `ValidateSchema` requires it. A
+SQL database missing an index of the reference DDL, typically MySQL upgraded
+through `Store.Migrate`, must create it first; `op.New` names each one.
 
 ### Security
 
@@ -218,6 +220,19 @@ issuer. A DynamoDB deployment must create the new `cascade_links` table (from
   missing optional store capabilities and the other configuration warnings.
   Request-time records are still discarded until a logger is set. A process
   that never configured a logger sees these lines on its default handler.
+
+- The SQL adapter's schema check, run by `op.New` and `Store.ValidateSchema`,
+  now also requires every column the reference DDL indexes to lead some index
+  of its table, under any index name. A MySQL database upgraded with
+  `Store.Migrate` alone never received its indexes, because MySQL declares them
+  inside `CREATE TABLE`; such a database now fails at startup naming each table
+  and column, and needs the index statements from `schema/mysql/v1.sql` or the
+  migration files.
+
+- When every schema gap is something a later release added, the schema check
+  closes with the release the database matches and the `migrate force <N>`
+  number that brings a database golang-migrate does not track yet under its
+  control.
 
 - `op.New` refuses a `WithEncryptionKeyset` entry whose public key is also a
   signing key in `WithKeyset`. Signing and encryption keys were already

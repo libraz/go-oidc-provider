@@ -211,16 +211,22 @@ func renderTablesDoc(t *testing.T) []byte {
 	b.WriteString("through a `store.UserStore`. A table keyed only by an auto-increment id or an\n")
 	b.WriteString("email address adds one such column.\n\n")
 	defaults := make([]string, 0, len(defaultConfigTables))
+	var always []string
 	for _, key := range defaultConfigTables {
 		name := names.byKey(key)
 		if name == "" {
 			t.Fatalf("defaultConfigTables names unknown key %q", key)
 		}
 		defaults = append(defaults, "`"+name+"`")
+		if tableRequired(key) {
+			always = append(always, "`"+name+"`")
+		}
 	}
 	fmt.Fprintf(&b, "The default configuration (the `authorization_code` and `refresh_token`\n"+
 		"grants, password login against your own user store, every other option at its\n"+
 		"default) needs these %d tables: %s.\n\n", len(defaults), strings.Join(defaults, ", "))
+	fmt.Fprintf(&b, "Of these, the following %d are checked in every configuration, even while the\n"+
+		"feature that writes them is unused, so they must exist empty: %s.\n\n", len(always), strings.Join(always, ", "))
 	b.WriteString("Column types differ by dialect; `schema/<dialect>/v1.sql` is authoritative.\n")
 	b.WriteString("A column marked with a release was added to an existing table in that release;\n")
 	b.WriteString("an existing database applies the matching file under `migrations/<dialect>`.\n")

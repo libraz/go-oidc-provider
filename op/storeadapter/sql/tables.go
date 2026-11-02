@@ -219,6 +219,10 @@ type schemaRelease struct {
 	tables    []string // WithNaming keys
 }
 
+// baselineMigration is the file that creates the v1.0.0 schema; every later
+// file is one schemaReleases row.
+const baselineMigration = "000001_v1.0.0"
+
 //nolint:gochecknoglobals // schema history; read-only.
 var schemaReleases = []schemaRelease{
 	{"v1.1.0", "000002_v1.1.0", []tableColumns{
