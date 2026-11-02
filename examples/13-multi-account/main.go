@@ -52,6 +52,7 @@ import (
 	"github.com/libraz/go-oidc-provider/examples/internal/serve"
 	"github.com/libraz/go-oidc-provider/op"
 	"github.com/libraz/go-oidc-provider/op/interaction"
+	"github.com/libraz/go-oidc-provider/op/profile"
 	"github.com/libraz/go-oidc-provider/op/store"
 	"github.com/libraz/go-oidc-provider/op/storeadapter/inmem"
 )
@@ -79,6 +80,7 @@ func main() {
 		// A primary factor is what turns a browser into an account the
 		// chooser can list; without it /authorize has no interaction to
 		// hand the user to.
+		op.WithProfile(profile.OAuth21),
 		op.WithLoginFlow(op.LoginFlow{Primary: op.PrimaryPassword{Store: memStore.UserPasswords()}}),
 		// JSONDriver renders prompts (chooser, consent, factor) as JSON
 		// envelopes a SPA can consume directly. A server-rendered

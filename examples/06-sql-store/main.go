@@ -55,6 +55,7 @@ import (
 	"github.com/libraz/go-oidc-provider/examples/internal/devkeys"
 	"github.com/libraz/go-oidc-provider/examples/internal/serve"
 	"github.com/libraz/go-oidc-provider/op"
+	"github.com/libraz/go-oidc-provider/op/profile"
 	"github.com/libraz/go-oidc-provider/op/store"
 	oidcsql "github.com/libraz/go-oidc-provider/op/storeadapter/sql"
 )
@@ -78,8 +79,8 @@ func run() error {
 	keys := devkeys.MustEphemeral("sql-store-1")
 
 	dbPath := filepath.Join(os.TempDir(), "oidc-example-06.db")
-	// Pre-v1 schemas can evolve between checkouts; remove any prior file
-	// so a re-run under the new layout never collides with a stale DDL.
+	// The demo deletes its throwaway SQLite file on each run, so it always
+	// starts from the current schema.
 	// Production embedders track schema versions through their own
 	// migration tooling instead of throwing the database away.
 	_ = os.Remove(dbPath)
@@ -113,6 +114,7 @@ func run() error {
 		// The adapter's users table backs the password prompt: the same
 		// SQLite file holds the credential, the session, and every token
 		// record the flow goes on to write.
+		op.WithProfile(profile.OAuth21),
 		op.WithLoginFlow(op.LoginFlow{Primary: op.PrimaryPassword{Store: storage.UserPasswords()}}),
 		op.WithStaticClients(op.PublicClient{
 			ID:           "demo-spa",

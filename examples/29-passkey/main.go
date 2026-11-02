@@ -113,6 +113,7 @@ import (
 	"github.com/libraz/go-oidc-provider/examples/internal/webui"
 	"github.com/libraz/go-oidc-provider/op"
 	"github.com/libraz/go-oidc-provider/op/passkeykit"
+	"github.com/libraz/go-oidc-provider/op/profile"
 	"github.com/libraz/go-oidc-provider/op/storeadapter/inmem"
 )
 
@@ -209,6 +210,7 @@ func run() error {
 		op.WithStore(st),
 		op.WithKeyset(keys.Keyset()),
 		op.WithCookieKeys(keys.CookieKey),
+		op.WithProfile(profile.OAuth21),
 		op.WithLoginFlow(flow),
 		// Both halves of this example need it. The issuer is
 		// http://localhost:8080 and the RP's redirect_uri is on

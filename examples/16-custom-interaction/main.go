@@ -71,6 +71,7 @@ import (
 	"github.com/libraz/go-oidc-provider/examples/internal/serve"
 	"github.com/libraz/go-oidc-provider/op"
 	"github.com/libraz/go-oidc-provider/op/interaction"
+	"github.com/libraz/go-oidc-provider/op/profile"
 	"github.com/libraz/go-oidc-provider/op/store"
 	"github.com/libraz/go-oidc-provider/op/storeadapter/inmem"
 )
@@ -126,6 +127,7 @@ func main() {
 		// A Driver renders prompts, and prompts only exist because some
 		// step in the login flow asked for input. One password step is
 		// the smallest flow that gives this Driver something to render.
+		op.WithProfile(profile.OAuth21),
 		op.WithLoginFlow(op.LoginFlow{Primary: op.PrimaryPassword{Store: memStore.UserPasswords()}}),
 		op.WithInteractionDriver(localeAwareDriver{}),
 		op.WithStaticClients(op.PublicClient{

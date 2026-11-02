@@ -58,6 +58,7 @@ import (
 	"github.com/libraz/go-oidc-provider/examples/internal/devkeys"
 	"github.com/libraz/go-oidc-provider/examples/internal/serve"
 	"github.com/libraz/go-oidc-provider/op"
+	"github.com/libraz/go-oidc-provider/op/profile"
 	"github.com/libraz/go-oidc-provider/op/store"
 	"github.com/libraz/go-oidc-provider/op/storeadapter/inmem"
 )
@@ -87,6 +88,7 @@ func main() {
 		// The skip removes the consent screen, never the authentication
 		// step: the OP still has to know who the user is before it can
 		// create the grant on their behalf.
+		op.WithProfile(profile.OAuth21),
 		op.WithLoginFlow(op.LoginFlow{Primary: op.PrimaryPassword{Store: st.UserPasswords()}}),
 		op.WithStaticClients(
 			op.PublicClient{

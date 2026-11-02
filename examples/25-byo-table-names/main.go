@@ -55,6 +55,7 @@ import (
 	"github.com/libraz/go-oidc-provider/examples/internal/devkeys"
 	"github.com/libraz/go-oidc-provider/examples/internal/serve"
 	"github.com/libraz/go-oidc-provider/op"
+	"github.com/libraz/go-oidc-provider/op/profile"
 	"github.com/libraz/go-oidc-provider/op/store"
 	oidcsql "github.com/libraz/go-oidc-provider/op/storeadapter/sql"
 )
@@ -103,7 +104,6 @@ var naming = map[string]string{
 	"authn_lockouts":             "auth_authn_lockouts",
 	"ssf_streams":                "auth_ssf_streams",
 	"ssf_events":                 "auth_ssf_events",
-	"cascade_links":              "auth_cascade_links",
 }
 
 func main() {
@@ -116,8 +116,8 @@ func run() error {
 	keys := devkeys.MustEphemeral("byo-table-names-1")
 
 	dbPath := filepath.Join(os.TempDir(), "oidc-example-25.db")
-	// Pre-v1 schemas can evolve between checkouts; remove any prior file
-	// so a re-run never collides with a stale DDL. Production embedders
+	// The demo deletes its throwaway SQLite file on each run, so it always
+	// starts from the current schema. Production embedders
 	// track schema versions through their own migration tooling.
 	_ = os.Remove(dbPath)
 	dsn := "file:" + dbPath + "?_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)"
@@ -156,6 +156,7 @@ func run() error {
 		// The password prompt reads the renamed auth_users table through
 		// the adapter's store interface; the rename is invisible above
 		// this line, which is the whole point of WithNaming.
+		op.WithProfile(profile.OAuth21),
 		op.WithLoginFlow(op.LoginFlow{Primary: op.PrimaryPassword{Store: storage.UserPasswords()}}),
 		op.WithStaticClients(op.PublicClient{
 			ID:           "demo-spa",

@@ -17,6 +17,7 @@ import (
 
 	"github.com/libraz/go-oidc-provider/examples/internal/devkeys"
 	"github.com/libraz/go-oidc-provider/op"
+	"github.com/libraz/go-oidc-provider/op/profile"
 	"github.com/libraz/go-oidc-provider/op/store"
 	"github.com/libraz/go-oidc-provider/op/storeadapter/inmem"
 )
@@ -44,6 +45,7 @@ func buildProvider() (*op.Provider, *inmem.Store, []byte, error) {
 		// that one internal identity into a per-sector "sub". The
 		// password step is what produces the internal identity in the
 		// first place.
+		op.WithProfile(profile.OAuth21),
 		op.WithLoginFlow(op.LoginFlow{Primary: op.PrimaryPassword{Store: st.UserPasswords()}}),
 		op.WithPairwiseSubject(salt),
 		op.WithStaticClients(

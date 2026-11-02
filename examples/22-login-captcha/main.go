@@ -54,6 +54,7 @@ import (
 	"github.com/libraz/go-oidc-provider/examples/internal/serve"
 	"github.com/libraz/go-oidc-provider/examples/internal/webui"
 	"github.com/libraz/go-oidc-provider/op"
+	"github.com/libraz/go-oidc-provider/op/profile"
 	"github.com/libraz/go-oidc-provider/op/storeadapter/inmem"
 )
 
@@ -129,6 +130,7 @@ func run() error {
 		op.WithStore(st),
 		op.WithKeyset(keys.Keyset()),
 		op.WithCookieKeys(keys.CookieKey),
+		op.WithProfile(profile.OAuth21),
 		op.WithLoginFlow(flow),
 		op.WithSPAUI(op.SPAUI{
 			LoginMount: "/login",

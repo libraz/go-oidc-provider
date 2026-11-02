@@ -26,7 +26,7 @@
 //  1. Open the authorize URL in a browser and sign in as
 //     "demo" / "demo-password":
 //
-//     http://127.0.0.1:8080/oidc/auth?response_type=code&client_id=demo-rp&redirect_uri=http://127.0.0.1:5173/callback&scope=openid+profile&state=xyz
+//     http://127.0.0.1:8080/oidc/auth?response_type=code&client_id=demo-rp&redirect_uri=http://127.0.0.1:5173/callback&scope=openid+profile&state=xyz&code_challenge=E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM&code_challenge_method=S256
 //
 //  2. Copy the "code" query parameter off the failed redirect and
 //     exchange it, keeping the id_token from the response:
@@ -34,6 +34,7 @@
 //     curl -s -u demo-rp:bcl-demo-secret-rotate-me \
 //     -d grant_type=authorization_code -d code=$CODE \
 //     -d redirect_uri=http://127.0.0.1:5173/callback \
+//     -d code_verifier=dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk \
 //     http://127.0.0.1:8080/oidc/token
 //
 //  3. End the session, IN THE SAME BROWSER — paste the URL below into
@@ -82,6 +83,7 @@ import (
 	"github.com/libraz/go-oidc-provider/examples/internal/devkeys"
 	"github.com/libraz/go-oidc-provider/examples/internal/serve"
 	"github.com/libraz/go-oidc-provider/op"
+	"github.com/libraz/go-oidc-provider/op/profile"
 	"github.com/libraz/go-oidc-provider/op/store"
 	"github.com/libraz/go-oidc-provider/op/storeadapter/inmem"
 )
@@ -112,6 +114,7 @@ func main() {
 		// Back-channel logout terminates a session, so the demo needs a
 		// way to establish one first: the authorize round-trip that
 		// seeds the session runs through this password step.
+		op.WithProfile(profile.OAuth21),
 		op.WithLoginFlow(op.LoginFlow{Primary: op.PrimaryPassword{Store: memStore.UserPasswords()}}),
 		// Dev / CI-only: narrow the deliverer's SSRF gate to the loopback
 		// hosts so the http://127.0.0.1 backchannel_logout_uri below is

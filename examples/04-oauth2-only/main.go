@@ -63,6 +63,7 @@ import (
 	"github.com/libraz/go-oidc-provider/examples/internal/devkeys"
 	"github.com/libraz/go-oidc-provider/examples/internal/serve"
 	"github.com/libraz/go-oidc-provider/op"
+	"github.com/libraz/go-oidc-provider/op/profile"
 	"github.com/libraz/go-oidc-provider/op/store"
 	"github.com/libraz/go-oidc-provider/op/storeadapter/inmem"
 )
@@ -86,6 +87,7 @@ func main() {
 		// The OIDC client still needs an interactive password prompt
 		// for /authorize; the OAuth-only client uses the same login
 		// flow because both sit behind the same /authorize endpoint.
+		op.WithProfile(profile.OAuth21),
 		op.WithLoginFlow(op.LoginFlow{
 			Primary: op.PrimaryPassword{Store: st.UserPasswords()},
 		}),

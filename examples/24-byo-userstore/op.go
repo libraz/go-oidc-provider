@@ -26,6 +26,7 @@ import (
 
 	"github.com/libraz/go-oidc-provider/examples/internal/devkeys"
 	"github.com/libraz/go-oidc-provider/op"
+	"github.com/libraz/go-oidc-provider/op/profile"
 	oidcsql "github.com/libraz/go-oidc-provider/op/storeadapter/sql"
 
 	databasesql "database/sql"
@@ -60,6 +61,7 @@ func buildProvider(ctx context.Context, db *databasesql.DB) (*op.Provider, error
 		op.WithStore(durable),
 		op.WithKeyset(keys.Keyset()),
 		op.WithCookieKeys(keys.CookieKey),
+		op.WithProfile(profile.OAuth21),
 		op.WithLoginFlow(flow),
 		op.WithStaticClients(op.PublicClient{
 			ID:           clientID,

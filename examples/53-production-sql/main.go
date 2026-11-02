@@ -66,6 +66,7 @@ import (
 	_ "modernc.org/sqlite"
 
 	"github.com/libraz/go-oidc-provider/op"
+	"github.com/libraz/go-oidc-provider/op/profile"
 	oidcsql "github.com/libraz/go-oidc-provider/op/storeadapter/sql"
 )
 
@@ -193,6 +194,7 @@ func buildOptions(cfg config, storage *oidcsql.Store, users *userTable) ([]op.Op
 		op.WithCookieKeys(cookieKeys...),
 		// The claims behind /userinfo and the ID token come from the same
 		// users table the password is checked against.
+		op.WithProfile(profile.OAuth21),
 		op.WithLoginFlow(op.LoginFlow{Primary: op.PrimaryPassword{
 			Store:         users,
 			LegacySchemes: []op.PasswordHashScheme{op.BcryptHashScheme()},
@@ -228,8 +230,9 @@ func reloadOnHangup(ctx context.Context, handler *op.Reloadable, build func() ([
 }
 
 // sweepExpiredRows deletes expired OP rows at startup and once an hour.
-// Run it on exactly one replica (a leader-elected worker or a cron job
-// when there are several); it must never be reachable from an HTTP route.
+// One replica running it is enough; concurrent sweeps on several replicas
+// are safe (the DELETEs are idempotent) but redundant. It must never be
+// reachable from an HTTP route.
 func sweepExpiredRows(ctx context.Context, storage *oidcsql.Store) {
 	err := storage.RunGC(ctx, time.Hour, func(stats oidcsql.GCStats, err error) {
 		if err != nil {

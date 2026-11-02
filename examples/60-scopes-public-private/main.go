@@ -49,6 +49,7 @@ import (
 	"github.com/libraz/go-oidc-provider/examples/internal/devkeys"
 	"github.com/libraz/go-oidc-provider/examples/internal/serve"
 	"github.com/libraz/go-oidc-provider/op"
+	"github.com/libraz/go-oidc-provider/op/profile"
 	"github.com/libraz/go-oidc-provider/op/store"
 	"github.com/libraz/go-oidc-provider/op/storeadapter/inmem"
 )
@@ -85,6 +86,7 @@ func main() {
 		// Consent is where the visibility flag does its second job, and
 		// consent only happens after a login. One password step is the
 		// smallest flow that gets an authorization request that far.
+		op.WithProfile(profile.OAuth21),
 		op.WithLoginFlow(op.LoginFlow{Primary: op.PrimaryPassword{Store: memStore.UserPasswords()}}),
 		op.WithScope(op.PublicScope("profile", "Access your basic profile")),
 		op.WithScope(op.PublicScope("billing.read", "Read your billing data")),

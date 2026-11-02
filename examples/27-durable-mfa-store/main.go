@@ -113,6 +113,7 @@ import (
 	"github.com/libraz/go-oidc-provider/examples/internal/serve"
 	"github.com/libraz/go-oidc-provider/examples/internal/webui"
 	"github.com/libraz/go-oidc-provider/op"
+	"github.com/libraz/go-oidc-provider/op/profile"
 	"github.com/libraz/go-oidc-provider/op/store"
 	oidcsql "github.com/libraz/go-oidc-provider/op/storeadapter/sql"
 	"github.com/libraz/go-oidc-provider/op/totpkit"
@@ -208,6 +209,7 @@ func run() error {
 		op.WithStore(storage),
 		op.WithKeyset(keys.Keyset()),
 		op.WithCookieKeys(keys.CookieKey),
+		op.WithProfile(profile.OAuth21),
 		op.WithLoginFlow(flow),
 		// The cross-factor brute-force counter shares the same database
 		// as everything else, so the guess budget is one budget across

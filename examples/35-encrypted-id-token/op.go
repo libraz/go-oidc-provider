@@ -23,6 +23,7 @@ import (
 
 	"github.com/libraz/go-oidc-provider/examples/internal/devkeys"
 	"github.com/libraz/go-oidc-provider/op"
+	"github.com/libraz/go-oidc-provider/op/profile"
 	"github.com/libraz/go-oidc-provider/op/store"
 	"github.com/libraz/go-oidc-provider/op/storeadapter/inmem"
 )
@@ -73,6 +74,7 @@ func buildProvider(opEncPriv *rsa.PrivateKey, rpEncPub *rsa.PublicKey) (*op.Prov
 		op.WithStore(st),
 		op.WithKeyset(keys.Keyset()),
 		op.WithCookieKeys(keys.CookieKey),
+		op.WithProfile(profile.OAuth21),
 		op.WithLoginFlow(flow),
 		// WithEncryptionKeyset publishes the OP's use=enc key on
 		// /.well-known/jwks.json and wires the inbound JWE decrypter,

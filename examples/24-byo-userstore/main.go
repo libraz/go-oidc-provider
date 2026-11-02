@@ -109,8 +109,8 @@ func main() {
 
 func run() error {
 	dbPath := filepath.Join(os.TempDir(), "oidc-example-24.db")
-	// Pre-v1 schemas can evolve between checkouts; remove any prior file
-	// so a re-run under the new layout never collides with a stale DDL.
+	// The demo deletes its throwaway SQLite file on each run, so it always
+	// starts from the current schema.
 	// Production embedders track schema versions through their own
 	// migration tooling instead of throwing the database away.
 	_ = os.Remove(dbPath)

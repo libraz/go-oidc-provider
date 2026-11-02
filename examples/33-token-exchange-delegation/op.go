@@ -18,6 +18,7 @@ import (
 
 	"github.com/libraz/go-oidc-provider/examples/internal/devkeys"
 	"github.com/libraz/go-oidc-provider/op"
+	"github.com/libraz/go-oidc-provider/op/profile"
 	"github.com/libraz/go-oidc-provider/op/store"
 	"github.com/libraz/go-oidc-provider/op/storeadapter/inmem"
 	"github.com/libraz/go-oidc-provider/op/testkit"
@@ -47,6 +48,7 @@ func buildProvider(issuer string) (*op.Provider, error) {
 		// onto /interaction and then, despite the driver's name,
 		// submits the consent itself (completeConsentIfPrompted
 		// approves every requested scope).
+		op.WithProfile(profile.OAuth21),
 		op.WithLoginFlow(op.LoginFlow{Primary: op.ExternalStep{
 			Authenticator: testkit.SubjectAuthenticator{},
 			KindLabel:     "testkit.subject",

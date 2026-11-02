@@ -105,6 +105,7 @@ import (
 	"github.com/libraz/go-oidc-provider/examples/internal/rpkit"
 	"github.com/libraz/go-oidc-provider/examples/internal/serve"
 	"github.com/libraz/go-oidc-provider/op"
+	"github.com/libraz/go-oidc-provider/op/profile"
 	"github.com/libraz/go-oidc-provider/op/store"
 	oidcdynamo "github.com/libraz/go-oidc-provider/op/storeadapter/dynamodb"
 )
@@ -181,6 +182,7 @@ func run() error {
 		op.WithStore(storage),
 		op.WithKeyset(keys.Keyset()),
 		op.WithCookieKeys(keys.CookieKey),
+		op.WithProfile(profile.OAuth21),
 		op.WithLoginFlow(flow),
 		op.WithStaticClients(op.PublicClient{
 			ID:           clientID,
