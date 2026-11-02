@@ -37,7 +37,7 @@ func TestSignedJWT_ES256Key(t *testing.T) {
 func TestSignedJWT_NonES256SignerMismatch(t *testing.T) {
 	t.Parallel()
 
-	rsaKey, err := rsa.GenerateKey(rand.Reader, 2048)
+	rsaKey, err := rsa.GenerateKey(rand.Reader, 1024) //nolint:gosec // deliberately below the 2048-bit floor
 	if err != nil {
 		t.Fatalf("generate rsa key: %v", err)
 	}
@@ -51,7 +51,7 @@ func TestSignedJWT_NonES256SignerMismatch(t *testing.T) {
 	}
 
 	cases := map[string]crypto.Signer{
-		"rsa":         rsaKey,
+		"rsa 1024":    rsaKey,
 		"ed25519":     edKey,
 		"ecdsa p-384": p384Key,
 		"nil":         nil,

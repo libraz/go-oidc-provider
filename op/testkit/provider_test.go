@@ -9,6 +9,8 @@ import (
 	"testing"
 	"time"
 
+	josev4 "github.com/go-jose/go-jose/v4"
+
 	"github.com/libraz/go-oidc-provider/op"
 	"github.com/libraz/go-oidc-provider/op/testkit"
 )
@@ -167,6 +169,47 @@ func TestSignedJWT_VerifiesAgainstJWKS(t *testing.T) {
 	}
 	if header["alg"] != "ES256" {
 		t.Fatalf("alg=%v want ES256", header["alg"])
+	}
+}
+
+// TestWithSigningAlgorithm_RS256 checks that an RS256 provider advertises an
+// RSA signing key and that SignedJWT output verifies against it.
+func TestWithSigningAlgorithm_RS256(t *testing.T) {
+	t.Parallel()
+
+	tk := testkit.NewProvider(t, testkit.WithSigningAlgorithm(op.AlgRS256))
+
+	disc := getJSON(t, tk.Server.URL+"/.well-known/openid-configuration")
+	jwksURI, _ := disc["jwks_uri"].(string)
+	raw := getJSON(t, tk.Server.URL+strings.TrimPrefix(jwksURI, tk.Issuer))
+	keysAny, _ := raw["keys"].([]any)
+	var found map[string]any
+	for _, k := range keysAny {
+		m, _ := k.(map[string]any)
+		if m["kid"] == tk.SigningKey.KeyID {
+			found = m
+		}
+	}
+	if found == nil {
+		t.Fatalf("active kid %q not in JWKS", tk.SigningKey.KeyID)
+	}
+	if found["kty"] != "RSA" || found["alg"] != "RS256" {
+		t.Fatalf("jwks key kty=%v alg=%v, want RSA/RS256", found["kty"], found["alg"])
+	}
+
+	token, err := tk.SignedJWT(map[string]any{"iss": tk.Issuer})
+	if err != nil {
+		t.Fatalf("SignedJWT: %v", err)
+	}
+	if hdr := decodeHeader(t, strings.Split(token, ".")[0]); hdr["alg"] != "RS256" {
+		t.Fatalf("alg=%v want RS256", hdr["alg"])
+	}
+	jws, err := josev4.ParseSigned(token, []josev4.SignatureAlgorithm{josev4.RS256})
+	if err != nil {
+		t.Fatalf("ParseSigned: %v", err)
+	}
+	if _, err := jws.Verify(tk.SigningKey.Signer.Public()); err != nil {
+		t.Fatalf("verify: %v", err)
 	}
 }
 

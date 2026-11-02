@@ -3,6 +3,7 @@ package testkit
 import (
 	"crypto"
 	"crypto/rand"
+	"crypto/rsa"
 	"crypto/tls"
 	"crypto/x509"
 	"net/http"
@@ -115,6 +116,7 @@ type providerConfig struct {
 	issuer string
 	kid    string
 	clock  op.Clock
+	alg    op.SigningAlgorithm
 	extra  []op.Option
 }
 
@@ -141,6 +143,16 @@ func WithKeyID(kid string) Option {
 // assertions that involve token lifetimes.
 func WithClock(clock op.Clock) Option {
 	return func(c *providerConfig) { c.clock = clock }
+}
+
+// WithSigningAlgorithm selects the algorithm the provider signs with.
+// [op.AlgRS256] makes the testkit keyset an RSA 2048 key (generated once
+// per process) and passes [op.WithSigningAlgorithm] to [op.New]; the
+// default stays ES256.
+//
+// Stable since v1.5.
+func WithSigningAlgorithm(alg op.SigningAlgorithm) Option {
+	return func(c *providerConfig) { c.alg = alg }
 }
 
 // WithOptions appends extra [op.Option] values to the ones the testkit
@@ -210,7 +222,12 @@ func NewProvider(tb testing.TB, opts ...Option) *Provider {
 		opt(cfg)
 	}
 
-	signKey := generateSigningKey(tb, cfg.kid)
+	var signKey op.SigningKey
+	if cfg.alg == op.AlgRS256 {
+		signKey = rs256SigningKey(tb, cfg.kid)
+	} else {
+		signKey = generateSigningKey(tb, cfg.kid)
+	}
 	var storeOpts []inmem.Option
 	if cfg.clock != nil {
 		storeOpts = append(storeOpts, inmem.WithClock(cfg.clock))
@@ -223,6 +240,9 @@ func NewProvider(tb testing.TB, opts ...Option) *Provider {
 	}
 	// The testkit's settings are defaults, so a caller-supplied option
 	// replaces the matching one (cookie keys, driver, clock, ...).
+	if cfg.alg == op.AlgRS256 {
+		defaults = append(defaults, op.WithSigningAlgorithm(op.AlgRS256))
+	}
 	provider, err := op.New(append([]op.Option{op.WithDefaults(defaults...)}, cfg.extra...)...)
 	if err != nil {
 		tb.Fatalf("testkit: op.New: %v", err)
@@ -274,6 +294,26 @@ func generateSigningKey(tb testing.TB, kid string) op.SigningKey {
 		tb.Fatalf("testkit: generate signing key: %v", err)
 	}
 	return op.SigningKey{KeyID: entry.KeyID, Signer: entry.Signer}
+}
+
+// rs256Key is the RSA 2048 key shared by every RS256 provider in the
+// process; generating one per provider would dominate test runtime.
+var rs256Key = sync.OnceValues(func() (*rsa.PrivateKey, error) { //nolint:gochecknoglobals // process-wide key cache; safe by sync.OnceValues.
+	entry, err := keys.GenerateRS256("testkit-rs256")
+	if err != nil {
+		return nil, err
+	}
+	return entry.Signer.(*rsa.PrivateKey), nil //nolint:forcetypeassert // GenerateRS256 always returns *rsa.PrivateKey.
+})
+
+// rs256SigningKey wraps the shared RSA key under the supplied kid.
+func rs256SigningKey(tb testing.TB, kid string) op.SigningKey {
+	tb.Helper()
+	k, err := rs256Key()
+	if err != nil {
+		tb.Fatalf("testkit: generate rs256 signing key: %v", err)
+	}
+	return op.SigningKey{KeyID: kid, Signer: k}
 }
 
 // NewSigningKey returns a fresh ECDSA P-256 [op.SigningKey] stamped
