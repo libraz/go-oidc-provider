@@ -18,7 +18,7 @@ type sessionStore struct {
 	clock        Clock
 	m            map[string]*store.Session
 	byGroup      map[string]map[string]struct{} // ChooserGroupID -> session ids
-	savesSinceGC uint32
+	savesSinceGC sweeper
 }
 
 func newSessionStore(c Clock) *sessionStore {
@@ -74,15 +74,12 @@ func (s *sessionStore) gcLocked(now time.Time) {
 			s.dropLocked(id)
 		}
 	}
-	s.savesSinceGC = 0
 }
 
 func (s *sessionStore) maybeGCLocked(now time.Time) {
-	s.savesSinceGC++
-	if !sweepDue(s.savesSinceGC, fullGCInterval, len(s.m)) {
-		return
+	if s.savesSinceGC.due(len(s.m)) {
+		s.gcLocked(now)
 	}
-	s.gcLocked(now)
 }
 
 func (s *sessionStore) Find(_ context.Context, id string) (*store.Session, error) {

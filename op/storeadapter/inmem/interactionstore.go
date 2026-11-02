@@ -17,7 +17,7 @@ type interactionStore struct {
 	mu           sync.RWMutex
 	clock        Clock
 	m            map[string]*store.Interaction
-	savesSinceGC uint32
+	savesSinceGC sweeper
 }
 
 func newInteractionStore(c Clock) *interactionStore {
@@ -45,15 +45,12 @@ func (s *interactionStore) gcLocked(now time.Time) {
 			delete(s.m, id)
 		}
 	}
-	s.savesSinceGC = 0
 }
 
 func (s *interactionStore) maybeGCLocked(now time.Time) {
-	s.savesSinceGC++
-	if !sweepDue(s.savesSinceGC, fullGCInterval, len(s.m)) {
-		return
+	if s.savesSinceGC.due(len(s.m)) {
+		s.gcLocked(now)
 	}
-	s.gcLocked(now)
 }
 
 func (s *interactionStore) CompareAndSwap(

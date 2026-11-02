@@ -16,9 +16,8 @@ import (
 // mutate it freely, and every Put clones the supplied pointer so a later
 // mutation by the caller does not leak into the map.
 //
-// The map is keyed on the hex encoding of the credential ID — a stable
-// string we can use as a Go map key without copying the byte slice.
-// The conversion is internal and never escapes; callers continue to
+// The map is keyed on string(credentialID) — a stable string usable as a Go
+// map key. The conversion is internal and never escapes; callers continue to
 // pass raw [][]byte values through the public API.
 type passkeyStore struct {
 	mu sync.RWMutex

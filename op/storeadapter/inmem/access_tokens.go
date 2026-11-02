@@ -17,12 +17,13 @@ import (
 // sweep drops rows whose ExpiresAt is past the supplied cutoff,
 // bounding storage to the active TTL plus the configured grace.
 type accessTokenStore struct {
-	mu sync.RWMutex
-	m  map[string]*store.AccessTokenRecord
+	mu  sync.RWMutex
+	m   map[string]*store.AccessTokenRecord
+	idx tokenIndex
 }
 
 func newAccessTokenStore() *accessTokenStore {
-	return &accessTokenStore{m: make(map[string]*store.AccessTokenRecord)}
+	return &accessTokenStore{m: make(map[string]*store.AccessTokenRecord), idx: newTokenIndex()}
 }
 
 // Register implements [store.AccessTokenRegistry].
@@ -35,7 +36,9 @@ func (s *accessTokenStore) Register(_ context.Context, rec store.AccessTokenReco
 	if _, exists := s.m[rec.JTI]; exists {
 		return store.ErrAlreadyExists
 	}
-	s.m[rec.JTI] = cloneAccessToken(&rec)
+	stored := cloneAccessToken(&rec)
+	s.m[rec.JTI] = stored
+	accessTokenRowOps.track(s.idx, rec.JTI, stored)
 	return nil
 }
 
@@ -82,18 +85,7 @@ func (s *accessTokenStore) RevokeByGrant(_ context.Context, grantID string) (int
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	n := 0
-	for _, rec := range s.m {
-		if rec.GrantID != grantID {
-			continue
-		}
-		if rec.Revoked {
-			continue
-		}
-		rec.Revoked = true
-		n++
-	}
-	return n, nil
+	return revokeIndexed(accessTokenRowOps, s.m, s.idx.byGrant[grantID], matchAnyToken), nil
 }
 
 // RevokeByClient implements [store.RevokeByClient]. The DCR delete
@@ -106,11 +98,7 @@ func (s *accessTokenStore) RevokeByClient(_ context.Context, clientID string) er
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	for _, rec := range s.m {
-		if rec.ClientID == clientID && !rec.Revoked {
-			rec.Revoked = true
-		}
-	}
+	revokeIndexed(accessTokenRowOps, s.m, s.idx.byClient[clientID], matchAnyToken)
 	return nil
 }
 
@@ -121,17 +109,31 @@ func (s *accessTokenStore) RevokeByClient(_ context.Context, clientID string) er
 func (s *accessTokenStore) GC(_ context.Context, cutoff time.Time) (int, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	n := 0
-	for jti, rec := range s.m {
-		if rec.ExpiresAt.IsZero() {
-			continue
-		}
-		if rec.ExpiresAt.Before(cutoff) {
-			delete(s.m, jti)
-			n++
-		}
-	}
-	return n, nil
+	return gcRows(accessTokenRowOps, s.m, s.idx, cutoff), nil
+}
+
+// accessTokenRowOps adapts [store.AccessTokenRecord] to the shared token-row helpers.
+//
+//nolint:gochecknoglobals // field accessors; immutable after package init.
+var accessTokenRowOps = tokenRowOps[*store.AccessTokenRecord]{
+	grantID:    func(r *store.AccessTokenRecord) string { return r.GrantID },
+	clientID:   func(r *store.AccessTokenRecord) string { return r.ClientID },
+	expiresAt:  func(r *store.AccessTokenRecord) time.Time { return r.ExpiresAt },
+	revoked:    func(r *store.AccessTokenRecord) bool { return r.Revoked },
+	setRevoked: func(r *store.AccessTokenRecord) { r.Revoked = true },
+}
+
+// matchAnyToken accepts every row of an index bucket: the index key already
+// fixed the attribute being matched.
+func matchAnyToken[V any](V) bool { return true }
+
+// overlay returns the transactional view of the registry; a commit keeps the
+// grant and client indexes in step with the rows it writes and drops.
+func (s *accessTokenStore) overlay() *overlay[*store.AccessTokenRecord] {
+	o := newOverlay(s.m, cloneAccessToken)
+	o.onPut = func(key string, rec *store.AccessTokenRecord) { accessTokenRowOps.track(s.idx, key, rec) }
+	o.onDrop = func(key string, rec *store.AccessTokenRecord) { accessTokenRowOps.untrack(s.idx, key, rec) }
+	return o
 }
 
 func cloneAccessToken(rec *store.AccessTokenRecord) *store.AccessTokenRecord {

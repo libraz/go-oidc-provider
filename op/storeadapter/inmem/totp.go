@@ -52,14 +52,7 @@ func (s *totpStore) Put(_ context.Context, r *store.TOTPRecord) error {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	version, err := s.versions.next()
-	if err != nil {
-		return err
-	}
-	stored := cloneTOTPRecord(r)
-	stored.Version = version
-	s.m[r.Subject] = stored
-	return nil
+	return s.putNextLocked(cloneTOTPRecord(r))
 }
 
 // CompareAndSwap implements [store.TOTPStore].
@@ -76,13 +69,18 @@ func (s *totpStore) CompareAndSwap(_ context.Context, previous, next *store.TOTP
 	if !ok || current.Version != previous.Version || !reflect.DeepEqual(current, previous) {
 		return store.ErrAlreadyConsumed
 	}
+	return s.putNextLocked(cloneTOTPRecord(next))
+}
+
+// putNextLocked stamps the next version on stored, an already-owned copy, and
+// stores it under its Subject. The caller must hold s.mu for writing.
+func (s *totpStore) putNextLocked(stored *store.TOTPRecord) error {
 	version, err := s.versions.next()
 	if err != nil {
 		return err
 	}
-	stored := cloneTOTPRecord(next)
 	stored.Version = version
-	s.m[next.Subject] = stored
+	s.m[stored.Subject] = stored
 	return nil
 }
 
@@ -109,14 +107,7 @@ func (s *totpStore) Accept(_ context.Context, r *store.TOTPRecord) error {
 	if r.LastAcceptedStep == 0 || current.LastAcceptedStep >= r.LastAcceptedStep {
 		return store.ErrAlreadyConsumed
 	}
-	version, err := s.versions.next()
-	if err != nil {
-		return err
-	}
-	stored := cloneTOTPRecord(r)
-	stored.Version = version
-	s.m[r.Subject] = stored
-	return nil
+	return s.putNextLocked(cloneTOTPRecord(r))
 }
 
 // Delete implements [store.TOTPStore].

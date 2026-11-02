@@ -20,6 +20,7 @@ type ssfState struct {
 	streams  map[string]*store.SSFStream
 	byClient map[string]string // client ID -> stream ID
 	events   map[string]*store.SSFEvent
+	byStream map[string]map[string]struct{} // stream ID -> JTIs of its queued events
 }
 
 func newSSFState() *ssfState {
@@ -27,6 +28,34 @@ func newSSFState() *ssfState {
 		streams:  make(map[string]*store.SSFStream),
 		byClient: make(map[string]string),
 		events:   make(map[string]*store.SSFEvent),
+		byStream: make(map[string]map[string]struct{}),
+	}
+}
+
+// setEvent stores ev under its JTI and indexes it by stream. The caller
+// holds mu.
+func (st *ssfState) setEvent(ev *store.SSFEvent) {
+	st.events[ev.JTI] = ev
+	ids := st.byStream[ev.StreamID]
+	if ids == nil {
+		ids = make(map[string]struct{})
+		st.byStream[ev.StreamID] = ids
+	}
+	ids[ev.JTI] = struct{}{}
+}
+
+// deleteEvent removes the event queued under jti and its stream index
+// entry. The caller holds mu.
+func (st *ssfState) deleteEvent(jti string) {
+	ev, ok := st.events[jti]
+	if !ok {
+		return
+	}
+	delete(st.events, jti)
+	ids := st.byStream[ev.StreamID]
+	delete(ids, jti)
+	if len(ids) == 0 {
+		delete(st.byStream, ev.StreamID)
 	}
 }
 
@@ -109,16 +138,14 @@ func (s *ssfStreamStore) Update(_ context.Context, in *store.SSFStream, notice *
 	next := cloneSSFStream(in)
 	next.ClientID = cur.ClientID
 	s.st.streams[in.ID] = next
-	for jti, ev := range s.st.events {
-		if ev.StreamID != in.ID {
-			continue
-		}
+	for jti := range s.st.byStream[in.ID] {
+		ev := s.st.events[jti]
 		ev.Delivery = next.Delivery.Method
 		if ev.Kind != store.SSFEventKindEvent {
 			continue
 		}
 		if next.Status == store.SSFStreamDisabled {
-			delete(s.st.events, jti)
+			s.st.deleteEvent(jti)
 			continue
 		}
 		ev.Held = next.Status == store.SSFStreamPaused
@@ -138,10 +165,8 @@ func (s *ssfStreamStore) Delete(_ context.Context, id string) error {
 	}
 	delete(s.st.streams, id)
 	delete(s.st.byClient, rec.ClientID)
-	for jti, ev := range s.st.events {
-		if ev.StreamID == id {
-			delete(s.st.events, jti)
-		}
+	for jti := range s.st.byStream[id] {
+		s.st.deleteEvent(jti)
 	}
 	return nil
 }
@@ -166,13 +191,13 @@ func (s *ssfEventStore) Enqueue(_ context.Context, in *store.SSFEvent) error {
 // of the same control Kind. The caller holds mu.
 func (st *ssfState) putEvent(in *store.SSFEvent) {
 	if in.Kind != store.SSFEventKindEvent {
-		for jti, ev := range st.events {
-			if ev.StreamID == in.StreamID && ev.Kind == in.Kind {
-				delete(st.events, jti)
+		for jti := range st.byStream[in.StreamID] {
+			if st.events[jti].Kind == in.Kind {
+				st.deleteEvent(jti)
 			}
 		}
 	}
-	st.events[in.JTI] = cloneSSFEvent(in)
+	st.setEvent(cloneSSFEvent(in))
 }
 
 // ssfEventMatchesStream reports whether ev carries the tags s's current
@@ -193,25 +218,25 @@ func (s *ssfEventStore) ClaimDue(_ context.Context, now time.Time, n, perStream 
 	}
 	s.st.mu.Lock()
 	defer s.st.mu.Unlock()
-	var due []*store.SSFEvent
-	for _, ev := range s.st.events {
-		if ev.Delivery == store.SSFDeliveryPush && !ev.Held && !ev.NextAttemptAt.After(now) {
-			due = append(due, ev)
-		}
-	}
-	slices.SortFunc(due, func(a, b *store.SSFEvent) int {
+	byDueOrder := func(a, b *store.SSFEvent) int {
 		return cmp.Or(a.NextAttemptAt.Compare(b.NextAttemptAt), cmp.Compare(a.JTI, b.JTI))
-	})
-	taken := make(map[string]int)
-	out := make([]*store.SSFEvent, 0, min(n, len(due)))
-	for _, ev := range due {
-		if len(out) == n {
-			break
+	}
+	// Only a stream's first perStream due events can ever be claimed, so
+	// each stream contributes at most that many candidates.
+	var candidates []*store.SSFEvent
+	for _, jtis := range s.st.byStream {
+		var due []*store.SSFEvent
+		for jti := range jtis {
+			if ev := s.st.events[jti]; ev.Delivery == store.SSFDeliveryPush && !ev.Held && !ev.NextAttemptAt.After(now) {
+				due = append(due, ev)
+			}
 		}
-		if taken[ev.StreamID] == perStream {
-			continue
-		}
-		taken[ev.StreamID]++
+		slices.SortFunc(due, byDueOrder)
+		candidates = append(candidates, due[:min(perStream, len(due))]...)
+	}
+	slices.SortFunc(candidates, byDueOrder)
+	out := make([]*store.SSFEvent, 0, min(n, len(candidates)))
+	for _, ev := range candidates[:min(n, len(candidates))] {
 		ev.NextAttemptAt = now.Add(lease)
 		out = append(out, cloneSSFEvent(ev))
 	}
@@ -235,7 +260,7 @@ func (s *ssfEventStore) Ack(_ context.Context, streamID string, jtis []string) e
 	defer s.st.mu.Unlock()
 	for _, jti := range jtis {
 		if ev, ok := s.st.events[jti]; ok && ev.StreamID == streamID {
-			delete(s.st.events, jti)
+			s.st.deleteEvent(jti)
 		}
 	}
 	return nil
@@ -248,8 +273,8 @@ func (s *ssfEventStore) Pending(_ context.Context, streamID string, n int) ([]*s
 	s.st.mu.Lock()
 	defer s.st.mu.Unlock()
 	var queued []*store.SSFEvent
-	for _, ev := range s.st.events {
-		if ev.StreamID == streamID && ev.Delivery == store.SSFDeliveryPoll && !ev.Held {
+	for jti := range s.st.byStream[streamID] {
+		if ev := s.st.events[jti]; ev.Delivery == store.SSFDeliveryPoll && !ev.Held {
 			queued = append(queued, ev)
 		}
 	}
@@ -271,7 +296,7 @@ func (s *ssfEventStore) DeleteExpired(_ context.Context, now time.Time) (int, er
 	n := 0
 	for jti, ev := range s.st.events {
 		if !ev.ExpiresAt.After(now) {
-			delete(s.st.events, jti)
+			s.st.deleteEvent(jti)
 			n++
 		}
 	}

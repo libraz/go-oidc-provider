@@ -20,7 +20,7 @@ type cibaRequestStore struct {
 	mu           sync.RWMutex
 	clock        Clock
 	m            map[string]*store.CIBARequest // key: hashKey(auth_req_id)
-	savesSinceGC uint32
+	savesSinceGC sweeper
 }
 
 func newCIBARequestStore(c Clock) *cibaRequestStore {
@@ -60,18 +60,15 @@ func (s *cibaRequestStore) gcLocked(now time.Time) {
 			delete(s.m, key)
 		}
 	}
-	s.savesSinceGC = 0
 }
 
 // maybeGCLocked runs a full sweep once every [fullGCInterval]
 // saves, amortising the sweep over the saves that made it necessary
 // instead of paying O(total requests) on each one.
 func (s *cibaRequestStore) maybeGCLocked(now time.Time) {
-	s.savesSinceGC++
-	if !sweepDue(s.savesSinceGC, fullGCInterval, len(s.m)) {
-		return
+	if s.savesSinceGC.due(len(s.m)) {
+		s.gcLocked(now)
 	}
-	s.gcLocked(now)
 }
 
 // deleteExpiredKeyLocked evicts the record stored under key when it has
@@ -80,13 +77,9 @@ func (s *cibaRequestStore) maybeGCLocked(now time.Time) {
 // amortised sweep alone would leave that collision standing for up to
 // [fullGCInterval] saves.
 func (s *cibaRequestStore) deleteExpiredKeyLocked(key string, now time.Time) {
-	rec, ok := s.m[key]
-	if !ok {
-		return
-	}
-	if patterns.IsExpiredStrict(rec.ExpiresAt, now) {
-		delete(s.m, key)
-	}
+	evictIf(s.m, key, func(rec *store.CIBARequest) bool {
+		return patterns.IsExpiredStrict(rec.ExpiresAt, now)
+	})
 }
 
 func (s *cibaRequestStore) FindByAuthReqID(_ context.Context, authReqID string) (*store.CIBARequest, error) {

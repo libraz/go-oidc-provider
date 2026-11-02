@@ -3,10 +3,10 @@ package inmem
 import (
 	"context"
 	"errors"
-	"maps"
 	"time"
 
 	"github.com/libraz/go-oidc-provider/op/store"
+	"github.com/libraz/go-oidc-provider/op/storeadapter/patterns"
 )
 
 // This file holds the transactional staging for the three auxiliary
@@ -37,6 +37,11 @@ type overlay[V any] struct {
 	clone   func(V) V
 	written map[string]V
 	deleted map[string]struct{}
+
+	// onPut and onDrop, when set, run for every row a commit writes into or
+	// removes from base, so secondary indexes follow the primary map.
+	onPut  func(key string, rec V)
+	onDrop func(key string, rec V)
 }
 
 func newOverlay[V any](base map[string]V, clone func(V) V) *overlay[V] {
@@ -93,9 +98,17 @@ func (s *overlay[V]) iter(fn func(string, V)) {
 
 func (s *overlay[V]) flushLocked() {
 	for key := range s.deleted {
+		if rec, ok := s.base[key]; ok && s.onDrop != nil {
+			s.onDrop(key, rec)
+		}
 		delete(s.base, key)
 	}
-	maps.Copy(s.base, s.written)
+	for key, rec := range s.written {
+		s.base[key] = rec
+		if s.onPut != nil {
+			s.onPut(key, rec)
+		}
+	}
 }
 
 func (s *overlay[V]) clear() {
@@ -161,18 +174,8 @@ func (s txAccessTokens) RevokeByGrant(ctx context.Context, grantID string) (int,
 	if grantID == "" {
 		return 0, nil
 	}
-	st := s.tx.atStaging
-	n := 0
-	st.iter(func(jti string, rec *store.AccessTokenRecord) {
-		if rec.GrantID != grantID || rec.Revoked {
-			return
-		}
-		updated := cloneAccessToken(rec)
-		updated.Revoked = true
-		st.stage(jti, updated)
-		n++
-	})
-	return n, nil
+	ids := s.tx.owner.accessTokens.idx.byGrant[grantID]
+	return revokeStaged(accessTokenRowOps, s.tx.atStaging, cloneAccessToken, ids, matchAnyToken), nil
 }
 
 func (s txAccessTokens) GC(ctx context.Context, cutoff time.Time) (int, error) {
@@ -182,7 +185,7 @@ func (s txAccessTokens) GC(ctx context.Context, cutoff time.Time) (int, error) {
 	st := s.tx.atStaging
 	n := 0
 	st.iter(func(jti string, rec *store.AccessTokenRecord) {
-		if rec.ExpiresAt.IsZero() || !rec.ExpiresAt.Before(cutoff) {
+		if !patterns.IsExpiredStrict(rec.ExpiresAt, cutoff) {
 			return
 		}
 		st.drop(jti)
@@ -264,18 +267,8 @@ func (s txOpaqueAccessTokens) RevokeByGrant(ctx context.Context, grantID string)
 	if grantID == "" {
 		return 0, nil
 	}
-	st := s.tx.oatStaging
-	n := 0
-	st.iter(func(key string, rec *store.OpaqueAccessToken) {
-		if rec.GrantID != grantID || rec.Revoked {
-			return
-		}
-		updated := cloneOpaqueAccessToken(rec)
-		updated.Revoked = true
-		st.stage(key, updated)
-		n++
-	})
-	return n, nil
+	ids := s.tx.owner.opaqueAccessTokens.idx.byGrant[grantID]
+	return revokeStaged(opaqueTokenRowOps, s.tx.oatStaging, cloneOpaqueAccessToken, ids, matchAnyToken), nil
 }
 
 // RevokeByChain implements [store.OpaqueAccessTokenChainRevoker] through
@@ -287,18 +280,8 @@ func (s txOpaqueAccessTokens) RevokeByChain(ctx context.Context, grantID, chainI
 	if grantID == "" || chainID == "" {
 		return 0, nil
 	}
-	st := s.tx.oatStaging
-	n := 0
-	st.iter(func(key string, rec *store.OpaqueAccessToken) {
-		if rec.GrantID != grantID || rec.ChainID != chainID || rec.Revoked {
-			return
-		}
-		updated := cloneOpaqueAccessToken(rec)
-		updated.Revoked = true
-		st.stage(key, updated)
-		n++
-	})
-	return n, nil
+	ids := s.tx.owner.opaqueAccessTokens.idx.byGrant[grantID]
+	return revokeStaged(opaqueTokenRowOps, s.tx.oatStaging, cloneOpaqueAccessToken, ids, matchChain(chainID)), nil
 }
 
 func (s txOpaqueAccessTokens) GC(ctx context.Context, cutoff time.Time) (int, error) {
@@ -308,7 +291,7 @@ func (s txOpaqueAccessTokens) GC(ctx context.Context, cutoff time.Time) (int, er
 	st := s.tx.oatStaging
 	n := 0
 	st.iter(func(key string, rec *store.OpaqueAccessToken) {
-		if rec.ExpiresAt.IsZero() || !rec.ExpiresAt.Before(cutoff) {
+		if !patterns.IsExpiredStrict(rec.ExpiresAt, cutoff) {
 			return
 		}
 		st.drop(key)
@@ -431,14 +414,14 @@ func (s txGrantRevocations) GC(ctx context.Context, cutoff time.Time) (int, erro
 	st := s.tx.grvStaging
 	n := 0
 	st.tombstones.iter(func(id string, rec *tombstoneRow) {
-		if rec.expiresAt.IsZero() || !rec.expiresAt.Before(cutoff) {
+		if !patterns.IsExpiredStrict(rec.expiresAt, cutoff) {
 			return
 		}
 		st.tombstones.drop(id)
 		n++
 	})
 	st.denylist.iter(func(jti string, rec *store.RevokedJTI) {
-		if rec.ExpiresAt.IsZero() || !rec.ExpiresAt.Before(cutoff) {
+		if !patterns.IsExpiredStrict(rec.ExpiresAt, cutoff) {
 			return
 		}
 		st.denylist.drop(jti)

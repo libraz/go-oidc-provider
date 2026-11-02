@@ -499,9 +499,7 @@ func normalizedStaticClient(client Client) Client {
 	client.Contacts = nilIfEmpty(client.Contacts)
 	client.DefaultACRValues = nilIfEmpty(client.DefaultACRValues)
 	client.RequestURIs = nilIfEmpty(client.RequestURIs)
-	if len(client.JWKs) == 0 {
-		client.JWKs = nil
-	}
+	client.JWKs = nilIfEmpty(client.JWKs)
 	if client.Source == "" {
 		client.Source = ClientSourceStatic
 	}

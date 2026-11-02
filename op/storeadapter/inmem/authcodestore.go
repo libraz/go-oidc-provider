@@ -15,7 +15,7 @@ type authCodeStore struct {
 	mu           sync.RWMutex
 	clock        Clock
 	m            map[string]*store.AuthorizationCode
-	savesSinceGC uint32
+	savesSinceGC sweeper
 }
 
 func newAuthCodeStore(c Clock) *authCodeStore {
@@ -102,7 +102,6 @@ func (s *authCodeStore) gcLocked(now time.Time) {
 			delete(s.m, key)
 		}
 	}
-	s.savesSinceGC = 0
 }
 
 // maybeGCLocked runs a full sweep once every
@@ -112,11 +111,9 @@ func (s *authCodeStore) gcLocked(now time.Time) {
 // browser authorization-code flow persists codes inside a transaction
 // and would otherwise never reach a sweep.
 func (s *authCodeStore) maybeGCLocked(now time.Time) {
-	s.savesSinceGC++
-	if !sweepDue(s.savesSinceGC, fullGCInterval, len(s.m)) {
-		return
+	if s.savesSinceGC.due(len(s.m)) {
+		s.gcLocked(now)
 	}
-	s.gcLocked(now)
 }
 
 func cloneAuthCode(c *store.AuthorizationCode) *store.AuthorizationCode {

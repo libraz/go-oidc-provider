@@ -429,8 +429,8 @@ func (s *Store) BeginTx(ctx context.Context) (store.Tx, error) {
 			parent:   s.refreshes,
 			added:    make(map[string]*store.RefreshToken),
 			updated:  make(map[string]*store.RefreshToken),
-			byClient: make(refreshIndex),
 			byGrant:  make(refreshIndex),
+			byParent: make(refreshIndex),
 			revoked:  make(map[string]struct{}),
 			retries:  make(map[string]retryResponse),
 		},
@@ -444,8 +444,8 @@ func (s *Store) BeginTx(ctx context.Context) (store.Tx, error) {
 			added:   make(map[string]*store.PushedAuthRequest),
 			updated: make(map[string]*store.PushedAuthRequest),
 		},
-		atStaging:  newOverlay(s.accessTokens.m, cloneAccessToken),
-		oatStaging: newOverlay(s.opaqueAccessTokens.m, cloneOpaqueAccessToken),
+		atStaging:  s.accessTokens.overlay(),
+		oatStaging: s.opaqueAccessTokens.overlay(),
 		grvStaging: newGrantRevocationStaging(s.grantRevocations),
 	}
 	return t, nil
@@ -492,4 +492,31 @@ func sweepDue(writes, minInterval uint32, live int) bool {
 		threshold = l
 	}
 	return uint64(writes) >= threshold
+}
+
+// sweeper counts the writes a substore has taken since its last full sweep.
+type sweeper uint32
+
+// due records one write and reports whether a sweep over live entries is
+// now owed; when it is, the count restarts.
+func (w *sweeper) due(live int) bool {
+	*w++
+	if !sweepDue(uint32(*w), fullGCInterval, live) {
+		return false
+	}
+	*w = 0
+	return true
+}
+
+// evictIf removes m[key] when dead reports it reclaimable, returning the
+// removed record. Inserts call it so a key colliding with a dead row is
+// accepted rather than rejected as a duplicate.
+func evictIf[V any](m map[string]V, key string, dead func(V) bool) (V, bool) {
+	rec, ok := m[key]
+	if !ok || !dead(rec) {
+		var none V
+		return none, false
+	}
+	delete(m, key)
+	return rec, true
 }

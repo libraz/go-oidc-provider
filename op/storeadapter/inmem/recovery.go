@@ -7,7 +7,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/libraz/go-oidc-provider/internal/timex"
 	"github.com/libraz/go-oidc-provider/op/store"
 )
 
@@ -94,15 +93,6 @@ func (s *recoveryStore) Consume(_ context.Context, b *store.RecoveryBatch, index
 func (s *recoveryStore) stampFor(slot store.RecoveryCode) time.Time {
 	if !slot.ConsumedAt.IsZero() {
 		return slot.ConsumedAt
-	}
-	return s.now()
-}
-
-// now reads the injected clock, falling back to the system clock for a
-// store constructed without one.
-func (s *recoveryStore) now() time.Time {
-	if s.clock == nil {
-		return timex.SystemClock.Now()
 	}
 	return s.clock.Now()
 }

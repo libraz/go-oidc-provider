@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/libraz/go-oidc-provider/op/store"
+	"github.com/libraz/go-oidc-provider/op/storeadapter/patterns"
 )
 
 // grantRevocationStore is the inmem implementation of
@@ -177,19 +178,13 @@ func (s *grantRevocationStore) GC(_ context.Context, cutoff time.Time) (int, err
 	defer s.mu.Unlock()
 	n := 0
 	for id, tomb := range s.tombstones {
-		if tomb.expiresAt.IsZero() {
-			continue
-		}
-		if tomb.expiresAt.Before(cutoff) {
+		if patterns.IsExpiredStrict(tomb.expiresAt, cutoff) {
 			delete(s.tombstones, id)
 			n++
 		}
 	}
 	for jti, row := range s.denylist {
-		if row.ExpiresAt.IsZero() {
-			continue
-		}
-		if row.ExpiresAt.Before(cutoff) {
+		if patterns.IsExpiredStrict(row.ExpiresAt, cutoff) {
 			delete(s.denylist, jti)
 			n++
 		}

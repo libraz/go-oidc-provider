@@ -8,7 +8,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/libraz/go-oidc-provider/internal/timex"
 	"github.com/libraz/go-oidc-provider/op/store"
 )
 
@@ -50,15 +49,7 @@ func (s *emailOTPStore) Get(_ context.Context, subject string) (*store.EmailOTPR
 	if !ok {
 		return nil, store.ErrNotFound
 	}
-	// Retention is governed by RetainUntil (independent of the code's
-	// ExpiresAt) so the rate-limit / brute-force counters survive an
-	// expired code. RetainUntil==zero falls back to ExpiresAt so records
-	// written before this field existed keep their old behaviour.
-	horizon := rec.RetainUntil
-	if horizon.IsZero() {
-		horizon = rec.ExpiresAt
-	}
-	if !horizon.IsZero() && horizon.Before(s.now()) {
+	if emailOTPExpired(rec, s.clock.Now()) {
 		return nil, store.ErrNotFound
 	}
 	return cloneEmailOTPRecord(rec), nil
@@ -76,14 +67,7 @@ func (s *emailOTPStore) Put(_ context.Context, r *store.EmailOTPRecord) error {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	version, err := s.versions.next()
-	if err != nil {
-		return err
-	}
-	stored := cloneEmailOTPRecord(r)
-	stored.Version = version
-	s.m[r.Subject] = stored
-	return nil
+	return s.putNextLocked(cloneEmailOTPRecord(r))
 }
 
 // CompareAndSwap implements [store.EmailOTPStore].
@@ -95,17 +79,10 @@ func (s *emailOTPStore) CompareAndSwap(_ context.Context, previous, next *store.
 	defer s.mu.Unlock()
 	current, ok := s.m[next.Subject]
 	if previous == nil {
-		if ok && !emailOTPExpired(current, s.now()) {
+		if ok && !emailOTPExpired(current, s.clock.Now()) {
 			return store.ErrAlreadyConsumed
 		}
-		version, err := s.versions.next()
-		if err != nil {
-			return err
-		}
-		stored := cloneEmailOTPRecord(next)
-		stored.Version = version
-		s.m[next.Subject] = stored
-		return nil
+		return s.putNextLocked(cloneEmailOTPRecord(next))
 	}
 	if previous.Subject != next.Subject {
 		return errors.New("inmem: invalid email otp compare-and-swap record")
@@ -116,13 +93,18 @@ func (s *emailOTPStore) CompareAndSwap(_ context.Context, previous, next *store.
 	if !ok || current.Version != previous.Version || !reflect.DeepEqual(current, previous) {
 		return store.ErrAlreadyConsumed
 	}
+	return s.putNextLocked(cloneEmailOTPRecord(next))
+}
+
+// putNextLocked stamps the next version on stored, an already-owned copy, and
+// stores it under its Subject. The caller must hold s.mu for writing.
+func (s *emailOTPStore) putNextLocked(stored *store.EmailOTPRecord) error {
 	version, err := s.versions.next()
 	if err != nil {
 		return err
 	}
-	stored := cloneEmailOTPRecord(next)
 	stored.Version = version
-	s.m[next.Subject] = stored
+	s.m[stored.Subject] = stored
 	return nil
 }
 
@@ -143,7 +125,7 @@ func (s *emailOTPStore) Consume(_ context.Context, r *store.EmailOTPRecord) erro
 	if current.Version != r.Version {
 		return store.ErrAlreadyConsumed
 	}
-	if !current.ExpiresAt.IsZero() && current.ExpiresAt.Before(s.now()) {
+	if !current.ExpiresAt.IsZero() && current.ExpiresAt.Before(s.clock.Now()) {
 		return store.ErrNotFound
 	}
 	if !current.ConsumedAt.IsZero() {
@@ -162,15 +144,9 @@ func (s *emailOTPStore) Consume(_ context.Context, r *store.EmailOTPRecord) erro
 	// left unstamped must not be written back as still-consumable, or
 	// Consume reports success while the next reader can redeem it again.
 	if stored.ConsumedAt.IsZero() {
-		stored.ConsumedAt = s.now()
+		stored.ConsumedAt = s.clock.Now()
 	}
-	version, err := s.versions.next()
-	if err != nil {
-		return err
-	}
-	stored.Version = version
-	s.m[r.Subject] = stored
-	return nil
+	return s.putNextLocked(stored)
 }
 
 // Delete implements [store.EmailOTPStore].
@@ -182,13 +158,6 @@ func (s *emailOTPStore) Delete(_ context.Context, subject string) error {
 	}
 	delete(s.m, subject)
 	return nil
-}
-
-func (s *emailOTPStore) now() time.Time {
-	if s.clock == nil {
-		return timex.SystemClock.Now()
-	}
-	return s.clock.Now()
 }
 
 func emailOTPExpired(rec *store.EmailOTPRecord, now time.Time) bool {

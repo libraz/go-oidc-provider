@@ -22,7 +22,7 @@ type deviceCodeStore struct {
 	clock         Clock
 	m             map[string]*store.DeviceCode // key: hashKey(deviceCode)
 	userCodeIndex map[string]string            // key: canonical user_code, value: hashKey(deviceCode)
-	savesSinceGC  uint32
+	savesSinceGC  sweeper
 }
 
 func newDeviceCodeStore(c Clock) *deviceCodeStore {
@@ -69,7 +69,6 @@ func (s *deviceCodeStore) gcLocked(now time.Time) {
 		}
 		s.dropLocked(key, rec)
 	}
-	s.savesSinceGC = 0
 }
 
 // maybeGCLocked runs a full sweep once every
@@ -77,11 +76,9 @@ func (s *deviceCodeStore) gcLocked(now time.Time) {
 // saves that made it necessary instead of paying O(total codes) on
 // each one.
 func (s *deviceCodeStore) maybeGCLocked(now time.Time) {
-	s.savesSinceGC++
-	if !sweepDue(s.savesSinceGC, fullGCInterval, len(s.m)) {
-		return
+	if s.savesSinceGC.due(len(s.m)) {
+		s.gcLocked(now)
 	}
-	s.gcLocked(now)
 }
 
 // deleteExpiredKeyLocked evicts the record stored under the device-code
@@ -89,11 +86,10 @@ func (s *deviceCodeStore) maybeGCLocked(now time.Time) {
 // collides with a dead record is accepted rather than rejected as a
 // duplicate.
 func (s *deviceCodeStore) deleteExpiredKeyLocked(key string, now time.Time) {
-	rec, ok := s.m[key]
-	if !ok {
-		return
-	}
-	if patterns.IsExpiredStrict(rec.ExpiresAt, now) {
+	rec, ok := evictIf(s.m, key, func(rec *store.DeviceCode) bool {
+		return patterns.IsExpiredStrict(rec.ExpiresAt, now)
+	})
+	if ok {
 		s.dropLocked(key, rec)
 	}
 }

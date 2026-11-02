@@ -1,6 +1,7 @@
 package inmem
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -135,7 +136,7 @@ func (t *tx) clearStaging() {
 	if t.rtStaging != nil {
 		clear(t.rtStaging.added)
 		clear(t.rtStaging.updated)
-		clear(t.rtStaging.byClient)
+		clear(t.rtStaging.byParent)
 		clear(t.rtStaging.byGrant)
 		clear(t.rtStaging.revoked)
 		clear(t.rtStaging.retries)
@@ -275,8 +276,8 @@ type refreshStaging struct {
 	parent   *refreshStore
 	added    map[string]*store.RefreshToken
 	updated  map[string]*store.RefreshToken
-	byClient refreshIndex
 	byGrant  refreshIndex
+	byParent refreshIndex             // hashed parent key -> staged child keys
 	revoked  map[string]struct{}      // chain roots whose descendants must be revoked at flush
 	retries  map[string]retryResponse // hashed predecessor -> sealed response
 }
@@ -291,7 +292,7 @@ func (s *refreshStaging) flushLocked() {
 	}
 	for parent, rec := range s.retries {
 		s.parent.retries[parent] = retryResponse{
-			sealed:    append([]byte(nil), rec.sealed...),
+			sealed:    bytes.Clone(rec.sealed),
 			expiresAt: rec.expiresAt,
 		}
 	}
@@ -304,12 +305,14 @@ func (s *refreshStaging) flushLocked() {
 	if len(s.retries) > 0 {
 		s.parent.maybeGCRetriesLocked(s.parent.clock.Now())
 	}
-	for root := range s.revoked {
-		// At flush time, traverse the now-merged map to revoke
-		// descendants. The chain root itself is already marked via
-		// updated; revokeChainLocked is idempotent.
+	if len(s.revoked) > 0 {
 		now := s.parent.clock.Now()
-		s.parent.revokeChainLocked(root, now)
+		for root := range s.revoked {
+			// At flush time, traverse the now-merged map to revoke
+			// descendants. The chain root itself is already marked via
+			// updated; revokeChainLocked is idempotent.
+			s.parent.revokeChainLocked(root, now)
+		}
 	}
 }
 
@@ -343,8 +346,10 @@ func (r *txRefreshes) Save(ctx context.Context, token *store.RefreshToken) error
 	}
 	stored := storeRefresh(token, key)
 	st.added[key] = stored
-	st.byClient.add(stored.ClientID, key)
 	st.byGrant.add(stored.GrantID, key)
+	if stored.ParentID != nil {
+		st.byParent.add(hashKey(*stored.ParentID), key)
+	}
 	return nil
 }
 
@@ -361,7 +366,7 @@ func (r *txRefreshes) SaveRotationWithRetry(ctx context.Context, token *store.Re
 	st := r.tx.rtStaging
 	parentKey := hashKey(*token.ParentID)
 	st.retries[parentKey] = retryResponse{
-		sealed:    append([]byte(nil), sealed...),
+		sealed:    bytes.Clone(sealed),
 		expiresAt: retryRetention(st.lookup(parentKey), token),
 	}
 	return nil
@@ -383,7 +388,7 @@ func (r *txRefreshes) LoadRetryResponse(ctx context.Context, predecessorID strin
 	if !ok || retryReclaimable(rec, r.tx.clock.Now()) {
 		return nil, store.ErrNotFound
 	}
-	return append([]byte(nil), rec.sealed...), nil
+	return bytes.Clone(rec.sealed), nil
 }
 
 func (r *txRefreshes) Find(ctx context.Context, id string) (*store.RefreshToken, error) {
@@ -492,65 +497,34 @@ func (s *refreshStaging) revokeIDs(ids map[string]struct{}, now time.Time) {
 	}
 }
 
-// markChainStaged walks the in-memory view (parent + staging) and stamps
-// every descendant consumed + revoked. It is called at RevokeChain time so
-// that reads inside the same tx see the revocations in full.
+// markChainStaged walks the in-memory view (parent + staging) breadth-first
+// from rootID and stamps every descendant consumed + revoked. It is called at
+// RevokeChain time so that reads inside the same tx see the revocations in
+// full. Children come from the committed parent index plus the staged one, so
+// the cost follows the chain rather than the whole map.
 func (s *refreshStaging) markChainStaged(rootID string, now time.Time) {
-	revoked := map[string]struct{}{rootID: {}}
-	for s.markOneGenerationStaged(revoked, now) {
-	}
-}
-
-// markOneGenerationStaged is the inner pass of markChainStaged. It returns
-// true when at least one new descendant was stamped so the outer loop
-// continues until no more descendants are reachable.
-//
-// id is the hashed staging-map key. rec.ParentID is stored as the raw
-// parent identifier (see [storeRefresh]) so the walk hashes it on the
-// fly to compare against the revoked set, which is keyed on digests.
-func (s *refreshStaging) markOneGenerationStaged(revoked map[string]struct{}, now time.Time) bool {
-	grew := false
-	s.iter(func(id string, rec *store.RefreshToken) {
-		if _, already := revoked[id]; already {
-			return
+	seen := map[string]struct{}{rootID: {}}
+	queue := []string{rootID}
+	for len(queue) > 0 {
+		parentKey := queue[0]
+		queue = queue[1:]
+		for _, children := range []map[string]struct{}{s.parent.byParent[parentKey], s.byParent[parentKey]} {
+			for id := range children {
+				if _, done := seen[id]; done {
+					continue
+				}
+				seen[id] = struct{}{}
+				queue = append(queue, id)
+				rec := s.lookup(id)
+				if rec == nil {
+					continue
+				}
+				updated := cloneRefresh(rec)
+				markRevoked(updated, now)
+				updated.ID = id
+				s.updated[id] = updated
+			}
 		}
-		if rec.ParentID == nil {
-			return
-		}
-		parentKey := hashKey(*rec.ParentID)
-		if _, parentRevoked := revoked[parentKey]; !parentRevoked {
-			return
-		}
-		updated := cloneRefresh(rec)
-		markRevoked(updated, now)
-		updated.ID = id
-		s.updated[id] = updated
-		revoked[id] = struct{}{}
-		grew = true
-	})
-	return grew
-}
-
-// iter calls fn for every (id, record) visible to this staging area, with
-// the staged view taking precedence over the parent map.
-func (s *refreshStaging) iter(fn func(string, *store.RefreshToken)) {
-	seen := make(map[string]struct{})
-	for id, rec := range s.updated {
-		fn(id, rec)
-		seen[id] = struct{}{}
-	}
-	for id, rec := range s.added {
-		if _, ok := seen[id]; ok {
-			continue
-		}
-		fn(id, rec)
-		seen[id] = struct{}{}
-	}
-	for id, rec := range s.parent.m {
-		if _, ok := seen[id]; ok {
-			continue
-		}
-		fn(id, rec)
 	}
 }
 
@@ -624,19 +598,29 @@ func (g *txGrants) FindBySubjectClient(ctx context.Context, subject, clientID st
 // [grantStore.FindBySubjectClient].
 func (s *grantStaging) findLatestMatching(subject, clientID string) *store.Grant {
 	var best *store.Grant
-	consider := func(rec *store.Grant) {
+	s.each(func(rec *store.Grant) bool {
 		if rec.Subject != subject || rec.ClientID != clientID {
-			return
+			return true
 		}
 		if best == nil || rec.UpdatedAt.After(best.UpdatedAt) {
 			best = rec
 		}
-	}
+		return true
+	})
+	return best
+}
+
+// each calls fn for every grant visible in the staged view: the staged adds
+// plus the parent rows that are neither deleted nor overridden by an add.
+// fn returns false to stop the walk.
+func (s *grantStaging) each(fn func(*store.Grant) bool) {
 	for id, rec := range s.added {
 		if _, deleted := s.deleted[id]; deleted {
 			continue
 		}
-		consider(rec)
+		if !fn(rec) {
+			return
+		}
 	}
 	for id, rec := range s.parent.m {
 		if _, deleted := s.deleted[id]; deleted {
@@ -645,9 +629,10 @@ func (s *grantStaging) findLatestMatching(subject, clientID string) *store.Grant
 		if _, override := s.added[id]; override {
 			continue
 		}
-		consider(rec)
+		if !fn(rec) {
+			return
+		}
 	}
-	return best
 }
 
 // ListBySubject mirrors [grantStore.ListBySubject] over the staged
@@ -676,9 +661,9 @@ func (g *txGrants) ListClientIDsBySubject(
 	if limit <= 0 {
 		return store.GrantClientPage{}, errors.New("inmem: grant client page limit must be positive")
 	}
-	builder := newGrantClientPageBuilder(cursor, limit)
+	builder := newSortedPageBuilder(cursor, limit)
 	g.tx.grStaging.addClientIDsBySubject(subject, builder)
-	return builder.page(), nil
+	return builder.clientPage(), nil
 }
 
 func (g *txGrants) ListSubjectsByClient(
@@ -692,9 +677,9 @@ func (g *txGrants) ListSubjectsByClient(
 	if limit <= 0 {
 		return store.GrantSubjectPage{}, errors.New("inmem: grant subject page limit must be positive")
 	}
-	builder := newGrantSubjectPageBuilder(cursor, limit)
+	builder := newSortedPageBuilder(cursor, limit)
 	g.tx.grStaging.addSubjectsByClient(clientID, builder)
-	return builder.page(), nil
+	return builder.subjectPage(), nil
 }
 
 // collectBySubject is the staging-aware companion to
@@ -705,78 +690,37 @@ func (g *txGrants) ListSubjectsByClient(
 // the project's gocognit cap.
 func (s *grantStaging) collectBySubject(subject string) []*store.Grant {
 	out := make([]*store.Grant, 0)
-	consider := func(rec *store.Grant) {
-		if rec.Subject != subject {
-			return
+	s.each(func(rec *store.Grant) bool {
+		if rec.Subject == subject {
+			out = append(out, rec)
 		}
-		out = append(out, rec)
-	}
-	for id, rec := range s.added {
-		if _, deleted := s.deleted[id]; deleted {
-			continue
-		}
-		consider(rec)
-	}
-	for id, rec := range s.parent.m {
-		if _, deleted := s.deleted[id]; deleted {
-			continue
-		}
-		if _, override := s.added[id]; override {
-			continue
-		}
-		consider(rec)
-	}
+		return true
+	})
 	return out
 }
 
 func (s *grantStaging) addClientIDsBySubject(
 	subject string,
-	builder *grantClientPageBuilder,
+	builder *sortedPageBuilder,
 ) {
-	consider := func(rec *store.Grant) {
+	s.each(func(rec *store.Grant) bool {
 		if rec.Subject == subject {
 			builder.add(rec.ClientID)
 		}
-	}
-	for id, rec := range s.added {
-		if _, deleted := s.deleted[id]; !deleted {
-			consider(rec)
-		}
-	}
-	for id, rec := range s.parent.m {
-		if _, deleted := s.deleted[id]; deleted {
-			continue
-		}
-		if _, override := s.added[id]; override {
-			continue
-		}
-		consider(rec)
-	}
+		return true
+	})
 }
 
 func (s *grantStaging) addSubjectsByClient(
 	clientID string,
-	builder *grantSubjectPageBuilder,
+	builder *sortedPageBuilder,
 ) {
-	consider := func(rec *store.Grant) {
+	s.each(func(rec *store.Grant) bool {
 		if rec.ClientID == clientID {
 			builder.add(rec.Subject)
 		}
-	}
-	for id, rec := range s.added {
-		if _, deleted := s.deleted[id]; !deleted {
-			consider(rec)
-		}
-	}
-	for id, rec := range s.parent.m {
-		if _, deleted := s.deleted[id]; deleted {
-			continue
-		}
-		if _, override := s.added[id]; override {
-			continue
-		}
-		consider(rec)
-	}
+		return true
+	})
 }
 
 func (g *txGrants) Delete(ctx context.Context, id string) error {
@@ -801,17 +745,12 @@ func (g *txGrants) HasAny(ctx context.Context) (bool, error) {
 	if err := g.tx.guard(ctx); err != nil {
 		return false, err
 	}
-	st := g.tx.grStaging
-	if len(st.added) > 0 {
-		return true, nil
-	}
-	for id := range st.parent.m {
-		if _, deleted := st.deleted[id]; deleted {
-			continue
-		}
-		return true, nil
-	}
-	return false, nil
+	found := false
+	g.tx.grStaging.each(func(*store.Grant) bool {
+		found = true
+		return false
+	})
+	return found, nil
 }
 
 // --- staging: PAR ------------------------------------------------------------

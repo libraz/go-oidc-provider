@@ -1,6 +1,7 @@
 package inmem
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"slices"
@@ -21,7 +22,7 @@ type refreshStore struct {
 	byGrant        refreshIndex
 	byParent       refreshIndex
 	retries        map[string]retryResponse
-	retriesSinceGC uint32
+	retriesSinceGC sweeper
 }
 
 // retryResponse is one sealed token response held for the RFC 9700
@@ -108,7 +109,7 @@ func (s *refreshStore) SaveRotationWithRetry(_ context.Context, token *store.Ref
 	s.indexRefreshLocked(key, stored)
 	s.maybeGCRetriesLocked(s.clock.Now())
 	s.retries[parentKey] = retryResponse{
-		sealed:    append([]byte(nil), sealed...),
+		sealed:    bytes.Clone(sealed),
 		expiresAt: retryRetention(s.m[parentKey], token),
 	}
 	return nil
@@ -140,15 +141,12 @@ func (s *refreshStore) gcRetriesLocked(now time.Time) {
 			delete(s.retries, key)
 		}
 	}
-	s.retriesSinceGC = 0
 }
 
 func (s *refreshStore) maybeGCRetriesLocked(now time.Time) {
-	s.retriesSinceGC++
-	if !sweepDue(s.retriesSinceGC, fullGCInterval, len(s.retries)) {
-		return
+	if s.retriesSinceGC.due(len(s.retries)) {
+		s.gcRetriesLocked(now)
 	}
-	s.gcRetriesLocked(now)
 }
 
 // assertParentAliveLocked reports [store.ErrAlreadyConsumed] when parentID
@@ -179,7 +177,7 @@ func (s *refreshStore) LoadRetryResponse(_ context.Context, predecessorID string
 	if !ok || retryReclaimable(rec, s.clock.Now()) {
 		return nil, store.ErrNotFound
 	}
-	return append([]byte(nil), rec.sealed...), nil
+	return bytes.Clone(rec.sealed), nil
 }
 
 func (s *refreshStore) Find(_ context.Context, id string) (*store.RefreshToken, error) {
@@ -295,6 +293,14 @@ func (i refreshIndex) add(value, id string) {
 	ids[id] = struct{}{}
 }
 
+func (i refreshIndex) remove(value, id string) {
+	ids := i[value]
+	delete(ids, id)
+	if len(ids) == 0 {
+		delete(i, value)
+	}
+}
+
 // indexRefreshLocked adds rec to every applicable secondary index. The caller
 // must hold refreshStore.mu for writing, either directly or through a
 // transaction that owns the full atomic-cluster lock set.
@@ -376,7 +382,6 @@ func cloneRefresh(t *store.RefreshToken) *store.RefreshToken {
 	}
 	out := *t
 	out.Scope = slices.Clone(t.Scope)
-	out.Resource = t.Resource
 	out.AMR = slices.Clone(t.AMR)
 	out.AuthorizationDetails = cloneObjectArray(t.AuthorizationDetails)
 	out.Claims = cloneMap(t.Claims)

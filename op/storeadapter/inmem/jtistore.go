@@ -15,7 +15,7 @@ type jtiStore struct {
 	mu           sync.RWMutex
 	clock        Clock
 	m            map[string]time.Time
-	marksSinceGC uint32
+	marksSinceGC sweeper
 }
 
 func newJTIStore(c Clock) *jtiStore {
@@ -64,8 +64,7 @@ func (s *jtiStore) Has(_ context.Context, jti string) (bool, error) {
 }
 
 func (s *jtiStore) maybeGCJTILocked(now time.Time) {
-	s.marksSinceGC++
-	if !sweepDue(s.marksSinceGC, fullGCInterval, len(s.m)) {
+	if !s.marksSinceGC.due(len(s.m)) {
 		return
 	}
 	for digest, expiresAt := range s.m {
@@ -73,5 +72,4 @@ func (s *jtiStore) maybeGCJTILocked(now time.Time) {
 			delete(s.m, digest)
 		}
 	}
-	s.marksSinceGC = 0
 }

@@ -91,13 +91,13 @@ func (s *grantStore) ListClientIDsBySubject(
 	}
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	builder := newGrantClientPageBuilder(cursor, limit)
+	builder := newSortedPageBuilder(cursor, limit)
 	for _, rec := range s.m {
 		if rec.Subject == subject {
 			builder.add(rec.ClientID)
 		}
 	}
-	return builder.page(), nil
+	return builder.clientPage(), nil
 }
 
 // ListSubjectsByClient implements [store.GrantSubjectLister]. The map scan
@@ -118,100 +118,70 @@ func (s *grantStore) ListSubjectsByClient(
 	}
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	builder := newGrantSubjectPageBuilder(cursor, limit)
+	builder := newSortedPageBuilder(cursor, limit)
 	for _, rec := range s.m {
 		if rec.ClientID == clientID {
 			builder.add(rec.Subject)
 		}
 	}
-	return builder.page(), nil
+	return builder.subjectPage(), nil
 }
 
-// grantClientPageBuilder retains only the lexicographically-smallest limit
-// distinct IDs after cursor. Scanning an in-memory map is unavoidable, but
-// candidate storage remains O(limit) even when every grant has a unique client.
-type grantClientPageBuilder struct {
-	cursor    string
-	limit     int
-	clientIDs []string
-	more      bool
-	peak      int
+// sortedPageBuilder retains only the lexicographically-smallest limit
+// distinct values after cursor. Scanning an in-memory map is unavoidable, but
+// candidate storage remains O(limit) even when every grant has a unique value.
+type sortedPageBuilder struct {
+	cursor string
+	limit  int
+	items  []string
+	more   bool
+	peak   int
 }
 
-func newGrantClientPageBuilder(cursor string, limit int) *grantClientPageBuilder {
-	return &grantClientPageBuilder{cursor: cursor, limit: limit}
+func newSortedPageBuilder(cursor string, limit int) *sortedPageBuilder {
+	return &sortedPageBuilder{cursor: cursor, limit: limit}
 }
 
-func (b *grantClientPageBuilder) add(clientID string) {
-	if clientID == "" || clientID <= b.cursor {
+func (b *sortedPageBuilder) add(value string) {
+	if value == "" || value <= b.cursor {
 		return
 	}
-	index := sort.SearchStrings(b.clientIDs, clientID)
-	if index < len(b.clientIDs) && b.clientIDs[index] == clientID {
+	index := sort.SearchStrings(b.items, value)
+	if index < len(b.items) && b.items[index] == value {
 		return
 	}
-	if len(b.clientIDs) < b.limit {
-		b.clientIDs = append(b.clientIDs, "")
-		copy(b.clientIDs[index+1:], b.clientIDs[index:])
-		b.clientIDs[index] = clientID
-		b.peak = max(b.peak, len(b.clientIDs))
-		return
-	}
-	b.more = true
-	if index == len(b.clientIDs) {
-		return
-	}
-	copy(b.clientIDs[index+1:], b.clientIDs[index:len(b.clientIDs)-1])
-	b.clientIDs[index] = clientID
-}
-
-func (b *grantClientPageBuilder) page() store.GrantClientPage {
-	page := store.GrantClientPage{ClientIDs: b.clientIDs}
-	if b.more {
-		page.NextCursor = b.clientIDs[len(b.clientIDs)-1]
-	}
-	return page
-}
-
-type grantSubjectPageBuilder struct {
-	cursor   string
-	limit    int
-	subjects []string
-	more     bool
-}
-
-func newGrantSubjectPageBuilder(cursor string, limit int) *grantSubjectPageBuilder {
-	return &grantSubjectPageBuilder{cursor: cursor, limit: limit}
-}
-
-func (b *grantSubjectPageBuilder) add(subject string) {
-	if subject == "" || subject <= b.cursor {
-		return
-	}
-	index := sort.SearchStrings(b.subjects, subject)
-	if index < len(b.subjects) && b.subjects[index] == subject {
-		return
-	}
-	if len(b.subjects) < b.limit {
-		b.subjects = append(b.subjects, "")
-		copy(b.subjects[index+1:], b.subjects[index:])
-		b.subjects[index] = subject
+	if len(b.items) < b.limit {
+		b.items = append(b.items, "")
+		copy(b.items[index+1:], b.items[index:])
+		b.items[index] = value
+		b.peak = max(b.peak, len(b.items))
 		return
 	}
 	b.more = true
-	if index == len(b.subjects) {
+	if index == len(b.items) {
 		return
 	}
-	copy(b.subjects[index+1:], b.subjects[index:len(b.subjects)-1])
-	b.subjects[index] = subject
+	copy(b.items[index+1:], b.items[index:len(b.items)-1])
+	b.items[index] = value
 }
 
-func (b *grantSubjectPageBuilder) page() store.GrantSubjectPage {
-	page := store.GrantSubjectPage{Subjects: b.subjects}
+// result returns the retained values and, when more remain, the cursor for
+// the next page.
+func (b *sortedPageBuilder) result() (items []string, nextCursor string) {
 	if b.more {
-		page.NextCursor = b.subjects[len(b.subjects)-1]
+		nextCursor = b.items[len(b.items)-1]
 	}
-	return page
+	return b.items, nextCursor
+}
+
+func (b *sortedPageBuilder) clientPage() store.GrantClientPage {
+	items, next := b.result()
+	return store.GrantClientPage{ClientIDs: items, NextCursor: next}
+}
+
+func (b *sortedPageBuilder) subjectPage() store.GrantSubjectPage {
+	items, next := b.result()
+	return store.GrantSubjectPage{Subjects: items, NextCursor: next}
 }
 
 func (s *grantStore) HasAny(_ context.Context) (bool, error) {

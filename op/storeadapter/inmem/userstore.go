@@ -2,6 +2,7 @@ package inmem
 
 import (
 	"context"
+	"slices"
 	"sync"
 
 	"github.com/libraz/go-oidc-provider/op/store"
@@ -55,9 +56,7 @@ func (s *userStore) ReadPasswordHash(_ context.Context, subject string) ([]byte,
 	if !ok || len(hash) == 0 {
 		return nil, store.ErrNotFound
 	}
-	out := make([]byte, len(hash))
-	copy(out, hash)
-	return out, nil
+	return slices.Clone(hash), nil
 }
 
 // UpdatePasswordHash implements [store.UserPasswordHashUpdater].
@@ -67,9 +66,7 @@ func (s *userStore) UpdatePasswordHash(_ context.Context, subject string, encode
 	if _, ok := s.m[subject]; !ok {
 		return store.ErrNotFound
 	}
-	stored := make([]byte, len(encoded))
-	copy(stored, encoded)
-	s.hashes[subject] = stored
+	s.hashes[subject] = slices.Clone(encoded)
 	return nil
 }
 
@@ -93,9 +90,7 @@ func (s *userStore) putWithPassword(u *store.User, username string, hash []byte)
 		s.usernames[username] = u.Subject
 	}
 	if len(hash) > 0 {
-		stored := make([]byte, len(hash))
-		copy(stored, hash)
-		s.hashes[u.Subject] = stored
+		s.hashes[u.Subject] = slices.Clone(hash)
 	}
 }
 
@@ -104,8 +99,6 @@ func cloneUser(u *store.User) *store.User {
 		return nil
 	}
 	out := *u
-	if u.Claims != nil {
-		out.Claims = cloneMap(u.Claims)
-	}
+	out.Claims = cloneMap(u.Claims)
 	return &out
 }

@@ -21,12 +21,13 @@ import (
 // clears the stored record's ID field; Find hashes the presented id
 // and looks the digest up.
 type opaqueAccessTokenStore struct {
-	mu sync.RWMutex
-	m  map[string]*store.OpaqueAccessToken
+	mu  sync.RWMutex
+	m   map[string]*store.OpaqueAccessToken
+	idx tokenIndex
 }
 
 func newOpaqueAccessTokenStore() *opaqueAccessTokenStore {
-	return &opaqueAccessTokenStore{m: make(map[string]*store.OpaqueAccessToken)}
+	return &opaqueAccessTokenStore{m: make(map[string]*store.OpaqueAccessToken), idx: newTokenIndex()}
 }
 
 // Save implements [store.OpaqueAccessTokenStore]. The raw ID is hashed
@@ -53,6 +54,7 @@ func (s *opaqueAccessTokenStore) Save(_ context.Context, tok *store.OpaqueAccess
 	// parameter before handing the record back.
 	stored.ID = key
 	s.m[key] = stored
+	opaqueTokenRowOps.track(s.idx, key, stored)
 	return nil
 }
 
@@ -113,18 +115,7 @@ func (s *opaqueAccessTokenStore) RevokeByGrant(_ context.Context, grantID string
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	n := 0
-	for _, rec := range s.m {
-		if rec.GrantID != grantID {
-			continue
-		}
-		if rec.Revoked {
-			continue
-		}
-		rec.Revoked = true
-		n++
-	}
-	return n, nil
+	return revokeIndexed(opaqueTokenRowOps, s.m, s.idx.byGrant[grantID], matchAnyToken), nil
 }
 
 // RevokeByChain implements [store.OpaqueAccessTokenChainRevoker].
@@ -134,15 +125,12 @@ func (s *opaqueAccessTokenStore) RevokeByChain(_ context.Context, grantID, chain
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	n := 0
-	for _, rec := range s.m {
-		if rec.GrantID != grantID || rec.ChainID != chainID || rec.Revoked {
-			continue
-		}
-		rec.Revoked = true
-		n++
-	}
-	return n, nil
+	return revokeIndexed(opaqueTokenRowOps, s.m, s.idx.byGrant[grantID], matchChain(chainID)), nil
+}
+
+// matchChain accepts the opaque rows minted under chainID.
+func matchChain(chainID string) func(*store.OpaqueAccessToken) bool {
+	return func(r *store.OpaqueAccessToken) bool { return r.ChainID == chainID }
 }
 
 // RevokeByClient implements [store.RevokeByClient]. The DCR delete
@@ -155,11 +143,7 @@ func (s *opaqueAccessTokenStore) RevokeByClient(_ context.Context, clientID stri
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	for _, rec := range s.m {
-		if rec.ClientID == clientID && !rec.Revoked {
-			rec.Revoked = true
-		}
-	}
+	revokeIndexed(opaqueTokenRowOps, s.m, s.idx.byClient[clientID], matchAnyToken)
 	return nil
 }
 
@@ -170,17 +154,27 @@ func (s *opaqueAccessTokenStore) RevokeByClient(_ context.Context, clientID stri
 func (s *opaqueAccessTokenStore) GC(_ context.Context, cutoff time.Time) (int, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	n := 0
-	for key, rec := range s.m {
-		if rec.ExpiresAt.IsZero() {
-			continue
-		}
-		if rec.ExpiresAt.Before(cutoff) {
-			delete(s.m, key)
-			n++
-		}
-	}
-	return n, nil
+	return gcRows(opaqueTokenRowOps, s.m, s.idx, cutoff), nil
+}
+
+// opaqueTokenRowOps adapts [store.OpaqueAccessToken] to the shared token-row helpers.
+//
+//nolint:gochecknoglobals // field accessors; immutable after package init.
+var opaqueTokenRowOps = tokenRowOps[*store.OpaqueAccessToken]{
+	grantID:    func(r *store.OpaqueAccessToken) string { return r.GrantID },
+	clientID:   func(r *store.OpaqueAccessToken) string { return r.ClientID },
+	expiresAt:  func(r *store.OpaqueAccessToken) time.Time { return r.ExpiresAt },
+	revoked:    func(r *store.OpaqueAccessToken) bool { return r.Revoked },
+	setRevoked: func(r *store.OpaqueAccessToken) { r.Revoked = true },
+}
+
+// overlay returns the transactional view of the store; a commit keeps the
+// grant and client indexes in step with the rows it writes and drops.
+func (s *opaqueAccessTokenStore) overlay() *overlay[*store.OpaqueAccessToken] {
+	o := newOverlay(s.m, cloneOpaqueAccessToken)
+	o.onPut = func(key string, rec *store.OpaqueAccessToken) { opaqueTokenRowOps.track(s.idx, key, rec) }
+	o.onDrop = func(key string, rec *store.OpaqueAccessToken) { opaqueTokenRowOps.untrack(s.idx, key, rec) }
+	return o
 }
 
 func cloneOpaqueAccessToken(rec *store.OpaqueAccessToken) *store.OpaqueAccessToken {

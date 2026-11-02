@@ -12,18 +12,18 @@ func TestGrantClientPageBuilder_HighCardinalityMemoryIsBounded(t *testing.T) {
 		distinctClients = 100_000
 		limit           = 8
 	)
-	builder := newGrantClientPageBuilder("", limit)
+	builder := newSortedPageBuilder("", limit)
 	for i := distinctClients - 1; i >= 0; i-- {
 		clientID := fmt.Sprintf("client-%06d", i)
 		builder.add(clientID)
 		builder.add(clientID)
 	}
-	page := builder.page()
-	if builder.peak > limit || len(builder.clientIDs) > limit {
+	page := builder.clientPage()
+	if builder.peak > limit || len(builder.items) > limit {
 		t.Fatalf(
 			"candidate storage peak=%d current=%d, want <=%d",
 			builder.peak,
-			len(builder.clientIDs),
+			len(builder.items),
 			limit,
 		)
 	}

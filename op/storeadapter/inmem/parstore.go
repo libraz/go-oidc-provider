@@ -17,7 +17,7 @@ type parStore struct {
 	mu           sync.RWMutex
 	clock        Clock
 	m            map[string]*store.PushedAuthRequest
-	savesSinceGC uint32
+	savesSinceGC sweeper
 }
 
 const (
@@ -142,15 +142,12 @@ func (s *parStore) gcLocked(now time.Time) {
 			delete(s.m, key)
 		}
 	}
-	s.savesSinceGC = 0
 }
 
 func (s *parStore) maybeGCLocked(now time.Time) {
-	s.savesSinceGC++
-	if !sweepDue(s.savesSinceGC, fullGCInterval, len(s.m)) {
-		return
+	if s.savesSinceGC.due(len(s.m)) {
+		s.gcLocked(now)
 	}
-	s.gcLocked(now)
 }
 
 // deleteReclaimableKeyLocked evicts the record under key when it is
@@ -161,11 +158,5 @@ func (s *parStore) maybeGCLocked(now time.Time) {
 // collision is a randomness fault, and overwriting a redeemable record
 // would hand its holder a different client's pushed request.
 func (s *parStore) deleteReclaimableKeyLocked(key string, now time.Time) {
-	rec, ok := s.m[key]
-	if !ok {
-		return
-	}
-	if parReclaimable(rec, now) {
-		delete(s.m, key)
-	}
+	evictIf(s.m, key, func(rec *store.PushedAuthRequest) bool { return parReclaimable(rec, now) })
 }

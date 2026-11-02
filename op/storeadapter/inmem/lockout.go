@@ -24,7 +24,7 @@ type authnLockoutStore struct {
 	mu           sync.Mutex
 	clock        Clock
 	m            map[string]*store.AuthnLockoutRecord
-	swapsSinceGC uint32
+	swapsSinceGC sweeper
 }
 
 const (
@@ -99,11 +99,9 @@ func (s *authnLockoutStore) CompareAndSwap(ctx context.Context, expectedVersion 
 // caller's own transition can never be undone by the sweep it
 // triggered; every other reclaimable row is dropped.
 func (s *authnLockoutStore) maybeGCLocked(now time.Time, keep string) {
-	s.swapsSinceGC++
-	if !sweepDue(s.swapsSinceGC, fullGCInterval, len(s.m)) {
+	if !s.swapsSinceGC.due(len(s.m)) {
 		return
 	}
-	s.swapsSinceGC = 0
 	for subject, rec := range s.m {
 		if subject == keep {
 			continue

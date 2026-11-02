@@ -1,6 +1,9 @@
 package inmem
 
-import "reflect"
+import (
+	"encoding/json"
+	"reflect"
+)
 
 // cloneObjectArray deep-copies a []map[string]any (the RFC 9396
 // authorization_details), including nested JSON maps and arrays, so a stored
@@ -32,6 +35,29 @@ func cloneMap(in map[string]any) map[string]any {
 // values, so cloning only map[string]any / []any would still alias legitimate
 // typed values such as []string or map[string][]any.
 func cloneJSONValue(v any) any {
+	// Plain decoded JSON never needs reflection; anything else falls through.
+	switch x := v.(type) {
+	case nil, string, bool, float64, json.Number:
+		return v
+	case map[string]any:
+		if x == nil {
+			return x
+		}
+		out := make(map[string]any, len(x))
+		for k, e := range x {
+			out[k] = cloneJSONValue(e)
+		}
+		return out
+	case []any:
+		if x == nil {
+			return x
+		}
+		out := make([]any, len(x))
+		for i, e := range x {
+			out[i] = cloneJSONValue(e)
+		}
+		return out
+	}
 	rv := reflect.ValueOf(v)
 	if !rv.IsValid() {
 		return nil
