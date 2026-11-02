@@ -37,6 +37,7 @@
     "client_authentication_type": "private_key_jwt",
     "hint_type": "login_hint",
     "hint_value": "demo",
+    "acr_value": "urn:mace:incommon:iap:bronze",
     "jwks": {
       "keys": [
         {

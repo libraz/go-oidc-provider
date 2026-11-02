@@ -357,9 +357,10 @@ func (a *autoApprovingCIBA) wait(d time.Duration) bool {
 // through [autoApprovingCIBA.logOutcome]. authTime is left zero: this
 // binary is a smoke-test fixture, the forbidigo gate blocks direct
 // time.Now in cmd/, and a zero AuthTime omits the auth_time claim — which
-// suits a demo that never asserts the value.
+// suits a demo that never asserts the value. The acr is the AAL1 URI the
+// demo advertises, the level its simulated device authentication reaches.
 func (a *autoApprovingCIBA) runApprove(authReqID, subject string) {
-	err := a.inner.Approve(a.ctx, authReqID, subject, "", time.Time{})
+	err := a.inner.Approve(a.ctx, authReqID, subject, op.AAL1.ACRURI(), time.Time{})
 	a.logOutcome(err, authReqID, "ciba auto-approved", "ciba auto-approve failed", slog.String("subject", subject))
 }
 
