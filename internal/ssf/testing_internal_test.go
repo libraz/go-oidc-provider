@@ -13,6 +13,7 @@ import (
 	josev4 "github.com/go-jose/go-jose/v4"
 
 	"github.com/libraz/go-oidc-provider/internal/audit"
+	"github.com/libraz/go-oidc-provider/internal/keys"
 	"github.com/libraz/go-oidc-provider/internal/timex"
 	"github.com/libraz/go-oidc-provider/op/store"
 	"github.com/libraz/go-oidc-provider/op/storeadapter/inmem"
@@ -42,7 +43,7 @@ func testKey(t testing.TB, kid string) (SigningKey, *ecdsa.PublicKey) {
 // testSealKey returns a fresh 32-byte seal key.
 func testSealKey(t testing.TB) []byte {
 	t.Helper()
-	k := make([]byte, sealKeyLen)
+	k := make([]byte, keys.AEADKeyLen)
 	if _, err := rand.Read(k); err != nil {
 		t.Fatalf("read seal key: %v", err)
 	}

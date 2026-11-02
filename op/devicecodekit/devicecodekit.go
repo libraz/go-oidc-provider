@@ -483,6 +483,11 @@ func (d *Deps) attemptLimiter() AttemptLimiter {
 	return d.limiter
 }
 
+// hasDeviceCodes reports whether d carries a usable device-code substore.
+func (d *Deps) hasDeviceCodes() bool {
+	return d != nil && !nilcheck.IsNil(d.DeviceCodes)
+}
+
 func (d *Deps) now() time.Time {
 	if d == nil {
 		return timex.SystemClock.Now().UTC()
@@ -531,7 +536,7 @@ func (d *Deps) now() time.Time {
 // first. Backends that violate the substore contract by losing
 // strikes break this guarantee.
 func VerifyUserCode(ctx context.Context, deps *Deps, deviceCodeID, submittedUserCode string) (matched bool, err error) {
-	if deps == nil || nilcheck.IsNil(deps.DeviceCodes) {
+	if !deps.hasDeviceCodes() {
 		return false, ErrInvalidArgument
 	}
 	if deviceCodeID == "" || submittedUserCode == "" {
@@ -563,10 +568,7 @@ func VerifyUserCode(ctx context.Context, deps *Deps, deviceCodeID, submittedUser
 // record is [ErrUnknownDeviceCode], a decided one [ErrAlreadyDecided].
 func pendingRecord(rec *store.DeviceCode, lookupErr error) (*store.DeviceCode, error) {
 	if lookupErr != nil {
-		if errors.Is(lookupErr, store.ErrNotFound) {
-			return nil, ErrUnknownDeviceCode
-		}
-		return nil, lookupErr
+		return nil, mapNotFound(lookupErr)
 	}
 	if rec.Status != store.DeviceCodeStatusPending {
 		return nil, ErrAlreadyDecided
@@ -588,7 +590,7 @@ func pendingRecord(rec *store.DeviceCode, lookupErr error) (*store.DeviceCode, e
 // and URL-supplied codes (verification_uri_complete) go through
 // [VerifyUserCodeByAttemptKey].
 func VerifyUserCodeByUserCode(ctx context.Context, deps *Deps, recordUserCode, submittedUserCode string) (matched bool, err error) {
-	if deps == nil || nilcheck.IsNil(deps.DeviceCodes) {
+	if !deps.hasDeviceCodes() {
 		return false, ErrInvalidArgument
 	}
 	if recordUserCode == "" || submittedUserCode == "" {
@@ -632,7 +634,7 @@ func VerifyUserCodeByUserCode(ctx context.Context, deps *Deps, recordUserCode, s
 // [VerifyUserCode] and [VerifyUserCodeByUserCode] unchanged for flows that
 // already bind the attempt to a record.
 func VerifyUserCodeByAttemptKey(ctx context.Context, deps *Deps, attemptKey, submittedUserCode string) (matched bool, err error) {
-	if deps == nil || nilcheck.IsNil(deps.DeviceCodes) || attemptKey == "" {
+	if !deps.hasDeviceCodes() || attemptKey == "" {
 		return false, ErrInvalidArgument
 	}
 	limiter := deps.attemptLimiter()
@@ -709,7 +711,7 @@ func VerifyUserCodeWithAttemptKey(ctx context.Context, deps *Deps, attemptKey, s
 // carried in the URL: a user approving a phished user_code otherwise cannot
 // tell what they are authorizing (RFC 8628 §5.4).
 func ApproveUserCode(ctx context.Context, deps *Deps, userCode, subject string, authTime time.Time) error {
-	if deps == nil || nilcheck.IsNil(deps.DeviceCodes) {
+	if !deps.hasDeviceCodes() {
 		return ErrInvalidArgument
 	}
 	if userCode == "" || subject == "" {
@@ -736,6 +738,15 @@ func ApproveUserCode(ctx context.Context, deps *Deps, userCode, subject string, 
 	return nil
 }
 
+// mapNotFound translates [store.ErrNotFound] to [ErrUnknownDeviceCode] and
+// passes any other error through.
+func mapNotFound(err error) error {
+	if errors.Is(err, store.ErrNotFound) {
+		return ErrUnknownDeviceCode
+	}
+	return err
+}
+
 // mapStoreErr translates the substore's transition errors to the kit's.
 func mapStoreErr(err error) error {
 	switch {
@@ -751,7 +762,7 @@ func mapStoreErr(err error) error {
 // DenyUserCode transitions a Pending device authorization to Denied
 // using only the human user_code as the record key.
 func DenyUserCode(ctx context.Context, deps *Deps, userCode, reason string) error {
-	if deps == nil || nilcheck.IsNil(deps.DeviceCodes) {
+	if !deps.hasDeviceCodes() {
 		return ErrInvalidArgument
 	}
 	if userCode == "" {
@@ -891,7 +902,7 @@ func recordStrikeWith(ctx context.Context, deps *Deps, clientID string, incremen
 // constants for the canonical cases and a stable embedder-defined
 // string otherwise (the SOC dashboard groups by this field).
 func Revoke(ctx context.Context, deps *Deps, deviceCodeID, reason string) error {
-	if deps == nil || nilcheck.IsNil(deps.DeviceCodes) {
+	if !deps.hasDeviceCodes() {
 		return ErrInvalidArgument
 	}
 	if deviceCodeID == "" {
@@ -902,16 +913,10 @@ func Revoke(ctx context.Context, deps *Deps, deviceCodeID, reason string) error 
 	// authoritative atomic transition: Consume may race this lookup.
 	rec, err := deps.DeviceCodes.FindByDeviceCode(ctx, deviceCodeID)
 	if err != nil {
-		if errors.Is(err, store.ErrNotFound) {
-			return ErrUnknownDeviceCode
-		}
-		return err
+		return mapNotFound(err)
 	}
 	if err := deps.DeviceCodes.Revoke(ctx, deviceCodeID, reason); err != nil {
-		if errors.Is(err, store.ErrNotFound) {
-			return ErrUnknownDeviceCode
-		}
-		return err
+		return mapNotFound(err)
 	}
 
 	result, cascadeErr := revokeGrantCredentials(ctx, deps, devicecode.GrantID(deviceCodeID), reason)

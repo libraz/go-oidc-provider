@@ -94,10 +94,7 @@ func New(d Deps) (*Transmitter, error) {
 	case d.Clients == nil:
 		return nil, errors.New("ssf: Deps.Clients is required")
 	}
-	emitter := d.Audit
-	if emitter == nil {
-		emitter = audit.Discard()
-	}
+	emitter := audit.OrDiscard(d.Audit)
 	return &Transmitter{
 		issuer:    d.Issuer,
 		streams:   d.Streams,

@@ -1,9 +1,11 @@
 package ssf
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"maps"
 	"net"
 	"net/http"
 	"net/url"
@@ -118,10 +120,7 @@ func NewHandlers(d HandlerDeps) (*Handlers, error) {
 	case d.ActiveKey == nil:
 		return nil, errors.New("ssf: HandlerDeps.ActiveKey is required")
 	}
-	emitter := d.Audit
-	if emitter == nil {
-		emitter = audit.Discard()
-	}
+	emitter := audit.OrDiscard(d.Audit)
 	return &Handlers{
 		issuer:        d.Issuer,
 		bearer:        d.Bearer,
@@ -503,9 +502,7 @@ func (h *Handlers) emitStream(ctx context.Context, name auditevent.Name, msg str
 		"stream_id": s.ID,
 		"delivery":  string(s.Delivery.Method),
 	}
-	for k, v := range extra {
-		extras[k] = v
-	}
+	maps.Copy(extras, extra)
 	h.audit.Emit(context.WithoutCancel(ctx), audit.Event{
 		Name:     string(name),
 		Level:    audit.LevelInfo,
@@ -528,7 +525,7 @@ func mgmtDecodeObject(w http.ResponseWriter, r *http.Request) (mgmtObject, error
 	if err != nil {
 		return nil, err
 	}
-	if len(strings.TrimSpace(string(b))) == 0 {
+	if len(bytes.TrimSpace(b)) == 0 {
 		return mgmtObject{}, nil
 	}
 	var obj mgmtObject

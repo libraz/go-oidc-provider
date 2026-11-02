@@ -290,16 +290,9 @@ func (r *Registrar) Register(ctx context.Context, session *Session, user User, r
 // existingCredentials reads the subject's registered passkeys and
 // projects them onto the ceremony's credential shape.
 func (r *Registrar) existingCredentials(ctx context.Context, subject string) ([]passkey.Credential, error) {
-	records, err := r.store.ListBySubject(ctx, subject)
+	creds, err := passkey.ListCredentials(ctx, r.store, subject)
 	if err != nil {
 		return nil, fmt.Errorf("passkeykit: list credentials: %w", err)
 	}
-	out := make([]passkey.Credential, 0, len(records))
-	for _, rec := range records {
-		if rec == nil {
-			continue
-		}
-		out = append(out, passkey.CredentialFromRecord(*rec))
-	}
-	return out, nil
+	return creds, nil
 }

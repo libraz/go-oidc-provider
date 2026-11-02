@@ -114,14 +114,7 @@ func (a *Argon2id) Hash(secret string) (string, error) {
 	if _, err := rand.Read(salt); err != nil {
 		return "", fmt.Errorf("authn: read salt: %w", err)
 	}
-	key := argon2id.Key([]byte(secret), salt, p.Iterations, p.Memory, p.Parallelism, p.KeyLength)
-	return argon2id.Encode(argon2id.PHCParams{
-		Memory:      p.Memory,
-		Iterations:  p.Iterations,
-		Parallelism: p.Parallelism,
-		Salt:        salt,
-		Hash:        key,
-	}), nil
+	return argon2id.Hash([]byte(secret), salt, argon2id.Params(p)), nil
 }
 
 func validateHashParams(p Argon2idParams) error {

@@ -75,13 +75,7 @@ func hashCodes(plain []string) ([]string, error) {
 	p := argon2idDefaults
 	out := make([]string, 0, len(plain))
 	for _, code := range plain {
-		out = append(out, argon2id.Encode(argon2id.PHCParams{
-			Memory:      p.Memory,
-			Iterations:  p.Iterations,
-			Parallelism: p.Parallelism,
-			Salt:        salt,
-			Hash:        deriveKey(code, salt, p),
-		}))
+		out = append(out, argon2id.Hash([]byte(normalise(code)), salt, p))
 	}
 	return out, nil
 }

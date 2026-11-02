@@ -2,6 +2,8 @@ package totp_test
 
 import (
 	"bytes"
+	"crypto/aes"
+	"crypto/cipher"
 	"crypto/rand"
 	"errors"
 	"testing"
@@ -186,5 +188,31 @@ func TestCodec_DistinctNoncesPerSeal(t *testing.T) {
 	b, _ := c.Seal([]byte("same-payload-of-twenty-bytes"), []byte("aad"))
 	if bytes.Equal(a, b) {
 		t.Error("two seals of the same plaintext produced identical bytes (nonce reuse)")
+	}
+}
+
+// A blob sealed with the explicit-nonce GCM construction used by earlier
+// releases must keep opening so stored TOTP secrets survive an upgrade.
+func TestCodec_OpensExplicitNonceBlob(t *testing.T) {
+	t.Parallel()
+	key := newKey(t)
+	block, err := aes.NewCipher(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gcm, err := cipher.NewGCM(block)
+	if err != nil {
+		t.Fatal(err)
+	}
+	nonce := bytes.Repeat([]byte{7}, gcm.NonceSize())
+	blob := gcm.Seal(bytes.Clone(nonce), nonce, []byte("legacy"), []byte("aad"))
+
+	c, err := totp.NewCodec(newKey(t), key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pt, err := c.Open(blob, []byte("aad"))
+	if err != nil || string(pt) != "legacy" {
+		t.Fatalf("Open = %q, %v", pt, err)
 	}
 }

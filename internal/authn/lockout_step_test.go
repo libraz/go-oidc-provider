@@ -60,11 +60,11 @@ func (f *lockoutStepFixture) fail(t *testing.T, n int) {
 
 func (f *lockoutStepFixture) remaining(t *testing.T) int {
 	t.Helper()
-	n, err := f.counter.RemainingAttempts(context.Background(), lockoutSubject)
+	st, err := f.counter.Status(context.Background(), lockoutSubject)
 	if err != nil {
-		t.Fatalf("RemainingAttempts: %v", err)
+		t.Fatalf("Status: %v", err)
 	}
-	return n
+	return st.Remaining
 }
 
 func (f *lockoutStepFixture) submit() (interaction.Step, error) {

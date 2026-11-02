@@ -2,6 +2,8 @@ package cookie_test
 
 import (
 	"bytes"
+	"crypto/aes"
+	"crypto/cipher"
 	"crypto/rand"
 	"encoding/base64"
 	"errors"
@@ -206,5 +208,31 @@ func TestCodec_DistinctNoncesPerSeal(t *testing.T) {
 	b, _ := c.Seal([]byte("same-payload"), []byte("aad"))
 	if a == b {
 		t.Error("two seals of the same plaintext produced identical ciphertext (nonce reuse)")
+	}
+}
+
+// A value sealed with the explicit-nonce GCM construction used by earlier
+// releases must keep opening so live cookies survive an upgrade.
+func TestCodec_OpensExplicitNonceValue(t *testing.T) {
+	t.Parallel()
+	key := newKey(t)
+	block, err := aes.NewCipher(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gcm, err := cipher.NewGCM(block)
+	if err != nil {
+		t.Fatal(err)
+	}
+	nonce := bytes.Repeat([]byte{7}, gcm.NonceSize())
+	value := base64.RawURLEncoding.EncodeToString(gcm.Seal(bytes.Clone(nonce), nonce, []byte("legacy"), []byte("aad")))
+
+	c, err := cookie.NewCodec(newKey(t), key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pt, err := c.Open(value, []byte("aad"))
+	if err != nil || string(pt) != "legacy" {
+		t.Fatalf("Open = %q, %v", pt, err)
 	}
 }

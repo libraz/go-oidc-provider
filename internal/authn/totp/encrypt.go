@@ -1,22 +1,10 @@
 package totp
 
 import (
-	"crypto/aes"
-	"crypto/cipher"
-	"crypto/rand"
 	"errors"
-	"fmt"
+
+	"github.com/libraz/go-oidc-provider/internal/keys"
 )
-
-// keyLen is the byte length required for AES-256 keys. The codec rejects
-// any other length at construction time so a misconfigured rotation slot
-// cannot silently weaken the cipher.
-const keyLen = 32
-
-// nonceLen is the GCM standard nonce length in bytes. The codec
-// generates a fresh random nonce per Seal and prepends it to the
-// returned blob.
-const nonceLen = 12
 
 // ErrInvalidKey is returned when a key supplied to [NewCodec] is not
 // exactly 32 bytes long. AES-256-GCM requires a 256-bit key.
@@ -38,8 +26,7 @@ var ErrDecrypt = errors.New("totp: ciphertext failed authentication")
 //
 // A Codec is immutable after construction and safe for concurrent use.
 type Codec struct {
-	current cipher.AEAD
-	prev    []cipher.AEAD
+	ring *keys.AEADRing
 }
 
 // NewCodec constructs a [Codec] from the supplied keys. The first key is
@@ -50,25 +37,11 @@ type Codec struct {
 // returns [ErrInvalidKey] so misconfiguration surfaces at startup
 // rather than at first verify.
 func NewCodec(current []byte, previous ...[]byte) (*Codec, error) {
-	if len(current) != keyLen {
-		return nil, ErrInvalidKey
-	}
-	cur, err := newAEAD(current)
+	ring, err := keys.NewAEADRing(ErrInvalidKey, current, previous...)
 	if err != nil {
-		return nil, fmt.Errorf("totp: build current AEAD: %w", err)
+		return nil, err
 	}
-	prev := make([]cipher.AEAD, 0, len(previous))
-	for i, k := range previous {
-		if len(k) != keyLen {
-			return nil, fmt.Errorf("totp: previous key %d: %w", i, ErrInvalidKey)
-		}
-		a, err := newAEAD(k)
-		if err != nil {
-			return nil, fmt.Errorf("totp: build previous AEAD %d: %w", i, err)
-		}
-		prev = append(prev, a)
-	}
-	return &Codec{current: cur, prev: prev}, nil
+	return &Codec{ring: ring}, nil
 }
 
 // Seal encrypts secret under the current key and returns the raw blob
@@ -81,11 +54,7 @@ func NewCodec(current []byte, previous ...[]byte) (*Codec, error) {
 // therefore fails to decrypt when replayed under a different subject —
 // the GCM tag verification rejects the AAD mismatch.
 func (c *Codec) Seal(secret, aad []byte) ([]byte, error) {
-	nonce := make([]byte, nonceLen)
-	if _, err := rand.Read(nonce); err != nil {
-		return nil, fmt.Errorf("totp: read nonce: %w", err)
-	}
-	return c.current.Seal(nonce, nonce, secret, aad), nil
+	return c.ring.Seal(secret, aad), nil
 }
 
 // Open decrypts a blob produced by [Codec.Seal]. It tries the current
@@ -93,30 +62,9 @@ func (c *Codec) Seal(secret, aad []byte) ([]byte, error) {
 // argument MUST match the value passed to Seal; mismatches return
 // [ErrDecrypt].
 func (c *Codec) Open(blob, aad []byte) ([]byte, error) {
-	if len(blob) < nonceLen {
+	pt, ok := c.ring.Open(blob, aad)
+	if !ok {
 		return nil, ErrDecrypt
 	}
-	nonce, ct := blob[:nonceLen], blob[nonceLen:]
-	if pt, err := c.current.Open(nil, nonce, ct, aad); err == nil {
-		return pt, nil
-	}
-	for _, prev := range c.prev {
-		if pt, err := prev.Open(nil, nonce, ct, aad); err == nil {
-			return pt, nil
-		}
-	}
-	return nil, ErrDecrypt
-}
-
-// newAEAD wraps [cipher.NewGCM] over an AES-256 cipher. The function is
-// only reachable after the key length has already been validated, so
-// any error here indicates a programming bug in the standard library;
-// it is surfaced rather than panicked so the operator sees a clean
-// startup error.
-func newAEAD(key []byte) (cipher.AEAD, error) {
-	block, err := aes.NewCipher(key)
-	if err != nil {
-		return nil, err
-	}
-	return cipher.NewGCM(block)
+	return pt, nil
 }

@@ -18,9 +18,13 @@ func (v *Verifier) checkSessionFresh(s *Session) error {
 	return nil
 }
 
-// sessionZeroTime returns the time.Time zero value. The helper exists
-// so the call sites in register.go / authenticate.go read more clearly
-// — the intent is "skip the upstream library's wall-clock check by
-// blanking Expires" — and so a future change of strategy (e.g. setting
-// a far-future stamp instead of zero) lives in one place.
-func sessionZeroTime() time.Time { return time.Time{} }
+// sessionExpiry is the absolute stamp for a Session created now.
+func (v *Verifier) sessionExpiry() time.Time {
+	return v.clock().Now().Add(v.SessionTTL).UTC()
+}
+
+// aaguidRecheckActive reports whether assertions must re-check the AAGUID
+// allowlist: the toggle is on and the allowlist is non-empty.
+func (v *Verifier) aaguidRecheckActive() bool {
+	return v.aaguidReCheckOnAssertion && len(v.aaguidAllowlist) > 0
+}

@@ -197,7 +197,7 @@ func (v *Verifier) Verify(_ context.Context, rec *store.TOTPRecord, code string)
 	clock := v.clock()
 	now := clock.Now()
 
-	if !rec.LockedUntil.IsZero() && rec.LockedUntil.After(now) {
+	if rec.LockedUntil.After(now) {
 		return &Result{Outcome: OutcomeLocked, Record: rec}, ErrLocked
 	}
 
@@ -234,16 +234,7 @@ func (v *Verifier) Verify(_ context.Context, rec *store.TOTPRecord, code string)
 
 	// Wrong code: roll the counter window forward if necessary, then
 	// increment and stamp lockouts.
-	if rec.FirstFailureAt.IsZero() || lockout.WindowExpired(rec.FirstFailureAt, now) {
-		rec.FirstFailureAt = now
-		rec.FailedCount = 0
-	}
-	rec.FailedCount++
-
-	lockedUntil, resetRequired := lockout.Escalate(rec.FailedCount, now)
-	if !lockedUntil.IsZero() {
-		rec.LockedUntil = lockedUntil
-	}
+	resetRequired := lockout.Advance(&rec.FailedCount, &rec.FirstFailureAt, &rec.LockedUntil, now)
 	if resetRequired {
 		return &Result{Outcome: OutcomeResetRequired, Record: rec}, ErrResetRequired
 	}

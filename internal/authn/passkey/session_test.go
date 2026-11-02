@@ -175,3 +175,22 @@ func TestSession_JSONRoundTripEmptyOptionalFields(t *testing.T) {
 		t.Errorf("UserVerification=%q want empty", round.UserVerification)
 	}
 }
+
+func TestSession_MarshalJSONWireFormat(t *testing.T) {
+	t.Parallel()
+
+	raw, err := json.Marshal(passkey.Session{
+		Challenge:            "abc",
+		UserID:               []byte{0x01},
+		AllowedCredentialIDs: [][]byte{{0x02}},
+		Expires:              time.Date(2026, 4, 26, 12, 0, 0, 0, time.UTC),
+		UserVerification:     "required",
+	})
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+	const want = `{"challenge":"abc","user_id":"AQ==","allowed_credential_ids":["Ag=="],"expires":"2026-04-26T12:00:00Z","user_verification":"required"}`
+	if string(raw) != want {
+		t.Errorf("wire = %s\nwant   %s", raw, want)
+	}
+}

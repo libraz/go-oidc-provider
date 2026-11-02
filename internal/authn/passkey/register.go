@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"time"
 
 	"github.com/go-webauthn/webauthn/metadata"
 	"github.com/go-webauthn/webauthn/protocol"
@@ -105,7 +106,7 @@ func (v *Verifier) BeginRegistration(_ context.Context, subject, name, displayNa
 	// stamp so tests inject a deterministic value and so the cookie
 	// payload reflects the verifier's authoritative clock rather
 	// than wall-clock time observed inside the library.
-	sd.Expires = v.clock().Now().Add(v.SessionTTL).UTC()
+	sd.Expires = v.sessionExpiry()
 
 	raw, err := json.Marshal(creation.Response)
 	if err != nil {
@@ -163,7 +164,7 @@ func (v *Verifier) FinishRegistration(ctx context.Context, owners store.PasskeyS
 	// Zero Expires so the upstream library's wall-clock check is
 	// skipped; we already verified freshness through our injected
 	// clock above.
-	sd.Expires = sessionZeroTime()
+	sd.Expires = time.Time{}
 
 	wc, err := v.wa.CreateCredential(user, sd, parsed)
 	if err != nil {

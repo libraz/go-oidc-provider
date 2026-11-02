@@ -47,3 +47,20 @@ func Escalate(failedCount int, now time.Time) (lockedUntil time.Time, resetRequi
 	}
 	return time.Time{}, false
 }
+
+// Advance folds one wrong-code failure into a per-factor record's counter
+// fields at now: it opens a fresh window when none is open or the open one
+// has expired, increments the count, and stamps the earned lock over any
+// earlier one. resetRequired mirrors [Escalate].
+func Advance(failedCount *int, firstFailureAt, lockedUntil *time.Time, now time.Time) (resetRequired bool) {
+	if firstFailureAt.IsZero() || WindowExpired(*firstFailureAt, now) {
+		*firstFailureAt = now
+		*failedCount = 0
+	}
+	*failedCount++
+	until, resetRequired := Escalate(*failedCount, now)
+	if !until.IsZero() {
+		*lockedUntil = until
+	}
+	return resetRequired
+}

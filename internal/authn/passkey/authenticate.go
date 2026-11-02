@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/go-webauthn/webauthn/protocol"
 	"github.com/go-webauthn/webauthn/webauthn"
@@ -67,7 +68,7 @@ var (
 // of it are dropped. The toggle defaults off so embedders that have not
 // opted in see no behaviour change.
 func (v *Verifier) assertableCredentials(credentials []Credential) []Credential {
-	if !v.aaguidReCheckOnAssertion || len(v.aaguidAllowlist) == 0 {
+	if !v.aaguidRecheckActive() {
 		return credentials
 	}
 	filtered := make([]Credential, 0, len(credentials))
@@ -118,7 +119,7 @@ func (v *Verifier) BeginLogin(_ context.Context, subject, name string, credentia
 		return nil, nil, fmt.Errorf("passkey: begin login: %w", err)
 	}
 
-	sd.Expires = v.clock().Now().Add(v.SessionTTL).UTC()
+	sd.Expires = v.sessionExpiry()
 
 	raw, err := json.Marshal(assertion.Response)
 	if err != nil {
@@ -199,7 +200,7 @@ func (v *Verifier) FinishLogin(_ context.Context, session *Session, subject, nam
 
 	user := newWebauthnUser(subject, name, name, credentials)
 	sd := decodeSession(*session)
-	sd.Expires = sessionZeroTime()
+	sd.Expires = time.Time{}
 
 	wc, err := v.wa.ValidateLogin(user, sd, parsed)
 	if err != nil {
@@ -218,7 +219,7 @@ func (v *Verifier) beginDiscoverableLogin() (*Session, error) {
 	if err != nil {
 		return nil, fmt.Errorf("passkey: begin discoverable login: %w", err)
 	}
-	sd.Expires = v.clock().Now().Add(v.SessionTTL).UTC()
+	sd.Expires = v.sessionExpiry()
 	session := encodeSession(*sd)
 	return &session, nil
 }
@@ -272,7 +273,7 @@ func (v *Verifier) finishDiscoverableLogin(session *Session, lookup credentialLo
 	}
 
 	sd := decodeSession(*session)
-	sd.Expires = sessionZeroTime()
+	sd.Expires = time.Time{}
 	sd.UserVerification = protocol.VerificationRequired
 
 	wc, err := v.wa.ValidateDiscoverableLogin(handler, sd, parsed)
@@ -322,7 +323,7 @@ func assertedCredential(wc webauthn.Credential, parsed *protocol.ParsedCredentia
 // accepted), mirroring the registration-time behaviour. A nil verifier
 // short-circuits to nil.
 func (v *Verifier) checkAAGUIDOnAssertion(stored Credential) error {
-	if v == nil || !v.aaguidReCheckOnAssertion || len(v.aaguidAllowlist) == 0 {
+	if v == nil || !v.aaguidRecheckActive() {
 		return nil
 	}
 	if !v.AAGUIDAllowed(stored.Authenticator.AAGUID) {

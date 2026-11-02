@@ -44,3 +44,15 @@ func Encode(p PHCParams) string {
 		base64.RawStdEncoding.EncodeToString(p.Hash),
 	)
 }
+
+// Hash derives the key for plain under salt and p through the gated [Key]
+// and renders it as a PHC string.
+func Hash(plain, salt []byte, p Params) string {
+	return Encode(PHCParams{
+		Memory:      p.Memory,
+		Iterations:  p.Iterations,
+		Parallelism: p.Parallelism,
+		Salt:        salt,
+		Hash:        Key(plain, salt, p.Iterations, p.Memory, p.Parallelism, p.KeyLength),
+	})
+}

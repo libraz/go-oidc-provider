@@ -15,7 +15,7 @@ import (
 // registers under. The value is fixed; user extensions that want a
 // different consent contract MUST pick a different dotted name (e.g.,
 // "myorg.consent.scope") so [op.New] does not silently swap them.
-const Name = "consent"
+const Name = authn.BuiltinConsentName
 
 // PromptType is the [interaction.Prompt.Type] the interaction emits.
 // The value is fixed to "consent.scope"; SPAs

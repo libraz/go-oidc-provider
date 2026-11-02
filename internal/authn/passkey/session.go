@@ -59,19 +59,22 @@ type Session struct {
 	UserVerification string `json:"user_verification,omitempty"`
 }
 
+// sessionWire is the JSON shape shared by [Session.MarshalJSON] and
+// [Session.UnmarshalJSON].
+type sessionWire struct {
+	Challenge            string    `json:"challenge"`
+	UserID               []byte    `json:"user_id,omitempty"`
+	AllowedCredentialIDs [][]byte  `json:"allowed_credential_ids,omitempty"`
+	Expires              time.Time `json:"expires"`
+	UserVerification     string    `json:"user_verification,omitempty"`
+}
+
 // MarshalJSON renders the session as a stable JSON object. The output
 // is deterministic for a given Session value (modulo Go's map ordering,
 // which the struct-based encoder does not exercise) so cookie payloads
 // are stable across library versions.
 func (s Session) MarshalJSON() ([]byte, error) {
-	type wire struct {
-		Challenge            string    `json:"challenge"`
-		UserID               []byte    `json:"user_id,omitempty"`
-		AllowedCredentialIDs [][]byte  `json:"allowed_credential_ids,omitempty"`
-		Expires              time.Time `json:"expires"`
-		UserVerification     string    `json:"user_verification,omitempty"`
-	}
-	w := wire{
+	w := sessionWire{
 		Challenge:            s.Challenge,
 		UserID:               s.UserID,
 		AllowedCredentialIDs: s.AllowedCredentialIDs,
@@ -86,14 +89,7 @@ func (s Session) MarshalJSON() ([]byte, error) {
 // timestamps are parsed in UTC; callers should not assume the original
 // timezone survived the round-trip.
 func (s *Session) UnmarshalJSON(data []byte) error {
-	type wire struct {
-		Challenge            string    `json:"challenge"`
-		UserID               []byte    `json:"user_id,omitempty"`
-		AllowedCredentialIDs [][]byte  `json:"allowed_credential_ids,omitempty"`
-		Expires              time.Time `json:"expires"`
-		UserVerification     string    `json:"user_verification,omitempty"`
-	}
-	var w wire
+	var w sessionWire
 	if err := json.Unmarshal(data, &w); err != nil {
 		return err
 	}

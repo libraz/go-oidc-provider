@@ -18,6 +18,7 @@ import (
 	"github.com/libraz/go-oidc-provider/internal/auditevent"
 	"github.com/libraz/go-oidc-provider/internal/backchannel"
 	"github.com/libraz/go-oidc-provider/internal/keys"
+	internallog "github.com/libraz/go-oidc-provider/internal/log"
 	"github.com/libraz/go-oidc-provider/internal/securefetch"
 	"github.com/libraz/go-oidc-provider/internal/timex"
 	"github.com/libraz/go-oidc-provider/op/store"
@@ -129,13 +130,10 @@ func NewWorker(d WorkerDeps) (*Worker, error) {
 	case d.SigningKey == nil:
 		return nil, errors.New("ssf: WorkerDeps.SigningKey is required")
 	}
-	emitter := d.Audit
-	if emitter == nil {
-		emitter = audit.Discard()
-	}
+	emitter := audit.OrDiscard(d.Audit)
 	logger := d.Logger
 	if logger == nil {
-		logger = slog.New(slog.DiscardHandler)
+		logger = slog.New(internallog.DiscardHandler{})
 	}
 	return &Worker{
 		events:     d.Events,
@@ -153,14 +151,10 @@ func NewWorker(d WorkerDeps) (*Worker, error) {
 // workerFetchClient builds the SSRF-hardened push client: https only and
 // no loopback unless the dev flag is set, no redirects, a bounded body.
 func workerFetchClient(allowPrivate, insecureDev bool, timeout time.Duration) *securefetch.Client {
-	schemes := []string{"https"}
-	if insecureDev {
-		schemes = []string{"http", "https"}
-	}
 	return securefetch.NewClient(securefetch.Policy{
 		AllowPrivateNetwork:  allowPrivate,
 		AllowLoopbackNetwork: insecureDev,
-		AllowedSchemes:       schemes,
+		AllowedSchemes:       securefetch.Schemes(insecureDev),
 		MaxBodyBytes:         backchannel.MaxResponseBytes,
 		Timeout:              timeout,
 	})

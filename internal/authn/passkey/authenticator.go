@@ -439,18 +439,11 @@ func (a *Authenticator) reportClone(ctx context.Context, subject string, cred *C
 // account-management mutation; that race is the embedder's
 // responsibility to serialise.
 func (a *Authenticator) loadCredentials(ctx context.Context, subject string) ([]Credential, error) {
-	records, err := a.store.ListBySubject(ctx, subject)
+	creds, err := ListCredentials(ctx, a.store, subject)
 	if err != nil {
 		return nil, fmt.Errorf("passkey: list credentials: %w", err)
 	}
-	out := make([]Credential, 0, len(records))
-	for _, r := range records {
-		if r == nil {
-			continue
-		}
-		out = append(out, CredentialFromRecord(*r))
-	}
-	return out, nil
+	return creds, nil
 }
 
 // persistCredential atomically applies the assertion fields through
@@ -549,6 +542,24 @@ func CredentialFromRecord(r store.PasskeyRecord) Credential {
 		CreatedAt:         r.CreatedAt,
 		expectedSignCount: r.SignCount,
 	}
+}
+
+// ListCredentials reads the subject's registered passkeys from st and
+// projects each row through [CredentialFromRecord]. A store fault is
+// returned unwrapped so each caller adds its own prefix.
+func ListCredentials(ctx context.Context, st store.PasskeyStore, subject string) ([]Credential, error) {
+	records, err := st.ListBySubject(ctx, subject)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]Credential, 0, len(records))
+	for _, r := range records {
+		if r == nil {
+			continue
+		}
+		out = append(out, CredentialFromRecord(*r))
+	}
+	return out, nil
 }
 
 // RecordFromCredential is the inverse of [CredentialFromRecord]: it

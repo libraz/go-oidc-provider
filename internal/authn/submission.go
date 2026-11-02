@@ -2,6 +2,7 @@ package authn
 
 import (
 	"regexp"
+	"sync"
 
 	"github.com/libraz/go-oidc-provider/op/interaction"
 )
@@ -132,14 +133,30 @@ func checkFieldPattern(spec interaction.FieldSpec, value string) error {
 	if spec.Pattern == "" {
 		return nil
 	}
-	re, err := regexp.Compile(`\A(?:` + spec.Pattern + `)\z`)
-	if err != nil {
-		return ErrSubmissionRejected
-	}
-	if !re.MatchString(value) {
+	re := fieldPattern(spec.Pattern)
+	if re == nil || !re.MatchString(value) {
 		return ErrSubmissionRejected
 	}
 	return nil
+}
+
+// fieldPatterns caches compiled full-match patterns by source text. The key
+// set is bounded by the embedder's prompt specs; a pattern that does not
+// compile is cached as nil so it keeps failing closed without recompiling.
+//
+//nolint:gochecknoglobals // process-wide compile cache keyed by immutable pattern text.
+var fieldPatterns sync.Map
+
+func fieldPattern(pattern string) *regexp.Regexp {
+	if v, ok := fieldPatterns.Load(pattern); ok {
+		return v.(*regexp.Regexp)
+	}
+	re, err := regexp.Compile(`\A(?:` + pattern + `)\z`)
+	if err != nil {
+		re = nil
+	}
+	v, _ := fieldPatterns.LoadOrStore(pattern, re)
+	return v.(*regexp.Regexp)
 }
 
 // effectiveMaxLen resolves the byte ceiling for spec: its own MaxLen

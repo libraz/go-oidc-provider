@@ -157,7 +157,7 @@ func (v *Verifier) Verify(_ context.Context, rec *store.EmailOTPRecord, code str
 		// observes the failure independently of this record's state.
 		return &Result{Outcome: OutcomeConsumed, Record: rec}, ErrConsumed
 	}
-	if !rec.LockedUntil.IsZero() && rec.LockedUntil.After(now) {
+	if rec.LockedUntil.After(now) {
 		return &Result{Outcome: OutcomeLocked, Record: rec}, ErrLocked
 	}
 	if !rec.ExpiresAt.IsZero() && rec.ExpiresAt.Before(now) {
@@ -172,15 +172,7 @@ func (v *Verifier) Verify(_ context.Context, rec *store.EmailOTPRecord, code str
 		rec.ConsumedAt = now
 		return &Result{Outcome: OutcomeSuccess, Record: rec}, nil
 	}
-	if rec.FirstFailureAt.IsZero() || lockout.WindowExpired(rec.FirstFailureAt, now) {
-		rec.FirstFailureAt = now
-		rec.FailedCount = 0
-	}
-	rec.FailedCount++
-	lockedUntil, resetRequired := lockout.Escalate(rec.FailedCount, now)
-	if !lockedUntil.IsZero() {
-		rec.LockedUntil = lockedUntil
-	}
+	resetRequired := lockout.Advance(&rec.FailedCount, &rec.FirstFailureAt, &rec.LockedUntil, now)
 	if resetRequired {
 		return &Result{Outcome: OutcomeResetRequired, Record: rec}, ErrResetRequired
 	}

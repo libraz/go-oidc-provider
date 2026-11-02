@@ -137,7 +137,7 @@ func (a *Authenticator) Begin(ctx context.Context, in authn.BeginInput) (interac
 		return interaction.Step{}, authn.ErrFactorNotEnrolled
 	}
 	now := a.verifier.clock().Now()
-	if !rec.LockedUntil.IsZero() && rec.LockedUntil.After(now) {
+	if rec.LockedUntil.After(now) {
 		return interaction.Step{}, ErrLocked
 	}
 	return interaction.Step{Prompt: a.prompt(attemptsRemaining(rec, shared.Remaining, now))}, nil

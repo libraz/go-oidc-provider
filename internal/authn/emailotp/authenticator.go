@@ -130,7 +130,7 @@ const (
 	// dropping the record at code expiry would silently reset both. Every
 	// write re-stamps RetainUntil from the current clock, so retention
 	// always covers whichever window is still live.
-	recordRetention = 24 * time.Hour
+	recordRetention = lockout.CounterWindow
 
 	// constantSendLatency is the minimum total elapsed wall time
 	// [handleSend] returns after, regardless of whether the supplied
@@ -581,22 +581,12 @@ func (a *Authenticator) handleVerify(ctx context.Context, in authn.ContinueInput
 		}
 		previous := cloneRecord(rec)
 		res, verr := a.verifier.Verify(ctx, rec, code)
-		if res != nil && res.Record != nil && res.Outcome != OutcomeLocked && res.Outcome != OutcomeExpired && res.Outcome != OutcomeConsumed && res.Outcome != OutcomeSuccess {
-			// Locked / expired / consumed branches leave the record
-			// unchanged (verifier short-circuits before mutating counters);
-			// wrong-code and reset-required branches still need persisting.
-			// Re-stamp RetainUntil so a failed attempt extends the record's
-			// retention rather than letting it lapse at the original expiry.
-			res.Record.RetainUntil = a.clock.Now().Add(recordRetention)
-			if perr := a.store.CompareAndSwap(ctx, previous, res.Record); perr != nil {
-				if errors.Is(perr, store.ErrAlreadyConsumed) {
-					// Re-read and re-verify against the winning state. This
-					// preserves every finite concurrent wrong-code attempt
-					// instead of merely rejecting the stale writer.
-					continue
-				}
-				return interaction.Step{}, fmt.Errorf("emailotp: persist record: %w", perr)
-			}
+		retry, perr := a.persistFailure(ctx, previous, res)
+		if perr != nil {
+			return interaction.Step{}, perr
+		}
+		if retry {
+			continue
 		}
 		switch {
 		case verr == nil:
@@ -642,6 +632,26 @@ func (a *Authenticator) handleVerify(ctx context.Context, in authn.ContinueInput
 			return interaction.Step{}, verr
 		}
 	}
+}
+
+// persistFailure writes back the verifier's counter changes. Locked, expired,
+// consumed and success verdicts leave the record untouched here (success goes
+// through Consume). retry reports a lost race the caller resolves by
+// re-reading and re-verifying against the winning state.
+func (a *Authenticator) persistFailure(ctx context.Context, previous *store.EmailOTPRecord, res *Result) (retry bool, err error) {
+	if res == nil || res.Record == nil || res.Outcome == OutcomeLocked || res.Outcome == OutcomeExpired ||
+		res.Outcome == OutcomeConsumed || res.Outcome == OutcomeSuccess {
+		return false, nil
+	}
+	// Re-stamp RetainUntil so a failed attempt extends the record's retention.
+	res.Record.RetainUntil = a.clock.Now().Add(recordRetention)
+	if perr := a.store.CompareAndSwap(ctx, previous, res.Record); perr != nil {
+		if errors.Is(perr, store.ErrAlreadyConsumed) {
+			return true, nil
+		}
+		return false, fmt.Errorf("emailotp: persist record: %w", perr)
+	}
+	return false, nil
 }
 
 func cloneRecord(r *store.EmailOTPRecord) *store.EmailOTPRecord {

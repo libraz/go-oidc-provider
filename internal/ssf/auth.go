@@ -51,7 +51,7 @@ func (h *Handlers) authorize(w http.ResponseWriter, r *http.Request, level authL
 			be.WriteResponse(w)
 			return "", false
 		}
-		_ = httpx.WriteError(w, http.StatusInternalServerError, "server_error", "")
+		mgmtServerError(w)
 		return "", false
 	}
 	claims := access.Claims
@@ -134,15 +134,15 @@ func mgmtReadBody(w http.ResponseWriter, r *http.Request) ([]byte, error) {
 // mgmtWriteBodyError maps a [mgmtReadBody] or decode failure onto 413 or 400.
 func mgmtWriteBodyError(w http.ResponseWriter, err error) {
 	if errors.Is(err, errMgmtBodyTooLarge) {
-		_ = httpx.WriteError(w, http.StatusRequestEntityTooLarge, "invalid_request", "request body too large")
+		_ = httpx.WriteError(w, http.StatusRequestEntityTooLarge, endpointsupport.ErrInvalidRequest, "request body too large")
 		return
 	}
 	var re *mgmtRequestError
 	if errors.As(err, &re) {
-		_ = httpx.WriteError(w, http.StatusBadRequest, "invalid_request", re.desc)
+		_ = httpx.WriteError(w, http.StatusBadRequest, endpointsupport.ErrInvalidRequest, re.desc)
 		return
 	}
-	_ = httpx.WriteError(w, http.StatusBadRequest, "invalid_request", "malformed request body")
+	_ = httpx.WriteError(w, http.StatusBadRequest, endpointsupport.ErrInvalidRequest, "malformed request body")
 }
 
 // mgmtRequestError is a 400 with a description safe to return.
@@ -154,7 +154,7 @@ func mgmtBadRequest(desc string) error { return &mgmtRequestError{desc: desc} }
 
 // mgmtServerError writes an opaque 500.
 func mgmtServerError(w http.ResponseWriter) {
-	_ = httpx.WriteError(w, http.StatusInternalServerError, "server_error", "")
+	endpointsupport.WriteServerError(w)
 }
 
 // mgmtNotFound writes the 404 that hides another receiver's stream.
