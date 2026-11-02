@@ -20,29 +20,11 @@
       "expires": "2027-01-31"
     },
     {
-      "plan": "oidcc-config-certification-test-plan",
-      "module": "oidcc-discovery-endpoint-verification",
-      "status": "FINISHED",
-      "result": "FAILED",
-      "reason": "The OP signs id_token, JWT access tokens, signed userinfo and JARM with ES256 only, so id_token_signing_alg_values_supported does not list RS256. OIDC Core 1.0 section 15.1 makes RS256 mandatory to implement and this module asserts it. Single-algorithm signing is a permanent design decision, not a staged rollout: it removes algorithm negotiation and the downgrade guard that negotiation requires, and ES256 satisfies the FAPI 2.0 profiles this OP targets, which forbid RS256 outright. Relying parties that can only verify RS256 are knowingly unsupported.",
-      "owner": "@libraz",
-      "expires": "2027-01-31"
-    },
-    {
       "plan": "oidcc-dynamic-certification-test-plan",
       "module": "oidcc-discovery-endpoint-verification",
       "status": "FINISHED",
       "result": "FAILED",
-      "reason": "Same cause as the oidcc-config exclusion above: the advertised id_token signing algorithms are ES256 only, and this module asserts the OIDC Core 1.0 section 15.1 RS256 requirement.",
-      "owner": "@libraz",
-      "expires": "2027-01-31"
-    },
-    {
-      "plan": "oidcc-dynamic-certification-test-plan",
-      "module": "oidcc-idtoken-rs256",
-      "status": "INTERRUPTED",
-      "result": "FAILED",
-      "reason": "The module registers a client requesting id_token_signed_response_alg RS256, which dynamic client registration rejects with invalid_client_metadata because ES256 is the only supported signing algorithm. The module cannot reach its assertions. Same permanent single-algorithm rationale as the oidcc-config exclusion above.",
+      "reason": "The dynamic certification profile also requires the id_token and token id_token response types and the implicit grant, which this OP does not implement (it serves the authorization code flow only, as OAuth 2.0 Security BCP recommends). The signing-algorithm checks in this module pass when the plan runs against an RS256 OP; the remaining failures are OIDCCCheckDiscEndpointResponseTypesSupportedDynamic and OIDCCCheckDiscEndpointGrantTypesSupportedDynamic.",
       "owner": "@libraz",
       "expires": "2027-01-31"
     },
@@ -51,7 +33,7 @@
       "module": "oidcc-userinfo-rs256",
       "status": "INTERRUPTED",
       "result": "FAILED",
-      "reason": "The module registers a client requesting userinfo_signed_response_alg RS256, which dynamic client registration rejects for the same reason as oidcc-idtoken-rs256 above.",
+      "reason": "The module registers a client with userinfo_signed_response_alg RS256 and no userinfo encryption. Dynamic registration rejects that member with invalid_client_metadata because the OP returns the signed UserInfo shape to a request carrying Accept: application/jwt rather than to a registration value. The algorithm is not the cause: the same registration is rejected with ES256, and the OP issues RS256 UserInfo when configured with WithSigningAlgorithm(AlgRS256).",
       "owner": "@libraz",
       "expires": "2027-01-31"
     }
@@ -60,7 +42,7 @@
     {
       "result": "SKIPPED",
       "module": "*RS256-fails",
-      "reason": "These modules assert that an RS256-signed client assertion or request object is REJECTED. The suite skips them when the OP advertises no RS256 support at all, which is the case here: signing is ES256 only, permanently for the 1.x line. There is nothing for the module to send that the OP would even parse, so a skip is the correct outcome rather than a gap.",
+      "reason": "These modules assert that an RS256-signed client assertion or request object is REJECTED under a FAPI profile. The suite skips them because the client JWKS the suite registers for the FAPI plans holds only an ES256 key, so it has no RSA key to sign the negative case with. FAPI profiles refuse RS256 issuing on the OP side as well, so a skip is the correct outcome rather than a gap.",
       "owner": "@libraz",
       "expires": "2027-01-31"
     },
@@ -178,8 +160,8 @@
       "plan": "oidcc-dynamic-certification-test-plan",
       "module": "oidcc-request-uri-signed-rs256",
       "status": "WAITING",
-      "reason": "The module pushes an RS256-signed request object and expects the authorization request to succeed. Signing is ES256 only, permanently for the 1.x line, so the OP refuses before redirecting — which is the correct behaviour and the same policy the oidcc-idtoken-rs256 and oidcc-userinfo-rs256 exclusions cover. Those two reach INTERRUPTED/FAILED because dynamic registration rejects them outright; this one registers fine and only fails at request time, leaving the suite waiting for a callback the OP must not send.",
-      "evidence": "Ran standalone against a live suite: /authorize returns the pre-redirect error page and the suite's last log line is 'Redirecting to authorization endpoint' with no REVIEW placeholder to resolve. Stopping the runner over the REST API moves it to INTERRUPTED but still leaves the result empty, so there is no verdict to record either way.",
+      "reason": "The OP cannot fetch the request_uri the suite publishes at https://localhost.emobix.co.uk:8443: the suite's nginx serves a self-signed certificate, and op-demo installs the conformance CA only on the JWKS fetcher's transport, not on the request_uri fetcher, so /authorize answers invalid_request_uri (request_uri fetch failed) before redirecting and the suite waits for a callback that never comes. The signing algorithm is not the cause: the run against an RS256 OP fails at the fetch, before the request object is verified.",
+      "evidence": "Re-run standalone against an RS256 op-demo: /authorize returns {\"error\":\"invalid_request_uri\",\"error_description\":\"request_uri fetch failed\"}; the generic fetch failure (not the blocked-network wording) and a curl to the same URL failing certificate verification without -k place the failure in TLS trust.",
       "owner": "@libraz",
       "expires": "2027-01-31"
     }
