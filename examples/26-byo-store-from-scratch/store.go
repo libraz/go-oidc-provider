@@ -40,12 +40,12 @@ type scratchStore struct {
 }
 
 // newScratchStore builds the aggregate. The clock is time.Now wrapped
-// once here; examples MAY call time.Now (internal/timex is unreachable
-// from examples/).
+// once here; examples stay on the public op API, which has no clock
+// helper, so they call time.Now directly.
 func newScratchStore(db *databasesql.DB) *scratchStore {
 	s := &scratchStore{
 		db:     db,
-		now:    time.Now, //nolint:forbidigo // example store — not OP business logic; internal/timex is unreachable from examples/.
+		now:    time.Now, //nolint:forbidigo // example store — not OP business logic; examples use only the public op API.
 		txGate: make(chan struct{}, 1),
 	}
 	s.users = &userStore{q: s.q()}

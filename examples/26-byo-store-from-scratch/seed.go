@@ -34,7 +34,7 @@ ON CONFLICT(principal) DO UPDATE SET
     display_name  = excluded.display_name,
     contact_email = excluded.contact_email,
     last_touched  = excluded.last_touched;`
-	now := time.Now().Unix() //nolint:forbidigo // example seed script — not OP business logic; internal/timex is unreachable from examples/.
+	now := time.Now().Unix() //nolint:forbidigo // example seed script — not OP business logic; examples stay on the public op API, which has no clock helper.
 	if _, err := db.ExecContext(ctx, upsert,
 		demoSubject, demoUsername, hash, "Demo User", demoUsername, now,
 	); err != nil {
