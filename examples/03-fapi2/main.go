@@ -119,9 +119,9 @@ func run() error {
 		op.WithLoginFlow(flow),
 		// WithProfile(FAPI2Baseline) caps client-auth methods at
 		// private_key_jwt and forces sender-constrained access tokens.
-		// The profile requires the embedder to choose between DPoP
-		// (RFC 9449) and mTLS (RFC 8705) for the constraint binding,
-		// surfaced via WithFeature so the choice is auditable in the
+		// The profile enables DPoP (RFC 9449) by itself; adding
+		// feature.MTLS (RFC 8705) switches the binding to mTLS. The
+		// explicit WithFeature below keeps the choice visible in the
 		// op.New call.
 		op.WithProfile(profile.FAPI2Baseline),
 		op.WithFeature(feature.DPoP),

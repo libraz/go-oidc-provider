@@ -11,6 +11,16 @@
 //     [op.PrimaryPassword], rewritten as argon2id on each user's next login.
 //   - clients.go: the static clients and the sync-clients admin command.
 //
+// Commands (run to completion and exit instead of serving):
+//
+//	sync-clients        write the static clients to the store; run before a new version starts
+//	check-schema        validate every OP table and index, exit non-zero on a gap (deploy gate)
+//	disable-user EMAIL  set disabled_at on the user's row, then revoke the subject's grants
+//
+// Disabling a user is two steps on purpose: the application's own table
+// stops resolving the subject (users.go), and Provider.RevokeSubject ends
+// the tokens already issued. Either alone leaves a way in.
+//
 // SQLite is the default so the example runs without a database server.
 // A deployment points it at MySQL or PostgreSQL instead: import the
 // driver (github.com/go-sql-driver/mysql or github.com/jackc/pgx/v5/stdlib),
@@ -47,6 +57,12 @@
 //  5. Stop the server, edit the client in clients.go, and run
 //     (cd examples/53-production-sql && GOWORK=off go run -tags example . sync-clients)
 //     before starting it again; without the sync, startup refuses the edit.
+//  6. Gate a deploy on the schema: (cd examples/53-production-sql && GOWORK=off go run -tags example . check-schema)
+//     exits non-zero and lists every missing table, column or index.
+//  7. (cd examples/53-production-sql && GOWORK=off go run -tags example . disable-user bob@example.com)
+//     sets disabled_at on bob's row and revokes his grants; he can no
+//     longer sign in. The EXAMPLE53_MIGRATE=1 table of an earlier run lacks
+//     the disabled_at column: ALTER TABLE app_users ADD COLUMN disabled_at TEXT.
 package main
 
 import (
@@ -100,10 +116,36 @@ func main() {
 	}
 }
 
+// parseCommand returns the subcommand args name, or "" to serve.
+func parseCommand(args []string) (string, error) {
+	var cmd string
+	if len(args) > 0 {
+		cmd = args[0]
+	}
+	switch {
+	case len(args) == 0,
+		len(args) == 1 && (cmd == "sync-clients" || cmd == "check-schema"),
+		len(args) == 2 && cmd == "disable-user":
+		return cmd, nil
+	default:
+		return "", fmt.Errorf("unknown arguments %q; the commands are sync-clients, check-schema and disable-user <email>", args)
+	}
+}
+
+// checkSchema is the deploy gate: it fails when any OP table or index is
+// missing or behind the release.
+func checkSchema(ctx context.Context, storage *oidcsql.Store) error {
+	if err := storage.ValidateSchema(ctx); err != nil {
+		return fmt.Errorf("schema check failed: %w", err)
+	}
+	log.Printf("schema ok")
+	return nil
+}
+
 func run(args []string) error {
-	syncOnly := len(args) == 1 && args[0] == "sync-clients"
-	if len(args) > 0 && !syncOnly {
-		return fmt.Errorf("unknown arguments %q; the only command is sync-clients", args)
+	cmd, err := parseCommand(args)
+	if err != nil {
+		return err
 	}
 	cfg := loadConfig()
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -118,8 +160,11 @@ func run(args []string) error {
 	if err != nil {
 		return err
 	}
-	if syncOnly {
+	switch cmd {
+	case "sync-clients":
 		return syncClients(ctx, storage)
+	case "check-schema":
+		return checkSchema(ctx, storage)
 	}
 
 	if err := ensureKeys(cfg.keysDir); err != nil {
@@ -134,6 +179,14 @@ func run(args []string) error {
 	handler, err := op.NewReloadable(opts...)
 	if err != nil {
 		return fmt.Errorf("op.NewReloadable: %w", err)
+	}
+	if cmd == "disable-user" {
+		defer func() { _ = handler.Shutdown(context.Background()) }()
+		if err := disableUserByEmail(ctx, db, handler.Provider(), args[1]); err != nil {
+			return err
+		}
+		log.Printf("user %s disabled and its grants revoked", args[1])
+		return nil
 	}
 	go reloadOnHangup(ctx, handler, build)
 	go sweepExpiredRows(ctx, storage)

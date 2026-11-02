@@ -50,7 +50,7 @@ if err != nil {
 log.Fatal(http.ListenAndServe(":8080", handler))
 ```
 
-`st` は OP 自身のレコード（クライアント、コード、トークン、セッション）を保存します。`op.New` は、構成が使う SQL アダプタのテーブルを構築時に検査し、足りないテーブルがあれば名前を挙げて止まります。どのテーブルが対象になるかは [`TABLES.md`](op/storeadapter/sql/schema/TABLES.md) にまとめてあります。`users` は既存のユーザテーブルを `store.UserPasswordStore` として渡したもので、実装するのは読み取りメソッド 3 つで、レガシーハッシュ（bcrypt など）を `PrimaryPassword.LegacySchemes` で再ハッシュする場合に限り、ハッシュの書き戻しメソッドも任意で実装できます。再割り当てされない識別子の列がすでにあれば、列を足す必要はありません。詳しくは [Bring your own user store](https://go-oidc-provider.libraz.net/ja/use-cases/byo-userstore) を参照してください。
+`st` は OP 自身のレコード（クライアント、コード、トークン、セッション）を保存します。`op.New` は、構成が使う SQL アダプタのテーブルを構築時に検査し、足りないテーブルがあれば名前を挙げて止まります。どのテーブルが対象になるかは [`TABLES.md`](op/storeadapter/sql/schema/TABLES.md) にまとめてあります。`users` は既存のユーザテーブルを `store.UserPasswordStore` として渡したもので、実装するのは読み取りメソッド 3 つで、レガシーハッシュ（bcrypt など）を `PrimaryPassword.LegacySchemes` で再ハッシュする場合に限り、ハッシュの書き戻しメソッドも任意で実装できます。一度だけ割り当てられ再利用されない不透明な識別子（自動採番の id やメールアドレスは不可）の列がすでにあれば、列を足す必要はありません。詳しくは [Bring your own user store](https://go-oidc-provider.libraz.net/ja/use-cases/byo-userstore) を参照してください。
 
 `Issuer` / `Store` / `Keyset` は常に必須です。認可コード（`authorization_code`）による認可は既定で有効になっており、これを使う場合は `CookieKeys` と `LoginFlow` も必須です。`op.New` は安全でない構成のままでは起動せずにエラーを返すので、不完全な設定は構築時に弾かれます。
 

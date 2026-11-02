@@ -78,7 +78,8 @@ those are. `users` is your existing users table behind
 `store.UserPasswordStore`: three read methods, plus an optional hash
 write-back when legacy hashes (such as bcrypt) are rehashed through
 `PrimaryPassword.LegacySchemes`, and no new column when the table already has
-an identifier that is never reassigned. See
+an opaque identifier assigned once and never reused (not an auto-increment id
+or an email address). See
 [Bring your own user store](https://go-oidc-provider.libraz.net/use-cases/byo-userstore).
 
 `Issuer`, `Store` and `Keyset` are always required. `CookieKeys` and

@@ -170,9 +170,10 @@ must implement `AuthnLockouts()` or be paired with
   adapters and `composite.Store` (which forwards its Users backend's). It
   was previously off unless `op.WithAuthnLockoutStore` was set. `op.New`
   refuses to construct, with `op.ErrAuthnLockoutStoreRequired`, when a
-  password or second-factor step is configured and no lockout store
-  resolves, instead of running with per-subject brute-force limiting off. A
-  bring-your-own store implements the new `store.AuthnLockoutProvider`
+  step that counts failures (password, second factor, or an `ExternalStep`
+  with `CountFailures`) is configured and no lockout store resolves,
+  instead of running with per-subject brute-force limiting off. Specific
+  step errors are reported before it. A bring-your-own store implements the new `store.AuthnLockoutProvider`
   (`AuthnLockouts() store.AuthnLockoutStore`), or the embedder passes
   `op.WithAuthnLockoutStore`.
 
@@ -220,6 +221,26 @@ must implement `AuthnLockouts()` or be paired with
   `store.StandardClaims` builds the map with the right types.
 
 ### Changed
+
+- Construction errors name profiles by their Go identifier
+  (`profile.OAuth21`, `profile.FAPI2Baseline` and so on) instead of the wire
+  slug. Several hints were corrected: the CIBA and device-code substore
+  hints, the default access-token revocation strategy, the dynamic
+  registration substore, and the FAPI DPoP requirement.
+
+- When more than one required substore is missing, `op.New` reports them
+  together in one joined error instead of stopping at the first.
+
+- The warning that forwarded headers arrived while `op.WithTrustedProxies`
+  is not configured goes to `slog.Default()` when no `op.WithLogger` is set;
+  it was discarded before.
+
+- `op.New` warns at startup when `op.WithSPAUI` and
+  `op.WithInteractionDriver` are combined.
+
+- `MIGRATIONS.md` covers keeping the OP's migration history separate from
+  the application's, and `store.UserPasswordHashUpdater` documents that
+  rewritten hashes are argon2id.
 
 - `op.New` now warns at construction when `feature.PKCE` is passed to
   `op.WithFeature`, which has no effect (PKCE for confidential clients is
@@ -274,7 +295,7 @@ must implement `AuthnLockouts()` or be paired with
 
 - An authorization-code OP that declares no profile requiring PKCE logs one
   warning at `op.New`: a confidential client may then redeem a code without
-  PKCE. `op.WithProfile(profile.Baseline)` silences it; behaviour is
+  PKCE. `op.WithProfile(profile.OAuth21)` silences it; behaviour is
   unchanged.
 
 - An invalid issuer is reported with the value and the rule it broke, such as
@@ -491,6 +512,10 @@ must implement `AuthnLockouts()` or be paired with
   subject mapping to `op.WithJWTBearerGrant`.
 
 ### Added
+
+- `oidcsql.WithTablePrefix` prefixes every table the SQL adapter creates and
+  queries, mirroring the DynamoDB adapter's option, so the OP's tables can
+  sit beside an application's in one schema.
 
 - `profile.OAuth21` names the OAuth 2.1 profile: PKCE on every
   authorization-code request. It has the value `profile.Baseline` had, and
