@@ -69,7 +69,7 @@ rows:
     spec: SSF 1.0 §8.1 / RFC 6750 §3.1
     shape: value
     behaviour: |
-      A request without a bearer token is 401 with a Bearer challenge. A token with only `ssf.read` can read its own stream and is refused with 403 on create, PATCH, PUT, delete, status change and verification, leaving the stream unchanged. A token carrying neither ssf scope is refused.
+      A request without a bearer token is 401 with a Bearer challenge. A token with only `ssf.read` can read its own stream and is refused with 403 on create, PATCH, PUT, delete, status change and verification, leaving the stream unchanged. A token carrying neither ssf scope is refused. A client_credentials token revoked at /revoke or expired, and a user-delegated token carrying ssf scopes from the code flow, are 401 invalid_token on streams, status, verify and poll.
     status: active
 
   - id: SSF-013
