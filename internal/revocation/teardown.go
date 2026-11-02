@@ -362,20 +362,9 @@ func (r Revoker) runGrant(ctx context.Context, s Scope) Outcome {
 	}
 	var out Outcome
 	if s.classes&classAccessTokens != 0 {
-		if err := RevokeJWTAccessTokensByGrant(ctx, JWTGrantCascadeOpts{
-			AccessTokens:       r.AccessTokens,
-			GrantRevocations:   r.GrantRevocations,
-			RevocationStrategy: r.Strategy,
-		}, s.grantID, r.Now, r.TombstoneRetention, r.Reason, s.classes&classIssuance == 0); err != nil {
-			out.add(SurfaceJWTAccessTokens, err)
-		}
-		if r.OpaqueAccessTokens != nil {
-			if _, err := r.OpaqueAccessTokens.RevokeByGrant(ctx, s.grantID); err != nil {
-				out.add(SurfaceOpaqueAccessTokens, err)
-			}
-		}
+		r.revokeGrantAccessTokens(ctx, s, &out)
 	}
-	if s.classes&classIssuance != 0 && !(s.classes&classAccessTokens != 0 && r.jwtRungClosesIssuance()) && r.GrantRevocations != nil {
+	if r.owesIssuanceClosure(s) {
 		if err := r.GrantRevocations.RevokeGrant(ctx, r.issuanceTombstone(s.grantID)); err != nil {
 			out.add(SurfaceGrantIssuance, err)
 		}
@@ -386,6 +375,32 @@ func (r Revoker) runGrant(ctx context.Context, s Scope) Outcome {
 		}
 	}
 	return out
+}
+
+// revokeGrantAccessTokens runs the JWT and opaque access-token rungs of a
+// grant teardown, recording each failure on out.
+func (r Revoker) revokeGrantAccessTokens(ctx context.Context, s Scope, out *Outcome) {
+	if err := RevokeJWTAccessTokensByGrant(ctx, JWTGrantCascadeOpts{
+		AccessTokens:       r.AccessTokens,
+		GrantRevocations:   r.GrantRevocations,
+		RevocationStrategy: r.Strategy,
+	}, s.grantID, r.Now, r.TombstoneRetention, r.Reason, s.classes&classIssuance == 0); err != nil {
+		out.add(SurfaceJWTAccessTokens, err)
+	}
+	if r.OpaqueAccessTokens != nil {
+		if _, err := r.OpaqueAccessTokens.RevokeByGrant(ctx, s.grantID); err != nil {
+			out.add(SurfaceOpaqueAccessTokens, err)
+		}
+	}
+}
+
+// owesIssuanceClosure reports whether runGrant must write the issuance
+// tombstone itself because the JWT access-token rung did not.
+func (r Revoker) owesIssuanceClosure(s Scope) bool {
+	if s.classes&classIssuance == 0 || r.GrantRevocations == nil {
+		return false
+	}
+	return s.classes&classAccessTokens == 0 || !r.jwtRungClosesIssuance()
 }
 
 // jwtRungClosesIssuance reports whether the JWT access-token rung already

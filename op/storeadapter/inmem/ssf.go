@@ -1,6 +1,7 @@
 package inmem
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"slices"
@@ -199,16 +200,7 @@ func (s *ssfEventStore) ClaimDue(_ context.Context, now time.Time, n, perStream 
 		}
 	}
 	slices.SortFunc(due, func(a, b *store.SSFEvent) int {
-		if c := a.NextAttemptAt.Compare(b.NextAttemptAt); c != 0 {
-			return c
-		}
-		if a.JTI < b.JTI {
-			return -1
-		}
-		if a.JTI > b.JTI {
-			return 1
-		}
-		return 0
+		return cmp.Or(a.NextAttemptAt.Compare(b.NextAttemptAt), cmp.Compare(a.JTI, b.JTI))
 	})
 	taken := make(map[string]int)
 	out := make([]*store.SSFEvent, 0, min(n, len(due)))
