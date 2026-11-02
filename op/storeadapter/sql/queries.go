@@ -218,9 +218,10 @@ type queries struct {
 	ssfStreamListActive     string
 	ssfStreamUpdate         string
 	ssfStreamExists         string
+	ssfStreamLockState      string
 	ssfStreamDelete         string
 	ssfEventInsert          string
-	ssfEventDropOtherVerify string
+	ssfEventDropOtherOfKind string
 	ssfEventSelectDue       string
 	ssfEventLease           string
 	ssfEventReschedule      string
@@ -1144,6 +1145,7 @@ func addSSFQueries(q *queries, d Dialect, n nameMap) {
 		"UPDATE " + n.ssfStreams + " SET " + updateSetList(ssfStreamColumns, "id", "client_id") + " WHERE id = ?",
 	)
 	q.ssfStreamExists = d.rebind("SELECT 1 FROM " + n.ssfStreams + " WHERE id = ?")
+	q.ssfStreamLockState = d.rebind("SELECT status, delivery_method FROM " + n.ssfStreams + " WHERE id = ?" + d.forUpdate())
 	q.ssfStreamDelete = d.rebind("DELETE FROM " + n.ssfStreams + " WHERE id = ?")
 
 	q.ssfEventInsert = d.rebind(
@@ -1151,7 +1153,7 @@ func addSSFQueries(q *queries, d Dialect, n nameMap) {
 	)
 	// The JTI just inserted is excluded so a duplicate cannot delete its
 	// own predecessor before the insert is refused.
-	q.ssfEventDropOtherVerify = d.rebind(
+	q.ssfEventDropOtherOfKind = d.rebind(
 		"DELETE FROM " + n.ssfEvents + " WHERE stream_id = ? AND kind = ? AND jti <> ?",
 	)
 	q.ssfEventSelectDue = d.rebind(

@@ -41,8 +41,11 @@
 // [SSFStreams] and [SSFEvents] are the one exception: left unrouted with no
 // [WithDefault], they resolve to the backend routed for [Clients] instead of
 // returning [ErrKindNotRouted], so configurations written before those Kinds
-// existed keep starting. [Store.SSFStreams] and [Store.SSFEvents] return nil
-// when the resolved backend does not implement [store.SharedSignalsStore].
+// existed keep starting. Both MUST resolve to the same backend, because a
+// stream update or deletion acts on the stream and its queued events at
+// once; [New] returns [ErrSSFSplit] otherwise. [Store.SSFStreams] and
+// [Store.SSFEvents] return nil when the resolved backend does not
+// implement [store.SharedSignalsStore].
 //
 // # Client write capabilities
 //
@@ -177,12 +180,14 @@ const (
 	CIBARequests
 
 	// SSFStreams routes [store.SharedSignalsStore.SSFStreams] calls. Outside
-	// the atomic-routing cluster. When neither this Kind nor [WithDefault]
+	// the atomic-routing cluster, but it MUST resolve to the backend
+	// [SSFEvents] resolves to. When neither this Kind nor [WithDefault]
 	// routes it, it falls back to the backend routed for [Clients].
 	SSFStreams
 
 	// SSFEvents routes [store.SharedSignalsStore.SSFEvents] calls. Outside
-	// the atomic-routing cluster. When neither this Kind nor [WithDefault]
+	// the atomic-routing cluster, but it MUST resolve to the backend
+	// [SSFStreams] resolves to. When neither this Kind nor [WithDefault]
 	// routes it, it falls back to the backend routed for [Clients].
 	SSFEvents
 )
@@ -312,6 +317,12 @@ var (
 	// and serving the Kind from [WithDefault]. The error also guards
 	// against a future Kind addition that forgets to update [allKinds].
 	ErrInvalidKind = errors.New("composite: invalid kind")
+
+	// ErrSSFSplit signals that [SSFStreams] and [SSFEvents] resolved to
+	// different backends. A stream's update and deletion each act on the
+	// stream and its queued events in one operation, which no pair of
+	// separate backends can provide.
+	ErrSSFSplit = errors.New("composite: SSFStreams and SSFEvents split across backends")
 )
 
 // Option configures a composite [Store] at construction time. Options are
@@ -383,8 +394,8 @@ type Store struct {
 	// backend when it has an AuthnLockouts method. nil otherwise.
 	authnLockouts store.AuthnLockoutStore
 
-	// ssfStreams and ssfEvents are the substores of the backends routed for
-	// [SSFStreams] and [SSFEvents] when those implement
+	// ssfStreams and ssfEvents are the substores of the one backend routed
+	// for [SSFStreams] and [SSFEvents] when it implements
 	// [store.SharedSignalsStore]. nil otherwise.
 	ssfStreams store.SSFStreamStore
 	ssfEvents  store.SSFEventStore
@@ -404,6 +415,8 @@ type Store struct {
 //     reported as [ErrBackendNotComparable].
 //  4. The routing anchor implements [store.Transactional]; otherwise
 //     [ErrTxAnchorNotTx] is returned.
+//  5. [SSFStreams] and [SSFEvents] resolve to the same backend; otherwise
+//     [ErrSSFSplit] is returned.
 //
 // The order is deliberate: an unroutable registration invalidates every
 // later check, missing routing is the most common configuration bug, so
@@ -435,20 +448,16 @@ func New(opts ...Option) (*Store, error) {
 	}); ok {
 		authnLockouts = p.AuthnLockouts()
 	}
-	var ssfStreams store.SSFStreamStore
-	if b, ok := routes[SSFStreams].(store.SharedSignalsStore); ok {
-		ssfStreams = b.SSFStreams()
-	}
-	var ssfEvents store.SSFEventStore
-	if b, ok := routes[SSFEvents].(store.SharedSignalsStore); ok {
-		ssfEvents = b.SSFEvents()
-	}
 	txAnchor, ok := anchor.(store.Transactional)
 	if !ok {
 		return nil, fmt.Errorf(
 			"%w: anchor backend %T does not satisfy store.Transactional",
 			ErrTxAnchorNotTx, anchor,
 		)
+	}
+	ssfStreams, ssfEvents, err := resolveSSF(routes)
+	if err != nil {
+		return nil, err
 	}
 	return &Store{
 		routes:           routes,
@@ -545,6 +554,27 @@ func resolveAnchor(routes map[Kind]store.Store) (store.Store, error) {
 		}
 	}
 	return anchor, nil
+}
+
+// resolveSSF returns the substores of the one backend [SSFStreams] and
+// [SSFEvents] resolve to, nil when it does not implement
+// [store.SharedSignalsStore].
+func resolveSSF(routes map[Kind]store.Store) (store.SSFStreamStore, store.SSFEventStore, error) {
+	backend := routes[SSFStreams]
+	for _, k := range []Kind{SSFStreams, SSFEvents} {
+		if err := assertComparable(k, routes[k]); err != nil {
+			return nil, nil, err
+		}
+	}
+	if routes[SSFEvents] != backend {
+		return nil, nil, fmt.Errorf("%w: %s routed to %T but %s routed to %T",
+			ErrSSFSplit, SSFStreams, backend, SSFEvents, routes[SSFEvents])
+	}
+	b, ok := backend.(store.SharedSignalsStore)
+	if !ok {
+		return nil, nil, nil
+	}
+	return b.SSFStreams(), b.SSFEvents(), nil
 }
 
 // assertComparable rejects a backend whose dynamic type cannot take part in

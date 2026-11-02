@@ -90,7 +90,7 @@ func (s *ssfStreamStore) ListActive(_ context.Context) ([]*store.SSFStream, erro
 	return out, nil
 }
 
-func (s *ssfStreamStore) Update(_ context.Context, in *store.SSFStream) error {
+func (s *ssfStreamStore) Update(_ context.Context, in *store.SSFStream, notice *store.SSFEvent) error {
 	if in == nil {
 		return errors.New("inmem: nil ssf stream")
 	}
@@ -100,9 +100,31 @@ func (s *ssfStreamStore) Update(_ context.Context, in *store.SSFStream) error {
 	if !ok {
 		return store.ErrNotFound
 	}
+	if notice != nil {
+		if _, dup := s.st.events[notice.JTI]; dup {
+			return store.ErrAlreadyExists
+		}
+	}
 	next := cloneSSFStream(in)
 	next.ClientID = cur.ClientID
 	s.st.streams[in.ID] = next
+	for jti, ev := range s.st.events {
+		if ev.StreamID != in.ID {
+			continue
+		}
+		ev.Delivery = next.Delivery.Method
+		if ev.Kind != store.SSFEventKindEvent {
+			continue
+		}
+		if next.Status == store.SSFStreamDisabled {
+			delete(s.st.events, jti)
+			continue
+		}
+		ev.Held = next.Status == store.SSFStreamPaused
+	}
+	if notice != nil {
+		s.st.putEvent(notice)
+	}
 	return nil
 }
 
@@ -132,15 +154,36 @@ func (s *ssfEventStore) Enqueue(_ context.Context, in *store.SSFEvent) error {
 	if _, ok := s.st.events[in.JTI]; ok {
 		return store.ErrAlreadyExists
 	}
-	if in.Kind == store.SSFEventKindVerification {
-		for jti, ev := range s.st.events {
-			if ev.StreamID == in.StreamID && ev.Kind == store.SSFEventKindVerification {
-				delete(s.st.events, jti)
+	if st, ok := s.st.streams[in.StreamID]; ok && !ssfEventMatchesStream(in, st) {
+		return store.ErrConflict
+	}
+	s.st.putEvent(in)
+	return nil
+}
+
+// putEvent stores a copy of in, first dropping the stream's queued event
+// of the same control Kind. The caller holds mu.
+func (st *ssfState) putEvent(in *store.SSFEvent) {
+	if in.Kind != store.SSFEventKindEvent {
+		for jti, ev := range st.events {
+			if ev.StreamID == in.StreamID && ev.Kind == in.Kind {
+				delete(st.events, jti)
 			}
 		}
 	}
-	s.st.events[in.JTI] = cloneSSFEvent(in)
-	return nil
+	st.events[in.JTI] = cloneSSFEvent(in)
+}
+
+// ssfEventMatchesStream reports whether ev carries the tags s's current
+// state gives a newly queued event.
+func ssfEventMatchesStream(ev *store.SSFEvent, s *store.SSFStream) bool {
+	if ev.Delivery != s.Delivery.Method {
+		return false
+	}
+	if ev.Kind != store.SSFEventKindEvent {
+		return true
+	}
+	return s.Status != store.SSFStreamDisabled && ev.Held == (s.Status == store.SSFStreamPaused)
 }
 
 func (s *ssfEventStore) ClaimDue(_ context.Context, now time.Time, n int, lease time.Duration) ([]*store.SSFEvent, error) {
@@ -223,32 +266,6 @@ func (s *ssfEventStore) Pending(_ context.Context, streamID string, n int) ([]*s
 		out = append(out, cloneSSFEvent(ev))
 	}
 	return out, more, nil
-}
-
-func (s *ssfEventStore) Retag(_ context.Context, streamID string, delivery store.SSFDeliveryMethod, held bool) error {
-	s.st.mu.Lock()
-	defer s.st.mu.Unlock()
-	for _, ev := range s.st.events {
-		if ev.StreamID != streamID {
-			continue
-		}
-		ev.Delivery = delivery
-		if ev.Kind == store.SSFEventKindEvent {
-			ev.Held = held
-		}
-	}
-	return nil
-}
-
-func (s *ssfEventStore) Purge(_ context.Context, streamID string, includeControl bool) error {
-	s.st.mu.Lock()
-	defer s.st.mu.Unlock()
-	for jti, ev := range s.st.events {
-		if ev.StreamID == streamID && (includeControl || ev.Kind == store.SSFEventKindEvent) {
-			delete(s.st.events, jti)
-		}
-	}
-	return nil
 }
 
 func (s *ssfEventStore) DeleteExpired(_ context.Context, now time.Time) (int, error) {

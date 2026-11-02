@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"slices"
 	"testing"
 	"time"
@@ -41,7 +42,10 @@ var ssfCases = []factorCase[SSFBackend]{
 	{"StreamDeleteDropsQueuedEvents", ssfStreamDelete},
 	{"StreamDefensiveCopies", ssfStreamDefensiveCopies},
 	{"EnqueueRejectsDuplicateJTI", ssfEnqueueDuplicate},
-	{"EnqueueReplacesQueuedVerification", ssfEnqueueVerificationReplaces},
+	{"EnqueueReplacesQueuedControlOfSameKind", ssfEnqueueControlReplaces},
+	{"EnqueueRefusesEventNotMatchingStream", ssfEnqueueMatchesStream},
+	{"EnqueueRacingVerificationsKeepOne", ssfEnqueueVerificationRace},
+	{"EnqueueRacingUpdateLeavesNoStaleEvent", ssfEnqueueUpdateRace},
 	{"ClaimDueSelectsDueUnheldPush", ssfClaimDueSelects},
 	{"ClaimDueEarliestFirst", ssfClaimDueOrder},
 	{"ClaimDueLeaseHidesEventUntilItEnds", ssfClaimDueLease},
@@ -49,17 +53,19 @@ var ssfCases = []factorCase[SSFBackend]{
 	{"RescheduleMovesNextAttempt", ssfReschedule},
 	{"AckIsScopedToStream", ssfAck},
 	{"PendingReportsMore", ssfPending},
-	{"RetagHoldsOnlyOrdinaryEvents", ssfRetagHeld},
-	{"RetagMovesDelivery", ssfRetagDelivery},
-	{"PurgeKeepsControlUnlessIncluded", ssfPurge},
+	{"UpdateHoldsOnlyOrdinaryEvents", ssfUpdateHeld},
+	{"UpdateMovesDelivery", ssfUpdateDelivery},
+	{"UpdateDisabledDropsOnlyOrdinaryEvents", ssfUpdateDisabled},
+	{"UpdateReplacesQueuedStreamUpdated", ssfUpdateNotice},
 	{"DeleteExpired", ssfDeleteExpired},
 	{"EventDefensiveCopies", ssfEventDefensiveCopies},
 }
 
 // RunSSF exercises the stream and SET-queue guarantees of
 // [store.SharedSignalsStore]: stream CRUD and the one-stream-per-receiver
-// rule, the hold / retag / purge rules that keep control events flowing
-// through paused and disabled streams, verification replacement, and the
+// rule, the hold / move / drop rules a stream Update applies to its queue
+// that keep control events flowing through paused and disabled streams,
+// the stream-state check on Enqueue, control-event replacement, and the
 // lease ClaimDue hands to exactly one of several OP replicas. Adapter
 // authors call it from their black-box test suite.
 func RunSSF(t *testing.T, f SSFFactory) {
@@ -81,7 +87,7 @@ func ssfStreamMissing(t *testing.T, b SSFBackend) {
 	if _, err := b.Streams.GetByClient(ctx, "missing"); !errors.Is(err, store.ErrNotFound) {
 		t.Fatalf("GetByClient(missing) = %v, want ErrNotFound", err)
 	}
-	if err := b.Streams.Update(ctx, ssfStream("missing", "client-missing", store.SSFStreamEnabled)); !errors.Is(err, store.ErrNotFound) {
+	if err := b.Streams.Update(ctx, ssfStream("missing", "client-missing", store.SSFStreamEnabled), nil); !errors.Is(err, store.ErrNotFound) {
 		t.Fatalf("Update(missing) = %v, want ErrNotFound", err)
 	}
 	if err := b.Streams.Delete(ctx, "missing"); !errors.Is(err, store.ErrNotFound) {
@@ -178,7 +184,7 @@ func ssfStreamUpdate(t *testing.T, b SSFBackend) {
 	next.Description = "updated"
 	next.StatusReason = "maintenance"
 	next.UpdatedAt = Reference.Add(time.Hour)
-	if err := b.Streams.Update(ctx, next); err != nil {
+	if err := b.Streams.Update(ctx, next, nil); err != nil {
 		t.Fatalf("Update: %v", err)
 	}
 	got, err := b.Streams.Get(ctx, seed.ID)
@@ -198,7 +204,7 @@ func ssfStreamUpdateKeepsClient(t *testing.T, b SSFBackend) {
 		t.Fatalf("Create: %v", err)
 	}
 	next := ssfStream("stream-1", "client-other", store.SSFStreamPaused)
-	if err := b.Streams.Update(ctx, next); err != nil {
+	if err := b.Streams.Update(ctx, next, nil); err != nil {
 		t.Fatalf("Update: %v", err)
 	}
 	got, err := b.Streams.Get(ctx, seed.ID)
@@ -226,7 +232,6 @@ func ssfStreamDelete(t *testing.T, b SSFBackend) {
 	}
 	enqueueSSF(t, b,
 		ssfEvent("push-1", s.ID, store.SSFEventKindEvent, store.SSFDeliveryPush),
-		ssfEvent("poll-1", s.ID, store.SSFEventKindEvent, store.SSFDeliveryPoll),
 		ssfEvent("verify-1", s.ID, store.SSFEventKindVerification, store.SSFDeliveryPush),
 	)
 	if err := b.Streams.Delete(ctx, s.ID); err != nil {
@@ -289,19 +294,21 @@ func ssfEnqueueDuplicate(t *testing.T, b SSFBackend) {
 	}
 }
 
-// ssfEnqueueVerificationReplaces pins the one-verification-per-stream
-// rule: a new verification replaces the queued one of its own stream and
-// leaves other streams and other kinds alone.
-func ssfEnqueueVerificationReplaces(t *testing.T, b SSFBackend) {
+// ssfEnqueueControlReplaces pins the one-control-event-per-kind rule: a
+// new verification or stream-updated event replaces the queued one of its
+// own stream and kind, and leaves other streams and other kinds alone.
+func ssfEnqueueControlReplaces(t *testing.T, b SSFBackend) {
 	t.Helper()
 	enqueueSSF(t, b,
 		ssfEvent("verify-old", "stream-1", store.SSFEventKindVerification, store.SSFDeliveryPoll),
-		ssfEvent("updated-1", "stream-1", store.SSFEventKindStreamUpdated, store.SSFDeliveryPoll),
+		ssfEvent("updated-old", "stream-1", store.SSFEventKindStreamUpdated, store.SSFDeliveryPoll),
 		ssfEvent("event-1", "stream-1", store.SSFEventKindEvent, store.SSFDeliveryPoll),
 		ssfEvent("verify-other", "stream-2", store.SSFEventKindVerification, store.SSFDeliveryPoll),
 		ssfEvent("verify-new", "stream-1", store.SSFEventKindVerification, store.SSFDeliveryPoll),
 	)
-	assertPending(t, b, "stream-1", []string{"event-1", "updated-1", "verify-new"})
+	assertPending(t, b, "stream-1", []string{"event-1", "updated-old", "verify-new"})
+	enqueueSSF(t, b, ssfEvent("updated-new", "stream-1", store.SSFEventKindStreamUpdated, store.SSFDeliveryPoll))
+	assertPending(t, b, "stream-1", []string{"event-1", "updated-new", "verify-new"})
 	assertPending(t, b, "stream-2", []string{"verify-other"})
 
 	// The same rule holds for a push stream's queue.
@@ -310,6 +317,113 @@ func ssfEnqueueVerificationReplaces(t *testing.T, b SSFBackend) {
 		ssfEvent("push-verify-new", "stream-3", store.SSFEventKindVerification, store.SSFDeliveryPush),
 	)
 	assertClaimed(t, b, Reference, []string{"push-verify-new"})
+}
+
+// ssfEnqueueMatchesStream pins the stream-state check: an event built
+// from a stream read before its state changed is refused, so the caller
+// re-reads the stream instead of queueing a SET that escapes a pause or a
+// disable, or one tagged for a delivery method nobody reads.
+func ssfEnqueueMatchesStream(t *testing.T, b SSFBackend) {
+	t.Helper()
+	ctx := context.Background()
+	s := ssfStream("stream-1", "client-1", store.SSFStreamPaused)
+	if err := b.Streams.Create(ctx, s); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	held := func(jti string, kind store.SSFEventKind, delivery store.SSFDeliveryMethod) *store.SSFEvent {
+		ev := ssfEvent(jti, s.ID, kind, delivery)
+		ev.Held = true
+		return ev
+	}
+	for _, ev := range []*store.SSFEvent{
+		ssfEvent("unheld", s.ID, store.SSFEventKindEvent, store.SSFDeliveryPush),
+		held("poll-held", store.SSFEventKindEvent, store.SSFDeliveryPoll),
+		ssfEvent("poll-verify", s.ID, store.SSFEventKindVerification, store.SSFDeliveryPoll),
+	} {
+		if err := b.Events.Enqueue(ctx, ev); !errors.Is(err, store.ErrConflict) {
+			t.Fatalf("Enqueue %s on a paused push stream = %v, want ErrConflict", ev.JTI, err)
+		}
+	}
+	enqueueSSF(t, b,
+		held("held", store.SSFEventKindEvent, store.SSFDeliveryPush),
+		ssfEvent("verify", s.ID, store.SSFEventKindVerification, store.SSFDeliveryPush),
+	)
+	assertClaimed(t, b, Reference, []string{"verify"})
+
+	s.Status = store.SSFStreamDisabled
+	if err := b.Streams.Update(ctx, s, nil); err != nil {
+		t.Fatalf("Update disabled: %v", err)
+	}
+	for _, ev := range []*store.SSFEvent{
+		ssfEvent("disabled-unheld", s.ID, store.SSFEventKindEvent, store.SSFDeliveryPush),
+		held("disabled-held", store.SSFEventKindEvent, store.SSFDeliveryPush),
+	} {
+		if err := b.Events.Enqueue(ctx, ev); !errors.Is(err, store.ErrConflict) {
+			t.Fatalf("Enqueue %s on a disabled stream = %v, want ErrConflict", ev.JTI, err)
+		}
+	}
+	enqueueSSF(t, b, ssfEvent("disabled-updated", s.ID, store.SSFEventKindStreamUpdated, store.SSFDeliveryPush))
+	assertClaimed(t, b, Reference, []string{"disabled-updated"})
+}
+
+// ssfEnqueueVerificationRace pins the one-verification rule under
+// concurrent enqueues on one stream: a backend that inserts and then
+// deletes the others in a transaction that cannot see its peers' rows
+// keeps several.
+func ssfEnqueueVerificationRace(t *testing.T, b SSFBackend) {
+	t.Helper()
+	ctx := context.Background()
+	s := ssfStream("stream-1", "client-1", store.SSFStreamEnabled)
+	s.Delivery = store.SSFDelivery{Method: store.SSFDeliveryPoll}
+	if err := b.Streams.Create(ctx, s); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	errs := race(
+		func() { _, _, _ = b.Events.Pending(ctx, "ssf-race-warmup", 1) },
+		everyRacer(func(i int) error {
+			return b.Events.Enqueue(ctx, ssfEvent(fmt.Sprintf("verify-%d", i), s.ID, store.SSFEventKindVerification, store.SSFDeliveryPoll))
+		})...,
+	)
+	for i, err := range errs {
+		if err != nil {
+			t.Fatalf("racing Enqueue %d: %v", i, err)
+		}
+	}
+	got, _, err := b.Events.Pending(ctx, s.ID, 100)
+	if err != nil {
+		t.Fatalf("Pending: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("verifications queued after %d racing enqueues = %v, want exactly one", concurrentRacers, ssfJTIs(got))
+	}
+}
+
+// ssfEnqueueUpdateRace pins the atomicity of the state check against a
+// concurrent pause: every event built for the enabled stream either lands
+// before the pause and is held by it, or is refused. None is claimable.
+func ssfEnqueueUpdateRace(t *testing.T, b SSFBackend) {
+	t.Helper()
+	ctx := context.Background()
+	s := ssfStream("stream-1", "client-1", store.SSFStreamEnabled)
+	if err := b.Streams.Create(ctx, s); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	paused := ssfStream(s.ID, s.ClientID, store.SSFStreamPaused)
+	attempts := everyRacer(func(i int) error {
+		err := b.Events.Enqueue(ctx, ssfEvent(fmt.Sprintf("event-%d", i), s.ID, store.SSFEventKindEvent, store.SSFDeliveryPush))
+		if errors.Is(err, store.ErrConflict) {
+			return nil
+		}
+		return err
+	})
+	attempts[len(attempts)/2] = func() error { return b.Streams.Update(ctx, paused, nil) }
+	errs := race(func() { _, _, _ = b.Events.Pending(ctx, "ssf-race-warmup", 1) }, attempts...)
+	for i, err := range errs {
+		if err != nil {
+			t.Fatalf("racer %d: %v", i, err)
+		}
+	}
+	assertClaimed(t, b, Reference, nil)
 }
 
 func ssfClaimDueSelects(t *testing.T, b SSFBackend) {
@@ -494,75 +608,142 @@ func ssfPending(t *testing.T, b SSFBackend) {
 	assertPending(t, b, "stream-empty", nil)
 }
 
-// ssfRetagHeld pins the pause rules: retagging a stream held holds its
-// ordinary events and never its control events, which SSF 1.0 §8.1.5
-// requires a receiver to get whatever the stream's status.
-func ssfRetagHeld(t *testing.T, b SSFBackend) {
+// ssfUpdateHeld pins the pause rules: pausing a stream holds its ordinary
+// events and never its control events, which SSF 1.0 §8.1.5 requires a
+// receiver to get whatever the stream's status.
+func ssfUpdateHeld(t *testing.T, b SSFBackend) {
 	t.Helper()
 	ctx := context.Background()
+	s := ssfStream("stream-1", "client-1", store.SSFStreamEnabled)
+	if err := b.Streams.Create(ctx, s); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
 	enqueueSSF(t, b,
-		ssfEvent("event-1", "stream-1", store.SSFEventKindEvent, store.SSFDeliveryPush),
-		ssfEvent("updated-1", "stream-1", store.SSFEventKindStreamUpdated, store.SSFDeliveryPush),
-		ssfEvent("verify-1", "stream-1", store.SSFEventKindVerification, store.SSFDeliveryPush),
+		ssfEvent("event-1", s.ID, store.SSFEventKindEvent, store.SSFDeliveryPush),
+		ssfEvent("updated-1", s.ID, store.SSFEventKindStreamUpdated, store.SSFDeliveryPush),
+		ssfEvent("verify-1", s.ID, store.SSFEventKindVerification, store.SSFDeliveryPush),
 		ssfEvent("other-1", "stream-2", store.SSFEventKindEvent, store.SSFDeliveryPush),
 	)
-	if err := b.Events.Retag(ctx, "stream-1", store.SSFDeliveryPush, true); err != nil {
-		t.Fatalf("Retag held: %v", err)
+	s.Status = store.SSFStreamPaused
+	if err := b.Streams.Update(ctx, s, nil); err != nil {
+		t.Fatalf("Update paused: %v", err)
 	}
 	assertClaimed(t, b, Reference, []string{"other-1", "updated-1", "verify-1"})
 
-	if err := b.Events.Retag(ctx, "stream-1", store.SSFDeliveryPush, false); err != nil {
-		t.Fatalf("Retag unheld: %v", err)
+	s.Status = store.SSFStreamEnabled
+	if err := b.Streams.Update(ctx, s, nil); err != nil {
+		t.Fatalf("Update enabled: %v", err)
 	}
 	assertClaimed(t, b, Reference, []string{"event-1"})
 }
 
-// ssfRetagDelivery pins a delivery-method change: every queued event of
+// ssfUpdateDelivery pins a delivery-method change: every queued event of
 // the stream, control events included, moves to the new method.
-func ssfRetagDelivery(t *testing.T, b SSFBackend) {
+func ssfUpdateDelivery(t *testing.T, b SSFBackend) {
 	t.Helper()
 	ctx := context.Background()
+	s := ssfStream("stream-1", "client-1", store.SSFStreamEnabled)
+	if err := b.Streams.Create(ctx, s); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
 	enqueueSSF(t, b,
-		ssfEvent("event-1", "stream-1", store.SSFEventKindEvent, store.SSFDeliveryPush),
-		ssfEvent("verify-1", "stream-1", store.SSFEventKindVerification, store.SSFDeliveryPush),
+		ssfEvent("event-1", s.ID, store.SSFEventKindEvent, store.SSFDeliveryPush),
+		ssfEvent("verify-1", s.ID, store.SSFEventKindVerification, store.SSFDeliveryPush),
 		ssfEvent("other-1", "stream-2", store.SSFEventKindEvent, store.SSFDeliveryPush),
 	)
-	if err := b.Events.Retag(ctx, "stream-1", store.SSFDeliveryPoll, false); err != nil {
-		t.Fatalf("Retag to poll: %v", err)
+	s.Delivery = store.SSFDelivery{Method: store.SSFDeliveryPoll}
+	if err := b.Streams.Update(ctx, s, nil); err != nil {
+		t.Fatalf("Update to poll: %v", err)
 	}
-	got := assertPending(t, b, "stream-1", []string{"event-1", "verify-1"})
+	got := assertPending(t, b, s.ID, []string{"event-1", "verify-1"})
 	for _, ev := range got {
 		if ev.Delivery != store.SSFDeliveryPoll || ev.Held {
-			t.Fatalf("retagged %s = Delivery %q Held %v, want poll and unheld", ev.JTI, ev.Delivery, ev.Held)
+			t.Fatalf("moved %s = Delivery %q Held %v, want poll and unheld", ev.JTI, ev.Delivery, ev.Held)
 		}
 	}
 	assertClaimed(t, b, Reference, []string{"other-1"})
 
-	// Retagging a poll stream held hides its ordinary events from Pending.
-	if err := b.Events.Retag(ctx, "stream-1", store.SSFDeliveryPoll, true); err != nil {
-		t.Fatalf("Retag poll held: %v", err)
+	// Pausing a poll stream hides its ordinary events from Pending.
+	s.Status = store.SSFStreamPaused
+	if err := b.Streams.Update(ctx, s, nil); err != nil {
+		t.Fatalf("Update poll paused: %v", err)
 	}
-	assertPending(t, b, "stream-1", []string{"verify-1"})
+	assertPending(t, b, s.ID, []string{"verify-1"})
 }
 
-func ssfPurge(t *testing.T, b SSFBackend) {
+// ssfUpdateDisabled pins the disable rule: a disabled stream's ordinary
+// events are dropped, not held, and its control events stay queued.
+func ssfUpdateDisabled(t *testing.T, b SSFBackend) {
 	t.Helper()
 	ctx := context.Background()
+	s := ssfStream("stream-1", "client-1", store.SSFStreamEnabled)
+	s.Delivery = store.SSFDelivery{Method: store.SSFDeliveryPoll}
+	if err := b.Streams.Create(ctx, s); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
 	enqueueSSF(t, b,
-		ssfEvent("event-1", "stream-1", store.SSFEventKindEvent, store.SSFDeliveryPoll),
-		ssfEvent("updated-1", "stream-1", store.SSFEventKindStreamUpdated, store.SSFDeliveryPoll),
-		ssfEvent("verify-1", "stream-1", store.SSFEventKindVerification, store.SSFDeliveryPoll),
+		ssfEvent("event-1", s.ID, store.SSFEventKindEvent, store.SSFDeliveryPoll),
+		ssfEvent("updated-1", s.ID, store.SSFEventKindStreamUpdated, store.SSFDeliveryPoll),
+		ssfEvent("verify-1", s.ID, store.SSFEventKindVerification, store.SSFDeliveryPoll),
 		ssfEvent("other-1", "stream-2", store.SSFEventKindEvent, store.SSFDeliveryPoll),
 	)
-	if err := b.Events.Purge(ctx, "stream-1", false); err != nil {
-		t.Fatalf("Purge without control: %v", err)
+	s.Status = store.SSFStreamDisabled
+	if err := b.Streams.Update(ctx, s, nil); err != nil {
+		t.Fatalf("Update disabled: %v", err)
 	}
-	assertPending(t, b, "stream-1", []string{"updated-1", "verify-1"})
-	if err := b.Events.Purge(ctx, "stream-1", true); err != nil {
-		t.Fatalf("Purge with control: %v", err)
+	assertPending(t, b, s.ID, []string{"updated-1", "verify-1"})
+	s.Status = store.SSFStreamEnabled
+	if err := b.Streams.Update(ctx, s, nil); err != nil {
+		t.Fatalf("Update enabled: %v", err)
 	}
-	assertPending(t, b, "stream-1", nil)
+	assertPending(t, b, s.ID, []string{"updated-1", "verify-1"})
 	assertPending(t, b, "stream-2", []string{"other-1"})
+}
+
+// ssfUpdateNotice pins the stream-updated notice an Update carries: it is
+// stored with the state change and replaces the stream's pending one, so
+// toggling a stream's status costs a bounded queue. A notice whose JTI is
+// taken, or an Update of a missing stream, changes nothing.
+func ssfUpdateNotice(t *testing.T, b SSFBackend) {
+	t.Helper()
+	ctx := context.Background()
+	s := ssfStream("stream-1", "client-1", store.SSFStreamEnabled)
+	s.Delivery = store.SSFDelivery{Method: store.SSFDeliveryPoll}
+	if err := b.Streams.Create(ctx, s); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	enqueueSSF(t, b,
+		ssfEvent("updated-old", s.ID, store.SSFEventKindStreamUpdated, store.SSFDeliveryPoll),
+		ssfEvent("verify-1", s.ID, store.SSFEventKindVerification, store.SSFDeliveryPoll),
+	)
+	for i, status := range []store.SSFStreamStatus{store.SSFStreamPaused, store.SSFStreamEnabled, store.SSFStreamPaused} {
+		s.Status = status
+		notice := ssfEvent(fmt.Sprintf("updated-%d", i), s.ID, store.SSFEventKindStreamUpdated, store.SSFDeliveryPoll)
+		if err := b.Streams.Update(ctx, s, notice); err != nil {
+			t.Fatalf("Update %s: %v", status, err)
+		}
+	}
+	assertPending(t, b, s.ID, []string{"updated-2", "verify-1"})
+
+	s.Status = store.SSFStreamDisabled
+	dup := ssfEvent("verify-1", s.ID, store.SSFEventKindStreamUpdated, store.SSFDeliveryPoll)
+	if err := b.Streams.Update(ctx, s, dup); !errors.Is(err, store.ErrAlreadyExists) {
+		t.Fatalf("Update with a taken notice JTI = %v, want ErrAlreadyExists", err)
+	}
+	got, err := b.Streams.Get(ctx, s.ID)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if got.Status != store.SSFStreamPaused {
+		t.Fatalf("Status after a refused Update = %q, want paused", got.Status)
+	}
+	assertPending(t, b, s.ID, []string{"updated-2", "verify-1"})
+
+	orphan := ssfEvent("updated-orphan", "missing", store.SSFEventKindStreamUpdated, store.SSFDeliveryPoll)
+	if err := b.Streams.Update(ctx, ssfStream("missing", "client-missing", store.SSFStreamEnabled), orphan); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("Update(missing) with a notice = %v, want ErrNotFound", err)
+	}
+	assertPending(t, b, "missing", nil)
 }
 
 func ssfDeleteExpired(t *testing.T, b SSFBackend) {
@@ -577,8 +758,14 @@ func ssfDeleteExpired(t *testing.T, b SSFBackend) {
 	held.Held = true
 	held.ExpiresAt = Reference.Add(-time.Hour)
 	enqueueSSF(t, b, past, boundary, live, held)
+	ctx := context.Background()
+	s := ssfStream("stream-1", "client-1", store.SSFStreamEnabled)
+	s.Delivery = store.SSFDelivery{Method: store.SSFDeliveryPoll}
+	if err := b.Streams.Create(ctx, s); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
 
-	n, err := b.Events.DeleteExpired(context.Background(), Reference)
+	n, err := b.Events.DeleteExpired(ctx, Reference)
 	if err != nil {
 		t.Fatalf("DeleteExpired: %v", err)
 	}
@@ -586,8 +773,9 @@ func ssfDeleteExpired(t *testing.T, b SSFBackend) {
 		t.Fatalf("DeleteExpired = %d, want 3", n)
 	}
 	assertPending(t, b, "stream-1", []string{"live"})
-	if err := b.Events.Retag(context.Background(), "stream-1", store.SSFDeliveryPoll, false); err != nil {
-		t.Fatalf("Retag: %v", err)
+	// Releasing the hold shows the expired held event is gone too.
+	if err := b.Streams.Update(ctx, s, nil); err != nil {
+		t.Fatalf("Update: %v", err)
 	}
 	assertPending(t, b, "stream-1", []string{"live"})
 }

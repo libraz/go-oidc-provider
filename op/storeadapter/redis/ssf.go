@@ -22,12 +22,14 @@ import (
 //	ssf:event:<jti>                HASH  one queued SET (fields below)
 //	ssf:stream-events:<streamID>   SET   JTIs queued for the stream
 //	ssf:stream-verify:<streamID>   STRING JTI of the stream's queued verification
+//	ssf:stream-updated:<streamID>  STRING JTI of the stream's queued stream-updated
 //	ssf:due                        ZSET  JTI scored by next_attempt_at, push && !held only
 //	ssf:expiry                     ZSET  JTI scored by expires_at
 //
 // Instants are decimal Unix microseconds, exact in a Lua/ZSET double.
 // Every event mutation runs as one Lua script, so the due set, the expiry
-// set and the per-stream indexes never disagree with the event hashes.
+// set and the per-stream indexes never disagree with the event hashes, and
+// a stream Update and an Enqueue checking the stream's state are serial.
 // The scripts derive the event keys from the prefix passed as ARGV[1];
 // that is sound because the adapter talks to one Redis node, never a
 // cluster. None of these keys carries a TTL: queue lifetime is
@@ -43,7 +45,9 @@ const ssfLuaPrelude = `
 local P = ARGV[1]
 local function ev_key(jti) return P .. "ssf:event:" .. jti end
 local function idx_key(sid) return P .. "ssf:stream-events:" .. sid end
-local function verify_key(sid) return P .. "ssf:stream-verify:" .. sid end
+local ctl_prefix = {verification = "ssf:stream-verify:", ["stream-updated"] = "ssf:stream-updated:"}
+local function ctl_key(kind, sid) return P .. ctl_prefix[kind] .. sid end
+local streams_key = P .. "ssf:streams"
 local due_key = P .. "ssf:due"
 local expiry_key = P .. "ssf:expiry"
 local function sync_due(jti, delivery, held, next)
@@ -60,10 +64,22 @@ local function remove_event(jti)
 	redis.call("ZREM", due_key, jti)
 	redis.call("ZREM", expiry_key, jti)
 	redis.call("SREM", idx_key(f[1]), jti)
-	if f[2] == "verification" and redis.call("GET", verify_key(f[1])) == jti then
-		redis.call("DEL", verify_key(f[1]))
+	if ctl_prefix[f[2]] and redis.call("GET", ctl_key(f[2], f[1])) == jti then
+		redis.call("DEL", ctl_key(f[2], f[1]))
 	end
 	return 1
+end
+local function put_event(jti, sid, kind, delivery, held, claims, attempts, next, expires)
+	if ctl_prefix[kind] then
+		local old = redis.call("GET", ctl_key(kind, sid))
+		if old then remove_event(old) end
+		redis.call("SET", ctl_key(kind, sid), jti)
+	end
+	redis.call("HSET", ev_key(jti), "stream", sid, "kind", kind, "delivery", delivery,
+		"held", held, "claims", claims, "attempts", attempts, "next", next, "expires", expires)
+	redis.call("SADD", idx_key(sid), jti)
+	redis.call("ZADD", expiry_key, expires, jti)
+	sync_due(jti, delivery, held, next)
 end
 local function read_event(jti)
 	local v = redis.call("HMGET", ev_key(jti), "stream", "kind", "delivery", "held", "claims", "attempts", "next", "expires")
@@ -72,20 +88,22 @@ end
 `
 
 // ssfEnqueueLua: ARGV[2..10] = jti, stream, kind, delivery, held, claims,
-// attempts, next, expires. Returns 0 when the JTI is already queued.
+// attempts, next, expires. Returns 0 when the JTI is already queued and 2
+// when the event does not match its stream's current state.
 const ssfEnqueueLua = ssfLuaPrelude + `
-local jti, sid, kind = ARGV[2], ARGV[3], ARGV[4]
+local jti, sid, kind, delivery, held = ARGV[2], ARGV[3], ARGV[4], ARGV[5], ARGV[6]
 if redis.call("EXISTS", ev_key(jti)) == 1 then return 0 end
-if kind == "verification" then
-	local old = redis.call("GET", verify_key(sid))
-	if old then remove_event(old) end
-	redis.call("SET", verify_key(sid), jti)
+local rec = redis.call("HGET", streams_key, sid)
+if rec then
+	local st = cjson.decode(rec)
+	if st["delivery_method"] ~= delivery then return 2 end
+	if kind == "event" then
+		local want = "0"
+		if st["status"] == "paused" then want = "1" end
+		if st["status"] == "disabled" or held ~= want then return 2 end
+	end
 end
-redis.call("HSET", ev_key(jti), "stream", sid, "kind", kind, "delivery", ARGV[5],
-	"held", ARGV[6], "claims", ARGV[7], "attempts", ARGV[8], "next", ARGV[9], "expires", ARGV[10])
-redis.call("SADD", idx_key(sid), jti)
-redis.call("ZADD", expiry_key, ARGV[10], jti)
-sync_due(jti, ARGV[5], ARGV[6], ARGV[9])
+put_event(jti, sid, kind, delivery, held, ARGV[7], ARGV[8], ARGV[9], ARGV[10])
 return 1
 `
 
@@ -145,32 +163,6 @@ end
 return out
 `
 
-// ssfRetagLua: ARGV[2..4] = stream ID, delivery, held. Only ordinary
-// events take the held flag.
-const ssfRetagLua = ssfLuaPrelude + `
-for _, jti in ipairs(redis.call("SMEMBERS", idx_key(ARGV[2]))) do
-	local f = redis.call("HMGET", ev_key(jti), "kind", "next")
-	if f[1] then
-		local held = "0"
-		if f[1] == "event" then held = ARGV[4] end
-		redis.call("HSET", ev_key(jti), "delivery", ARGV[3], "held", held)
-		sync_due(jti, ARGV[3], held, f[2])
-	end
-end
-return 1
-`
-
-// ssfPurgeLua: ARGV[2] = stream ID, ARGV[3] = "1" to include control
-// events.
-const ssfPurgeLua = ssfLuaPrelude + `
-for _, jti in ipairs(redis.call("SMEMBERS", idx_key(ARGV[2]))) do
-	if ARGV[3] == "1" or redis.call("HGET", ev_key(jti), "kind") == "event" then
-		remove_event(jti)
-	end
-end
-return 1
-`
-
 // ssfDeleteExpiredLua: ARGV[2] = now, ARGV[3] = batch size. Returns how
 // many events it removed and how many expiry entries it consumed.
 const ssfDeleteExpiredLua = ssfLuaPrelude + `
@@ -197,10 +189,31 @@ redis.call("HSET", KEYS[2], ARGV[2], ARGV[1])
 return 1
 `
 
-// ssfStreamUpdateLua: KEYS = streams; ARGV[1..2] = stream ID, record.
-const ssfStreamUpdateLua = `
-if redis.call("HEXISTS", KEYS[1], ARGV[1]) == 0 then return 0 end
-redis.call("HSET", KEYS[1], ARGV[1], ARGV[2])
+// ssfStreamUpdateLua: ARGV[2..5] = stream ID, record, delivery method,
+// status; ARGV[6] = "1" when a stream-updated notice follows in
+// ARGV[7..15] (jti, stream, kind, delivery, held, claims, attempts, next,
+// expires). It rewrites the stream, moves its queued events to the new
+// state and stores the notice. Returns 0 when the stream is missing and 2
+// when the notice JTI is already queued, both before any write.
+const ssfStreamUpdateLua = ssfLuaPrelude + `
+local sid, delivery, status = ARGV[2], ARGV[4], ARGV[5]
+if redis.call("HEXISTS", streams_key, sid) == 0 then return 0 end
+if ARGV[6] == "1" and redis.call("EXISTS", ev_key(ARGV[7])) == 1 then return 2 end
+redis.call("HSET", streams_key, sid, ARGV[3])
+for _, jti in ipairs(redis.call("SMEMBERS", idx_key(sid))) do
+	local f = redis.call("HMGET", ev_key(jti), "kind", "next")
+	if f[1] == "event" and status == "disabled" then
+		remove_event(jti)
+	elseif f[1] then
+		local held = "0"
+		if f[1] == "event" and status == "paused" then held = "1" end
+		redis.call("HSET", ev_key(jti), "delivery", delivery, "held", held)
+		sync_due(jti, delivery, held, f[2])
+	end
+end
+if ARGV[6] == "1" then
+	put_event(ARGV[7], ARGV[8], ARGV[9], ARGV[10], ARGV[11], ARGV[12], ARGV[13], ARGV[14], ARGV[15])
+end
 return 1
 `
 
@@ -216,13 +229,13 @@ if redis.call("HGET", KEYS[2], cid) == sid then redis.call("HDEL", KEYS[2], cid)
 for _, jti in ipairs(redis.call("SMEMBERS", idx_key(sid))) do
 	remove_event(jti)
 end
-redis.call("DEL", idx_key(sid), verify_key(sid))
+redis.call("DEL", idx_key(sid), ctl_key("verification", sid), ctl_key("stream-updated", sid))
 return 1
 `
 
 type ssfScripts struct {
-	enqueue, claimDue, reschedule, ack, pending, retag, purge, deleteExpired *redis.Script
-	streamCreate, streamUpdate, streamDelete                                 *redis.Script
+	enqueue, claimDue, reschedule, ack, pending, deleteExpired *redis.Script
+	streamCreate, streamUpdate, streamDelete                   *redis.Script
 }
 
 func newSSFScripts() *ssfScripts {
@@ -232,8 +245,6 @@ func newSSFScripts() *ssfScripts {
 		reschedule:    redis.NewScript(ssfRescheduleLua),
 		ack:           redis.NewScript(ssfAckLua),
 		pending:       redis.NewScript(ssfPendingLua),
-		retag:         redis.NewScript(ssfRetagLua),
-		purge:         redis.NewScript(ssfPurgeLua),
 		deleteExpired: redis.NewScript(ssfDeleteExpiredLua),
 		streamCreate:  redis.NewScript(ssfStreamCreateLua),
 		streamUpdate:  redis.NewScript(ssfStreamUpdateLua),
@@ -382,7 +393,7 @@ func (s *ssfStreamStore) ListActive(ctx context.Context) ([]*store.SSFStream, er
 
 // Update replaces the record but keeps the client the stream was created
 // for: the client index maps client ID to stream ID and is never rewritten.
-func (s *ssfStreamStore) Update(ctx context.Context, in *store.SSFStream) error {
+func (s *ssfStreamStore) Update(ctx context.Context, in *store.SSFStream, notice *store.SSFEvent) error {
 	if in == nil {
 		return errors.New("oidcredis: nil ssf stream")
 	}
@@ -396,14 +407,22 @@ func (s *ssfStreamStore) Update(ctx context.Context, in *store.SSFStream) error 
 	if err != nil {
 		return err
 	}
-	updated, err := s.scripts.streamUpdate.Run(ctx, s.parent.client,
-		[]string{s.parent.ssfStreamsKey()}, in.ID, payload,
-	).Int()
+	args := []any{s.parent.prefix, in.ID, payload, string(in.Delivery.Method), string(in.Status), ssfFlag(notice != nil)}
+	if notice != nil {
+		if err := s.parent.checkPayloadSize("ssf event", notice.Claims); err != nil {
+			return err
+		}
+		args = append(args, ssfEventArgs(notice)...)
+	}
+	updated, err := s.scripts.streamUpdate.Run(ctx, s.parent.client, nil, args...).Int()
 	if err != nil {
 		return fmt.Errorf("oidcredis: update ssf stream: %w", err)
 	}
-	if updated == 0 {
+	switch updated {
+	case 0:
 		return store.ErrNotFound
+	case 2:
+		return store.ErrAlreadyExists
 	}
 	return nil
 }
@@ -438,18 +457,28 @@ func (e *ssfEventStore) Enqueue(ctx context.Context, ev *store.SSFEvent) error {
 	if err := e.parent.checkPayloadSize("ssf event", ev.Claims); err != nil {
 		return err
 	}
-	recorded, err := e.scripts.enqueue.Run(ctx, e.parent.client, nil,
-		e.parent.prefix, ev.JTI, ev.StreamID, string(ev.Kind), string(ev.Delivery),
-		ssfFlag(ev.Held), ev.Claims, strconv.Itoa(ev.Attempts),
-		ssfMicros(ev.NextAttemptAt), ssfMicros(ev.ExpiresAt),
-	).Int()
+	args := append([]any{e.parent.prefix}, ssfEventArgs(ev)...)
+	recorded, err := e.scripts.enqueue.Run(ctx, e.parent.client, nil, args...).Int()
 	if err != nil {
 		return fmt.Errorf("oidcredis: enqueue ssf event: %w", err)
 	}
-	if recorded == 0 {
+	switch recorded {
+	case 0:
 		return store.ErrAlreadyExists
+	case 2:
+		return store.ErrConflict
 	}
 	return nil
+}
+
+// ssfEventArgs is the event the scripts read after the prefix: jti,
+// stream, kind, delivery, held, claims, attempts, next and expires.
+func ssfEventArgs(ev *store.SSFEvent) []any {
+	return []any{
+		ev.JTI, ev.StreamID, string(ev.Kind), string(ev.Delivery),
+		ssfFlag(ev.Held), ev.Claims, strconv.Itoa(ev.Attempts),
+		ssfMicros(ev.NextAttemptAt), ssfMicros(ev.ExpiresAt),
+	}
 }
 
 func (e *ssfEventStore) ClaimDue(ctx context.Context, now time.Time, n int, lease time.Duration) ([]*store.SSFEvent, error) {
@@ -515,24 +544,6 @@ func (e *ssfEventStore) Pending(ctx context.Context, streamID string, n int) ([]
 		return nil, false, err
 	}
 	return events, more == 1, nil
-}
-
-func (e *ssfEventStore) Retag(ctx context.Context, streamID string, delivery store.SSFDeliveryMethod, held bool) error {
-	if err := e.scripts.retag.Run(ctx, e.parent.client, nil,
-		e.parent.prefix, streamID, string(delivery), ssfFlag(held),
-	).Err(); err != nil {
-		return fmt.Errorf("oidcredis: retag ssf events: %w", err)
-	}
-	return nil
-}
-
-func (e *ssfEventStore) Purge(ctx context.Context, streamID string, includeControl bool) error {
-	if err := e.scripts.purge.Run(ctx, e.parent.client, nil,
-		e.parent.prefix, streamID, ssfFlag(includeControl),
-	).Err(); err != nil {
-		return fmt.Errorf("oidcredis: purge ssf events: %w", err)
-	}
-	return nil
 }
 
 func (e *ssfEventStore) DeleteExpired(ctx context.Context, now time.Time) (int, error) {

@@ -323,21 +323,14 @@ func (h *Handlers) updateStream(w http.ResponseWriter, r *http.Request, replace 
 		mgmtWriteBodyError(w, err)
 		return
 	}
-	prevMethod := s.Delivery.Method
 	if err := h.applyConfig(s, body, replace); err != nil {
 		mgmtWriteBodyError(w, err)
 		return
 	}
 	s.UpdatedAt = h.clock.Now()
-	if err := h.streams.Update(ctx, s); err != nil {
+	if err := h.tx.UpdateStream(ctx, s, nil); err != nil {
 		h.writeStoreError(w, err)
 		return
-	}
-	if s.Delivery.Method != prevMethod {
-		if err := h.events.Retag(ctx, s.ID, s.Delivery.Method, s.Status == store.SSFStreamPaused); err != nil {
-			mgmtServerError(w)
-			return
-		}
 	}
 	h.emitStream(ctx, auditevent.AuditSSFStreamUpdated, "shared signals stream updated", s, nil)
 	_ = httpx.WriteJSON(w, http.StatusOK, h.streamConfig(s))
@@ -391,9 +384,10 @@ func (h *Handlers) readStatus(w http.ResponseWriter, r *http.Request) {
 	_ = httpx.WriteJSON(w, http.StatusOK, statusJSON{StreamID: s.ID, Status: string(s.Status), Reason: s.StatusReason})
 }
 
-// setStatus enqueues stream-updated before writing the new status, then
-// moves the queued ordinary events: paused holds them, enabled releases
-// them, disabled drops them. Control events survive every transition.
+// setStatus stores the new status together with the stream-updated SET
+// announcing it; the store moves the queued ordinary events in the same
+// operation: paused holds them, enabled releases them, disabled drops
+// them. Control events survive every transition.
 func (h *Handlers) setStatus(w http.ResponseWriter, r *http.Request) {
 	clientID, ok := h.authorize(w, r, authManage)
 	if !ok {
@@ -424,44 +418,20 @@ func (h *Handlers) setStatus(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	changed := s.Status != status
-	if changed {
-		if _, err := h.tx.EnqueueControl(ctx, s, EventStreamUpdated, ControlFields{Status: status, Reason: reason}); err != nil {
-			mgmtServerError(w)
-			return
-		}
+	var notice *ControlFields
+	if s.Status != status {
+		notice = &ControlFields{Status: status, Reason: reason}
 	}
 	s.Status = status
 	s.StatusReason = reason
 	s.UpdatedAt = h.clock.Now()
-	if err := h.streams.Update(ctx, s); err != nil {
+	if err := h.tx.UpdateStream(ctx, s, notice); err != nil {
 		h.writeStoreError(w, err)
 		return
-	}
-	if changed {
-		if err := h.moveQueued(ctx, s); err != nil {
-			mgmtServerError(w)
-			return
-		}
 	}
 	h.emitStream(ctx, auditevent.AuditSSFStreamUpdated, "shared signals stream status set", s,
 		map[string]any{"status": string(status)})
 	_ = httpx.WriteJSON(w, http.StatusOK, statusJSON{StreamID: s.ID, Status: string(s.Status), Reason: s.StatusReason})
-}
-
-// moveQueued applies s's new status to its queued ordinary events. It
-// runs after the status is stored, so an event published concurrently
-// already sees the new status.
-func (h *Handlers) moveQueued(ctx context.Context, s *store.SSFStream) error {
-	switch s.Status {
-	case store.SSFStreamPaused:
-		return h.events.Retag(ctx, s.ID, s.Delivery.Method, true)
-	case store.SSFStreamEnabled:
-		return h.events.Retag(ctx, s.ID, s.Delivery.Method, false)
-	case store.SSFStreamDisabled:
-		return h.events.Purge(ctx, s.ID, false)
-	}
-	return nil
 }
 
 func (h *Handlers) verify(w http.ResponseWriter, r *http.Request) {
@@ -759,8 +729,8 @@ func mgmtDecodeDelivery(raw json.RawMessage) (mgmtDeliveryInput, error) {
 }
 
 // applyDelivery sets s.Delivery. A PATCH that names only some delivery
-// members keeps the others, including the sealed authorization header;
-// a replace without delivery makes a poll stream, and a replace without
+// members keeps the others, including the sealed authorization header
+// while endpoint_url stays the same; a replace without delivery makes a poll stream, and a replace without
 // authorization_header drops the sealed value.
 func (h *Handlers) applyDelivery(s *store.SSFStream, obj mgmtObject, replace bool) error {
 	raw, present := obj["delivery"]
@@ -799,7 +769,9 @@ func (h *Handlers) applyDelivery(s *store.SSFStream, obj mgmtObject, replace boo
 }
 
 // pushDelivery merges in over cur (kept only when cur is push) into a
-// validated push delivery, sealing a new authorization header.
+// validated push delivery, sealing a new authorization header. A sealed
+// header is only ever kept for the endpoint it was supplied with, so a
+// change of endpoint_url has to re-supply authorization_header.
 func (h *Handlers) pushDelivery(streamID string, cur store.SSFDelivery, in mgmtDeliveryInput) (store.SSFDelivery, error) {
 	next := store.SSFDelivery{Method: store.SSFDeliveryPush}
 	if cur.Method == store.SSFDeliveryPush {
@@ -813,6 +785,9 @@ func (h *Handlers) pushDelivery(streamID string, cur store.SSFDelivery, in mgmtD
 		return next, err
 	}
 	if !in.hasHeader {
+		if next.SealedAuthorizationHeader != nil && next.EndpointURL != cur.EndpointURL {
+			return next, mgmtBadRequest("delivery.authorization_header is required when endpoint_url changes")
+		}
 		return next, nil
 	}
 	if err := mgmtCheckHeader(in.header); err != nil {

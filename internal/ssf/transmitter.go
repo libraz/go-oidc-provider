@@ -22,6 +22,10 @@ const maxFanOut = backchannel.DefaultMaxTargets
 // eventTTL is how long a queued SET waits before DeleteExpired drops it.
 const eventTTL = 7 * 24 * time.Hour
 
+// enqueueAttempts bounds how often one SET is rebuilt against a re-read
+// stream after the store refused it as built from a stale stream state.
+const enqueueAttempts = 4
+
 const (
 	eventEnqueued      = string(auditevent.AuditSSFSETEnqueued)
 	eventEnqueueFailed = string(auditevent.AuditSSFEnqueueFailed)
@@ -142,8 +146,7 @@ func (t *Transmitter) Publish(ctx context.Context, et EventType, subject string,
 		faults []error
 	)
 	for _, s := range targets {
-		held := s.Status == store.SSFStreamPaused
-		sent, err := t.publishTo(ctx, s, et, subject, txn, payload, held, now)
+		sent, err := t.publishTo(ctx, s, et, subject, txn, payload, now)
 		if err != nil {
 			faults = append(faults, err)
 			continue
@@ -199,7 +202,6 @@ func (t *Transmitter) publishTo(
 	et EventType,
 	subject, txn string,
 	payload map[string]any,
-	held bool,
 	now time.Time,
 ) (bool, error) {
 	client, err := t.clients.GetClient(ctx, s.ClientID)
@@ -222,16 +224,17 @@ func (t *Transmitter) publishTo(
 			return false, fmt.Errorf("ssf: project subject for client %q: %w", s.ClientID, err)
 		}
 	}
-	if _, err := t.enqueue(ctx, s, et, store.SSFEventKindEvent, held, IssSubSubject(t.issuer, sub), txn, payload, now); err != nil {
+	jti, err := t.enqueue(ctx, s, et, store.SSFEventKindEvent, IssSubSubject(t.issuer, sub), txn, payload, now)
+	if err != nil {
 		return false, err
 	}
-	return true, nil
+	return jti != "", nil
 }
 
-// EnqueueControl enqueues a stream-updated or verification SET for s.
-// Control events are never held and are queued whatever the stream's
-// status; a verification replaces the stream's pending one. It returns
-// the queued event's jti.
+// EnqueueControl enqueues a verification SET for s. Control events are
+// never held and are queued whatever the stream's status; a verification
+// replaces the stream's pending one. It returns the queued event's jti,
+// or "" without error when the stream was deleted meanwhile.
 func (t *Transmitter) EnqueueControl(ctx context.Context, s *store.SSFStream, et EventType, f ControlFields) (string, error) {
 	if s == nil {
 		return "", errors.New("ssf: nil stream")
@@ -240,26 +243,105 @@ func (t *Transmitter) EnqueueControl(ctx context.Context, s *store.SSFStream, et
 	if err != nil {
 		return "", err
 	}
-	now := t.clock.Now()
-	return t.enqueue(ctx, s, et, controlKind(et), false, StreamSubject(s.ID), "", payload, now)
+	if et == EventStreamUpdated {
+		return "", fmt.Errorf("%w: a stream-updated SET is sent through UpdateStream", ErrInvalidEvent)
+	}
+	return t.enqueue(ctx, s, et, controlKind(et), StreamSubject(s.ID), "", payload, t.clock.Now())
+}
+
+// UpdateStream stores s as the stream's new state; the store moves the
+// queued events to match in the same operation. A non-nil notice adds the
+// stream-updated SET announcing it, replacing the stream's pending one.
+func (t *Transmitter) UpdateStream(ctx context.Context, s *store.SSFStream, notice *ControlFields) error {
+	if notice == nil {
+		return t.streams.Update(ctx, s, nil)
+	}
+	payload, err := controlPayload(EventStreamUpdated, *notice)
+	if err != nil {
+		return err
+	}
+	ev, err := t.build(ctx, s, EventStreamUpdated, controlKind(EventStreamUpdated), StreamSubject(s.ID), "", payload, t.clock.Now())
+	if err != nil {
+		return err
+	}
+	if err := t.streams.Update(ctx, s, ev); err != nil {
+		t.emitFailed(ctx, EventStreamUpdated, s.ClientID, s.ID, reasonEnqueue, err)
+		return err
+	}
+	t.emitEnqueued(ctx, s.ClientID, ev, EventStreamUpdated)
+	return nil
 }
 
 // enqueue builds and stores one SET for s under a fresh jti and returns
-// the jti.
+// the jti. When the store refuses the event as built from a stale stream
+// state, the stream is re-read and the event re-tagged; it returns ""
+// without error when the stream is gone or, for an ordinary event, no
+// longer takes it.
 func (t *Transmitter) enqueue(
 	ctx context.Context,
 	s *store.SSFStream,
 	et EventType,
 	kind store.SSFEventKind,
-	held bool,
 	subID map[string]string,
 	txn string,
 	payload map[string]any,
 	now time.Time,
 ) (string, error) {
-	jti, err := NewID()
+	ev, err := t.build(ctx, s, et, kind, subID, txn, payload, now)
 	if err != nil {
 		return "", err
+	}
+	for attempt := 1; ; attempt++ {
+		err = t.events.Enqueue(ctx, ev)
+		if !errors.Is(err, store.ErrConflict) || attempt == enqueueAttempts {
+			break
+		}
+		fresh, gerr := t.streams.Get(ctx, s.ID)
+		if errors.Is(gerr, store.ErrNotFound) {
+			return "", nil
+		}
+		if gerr != nil {
+			err = gerr
+			break
+		}
+		if kind == store.SSFEventKindEvent && !acceptsOrdinary(fresh, et) {
+			return "", nil
+		}
+		tagEvent(ev, fresh)
+	}
+	if err != nil {
+		t.emitFailed(ctx, et, s.ClientID, s.ID, reasonEnqueue, err)
+		return "", fmt.Errorf("ssf: enqueue for stream %q: %w", s.ID, err)
+	}
+	t.emitEnqueued(ctx, s.ClientID, ev, et)
+	return ev.JTI, nil
+}
+
+// acceptsOrdinary reports whether s still takes an ordinary SET of type et.
+func acceptsOrdinary(s *store.SSFStream, et EventType) bool {
+	return s.Status != store.SSFStreamDisabled && slices.Contains(s.EventsDelivered, string(et))
+}
+
+// tagEvent sets the delivery tags s's current state gives a queued event.
+func tagEvent(ev *store.SSFEvent, s *store.SSFStream) {
+	ev.Delivery = s.Delivery.Method
+	ev.Held = ev.Kind == store.SSFEventKindEvent && s.Status == store.SSFStreamPaused
+}
+
+// build makes the queue entry of one SET for s under a fresh jti.
+func (t *Transmitter) build(
+	ctx context.Context,
+	s *store.SSFStream,
+	et EventType,
+	kind store.SSFEventKind,
+	subID map[string]string,
+	txn string,
+	payload map[string]any,
+	now time.Time,
+) (*store.SSFEvent, error) {
+	jti, err := NewID()
+	if err != nil {
+		return nil, err
 	}
 	claims, err := BuildClaims(Claims{
 		Issuer:    t.issuer,
@@ -273,36 +355,35 @@ func (t *Transmitter) enqueue(
 	})
 	if err != nil {
 		t.emitFailed(ctx, et, s.ClientID, s.ID, reasonClaims, err)
-		return "", err
+		return nil, err
 	}
 	ev := &store.SSFEvent{
 		JTI:           jti,
 		StreamID:      s.ID,
 		Kind:          kind,
-		Delivery:      s.Delivery.Method,
-		Held:          held,
 		Claims:        claims,
 		NextAttemptAt: now,
 		ExpiresAt:     now.Add(eventTTL),
 	}
-	if err := t.events.Enqueue(ctx, ev); err != nil {
-		t.emitFailed(ctx, et, s.ClientID, s.ID, reasonEnqueue, err)
-		return "", fmt.Errorf("ssf: enqueue for stream %q: %w", s.ID, err)
-	}
+	tagEvent(ev, s)
+	return ev, nil
+}
+
+// emitEnqueued records an ssf.set.enqueued event for ev.
+func (t *Transmitter) emitEnqueued(ctx context.Context, clientID string, ev *store.SSFEvent, et EventType) {
 	t.audit.Emit(context.WithoutCancel(ctx), audit.Event{
 		Name:     eventEnqueued,
 		Level:    audit.LevelInfo,
 		Message:  "security event token enqueued",
-		ClientID: s.ClientID,
+		ClientID: clientID,
 		Extras: map[string]any{
-			"stream_id":  s.ID,
-			"jti":        jti,
+			"stream_id":  ev.StreamID,
+			"jti":        ev.JTI,
 			"event_type": string(et),
-			"delivery":   string(s.Delivery.Method),
-			"held":       held,
+			"delivery":   string(ev.Delivery),
+			"held":       ev.Held,
 		},
 	})
-	return jti, nil
 }
 
 // emitFailed records an ssf.enqueue_failed event. clientID and streamID

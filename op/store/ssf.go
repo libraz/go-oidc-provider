@@ -8,7 +8,9 @@ import (
 // SharedSignalsStore is the extension of the aggregate [Store] that
 // persists Shared Signals Framework 1.0 transmitter state: the streams
 // receivers configure and the queue of Security Event Tokens waiting to
-// be delivered to them.
+// be delivered to them. The two substores MUST share one storage:
+// [SSFStreamStore.Update], [SSFStreamStore.Delete] and
+// [SSFEventStore.Enqueue] each act on a stream and its queue at once.
 //
 // op.New requires it when op.WithSharedSignals is set, and additionally
 // requires both accessors to return a non-nil substore. A partial-coverage
@@ -153,10 +155,22 @@ type SSFStreamStore interface {
 	// trip. No active stream is an empty result and a nil error.
 	ListActive(ctx context.Context) ([]*SSFStream, error)
 
-	// Update replaces the stored stream with the same ID. ID and
-	// ClientID identify the record and callers never change them. It
-	// MUST return [ErrNotFound] when no stream has the ID.
-	Update(ctx context.Context, s *SSFStream) error
+	// Update replaces the stored stream with the same ID and, in the
+	// same atomic operation, brings every event queued for it in
+	// [SSFEventStore] in line with the new state: each event takes
+	// Delivery = s.Delivery.Method; an event of Kind
+	// [SSFEventKindEvent] takes Held = (s.Status == [SSFStreamPaused])
+	// and is deleted when s.Status is [SSFStreamDisabled]; control
+	// events stay queued and unheld. A non-nil notice is a
+	// [SSFEventKindStreamUpdated] event for the stream, built against s;
+	// it is stored in the same operation and replaces any stream-updated
+	// event already queued for the stream, so a stream holds at most one.
+	//
+	// ID and ClientID identify the record and callers never change them.
+	// It MUST return [ErrNotFound] when no stream has the ID, and
+	// [ErrAlreadyExists] when an event with the notice's JTI is queued;
+	// either leaves the stream and its queue unchanged.
+	Update(ctx context.Context, s *SSFStream, notice *SSFEvent) error
 
 	// Delete removes the stream and every event queued for it in
 	// [SSFEventStore], so no delivery outlives its stream. It MUST
@@ -180,7 +194,8 @@ const (
 	SSFEventKindEvent SSFEventKind = "event"
 
 	// SSFEventKindStreamUpdated is a stream-updated control event (SSF
-	// 1.0 §8.1.5), delivered whatever the stream's status.
+	// 1.0 §8.1.5), delivered whatever the stream's status. A stream holds
+	// at most one queued stream-updated event.
 	//
 	// Stable since v1.5.
 	SSFEventKindStreamUpdated SSFEventKind = "stream-updated"
@@ -210,13 +225,13 @@ type SSFEvent struct {
 	Kind SSFEventKind
 
 	// Delivery is the stream's delivery method at enqueue time, kept
-	// current by [SSFEventStore.Retag]. It selects whether the push
+	// current by [SSFStreamStore.Update]. It selects whether the push
 	// worker ([SSFEventStore.ClaimDue]) or the poll endpoint
 	// ([SSFEventStore.Pending]) sees the event.
 	Delivery SSFDeliveryMethod
 
-	// Held marks an ordinary event enqueued or retagged while its stream
-	// was paused. Neither ClaimDue nor Pending returns a held event. The
+	// Held marks an ordinary event enqueued while its stream was paused,
+	// kept current by [SSFStreamStore.Update]. Neither ClaimDue nor Pending returns a held event. The
 	// library never sets Held on a control event.
 	Held bool
 
@@ -246,8 +261,19 @@ type SSFEvent struct {
 type SSFEventStore interface {
 	// Enqueue stores ev. It MUST return [ErrAlreadyExists] when an event
 	// with the same JTI is queued. For Kind == [SSFEventKindVerification]
-	// it MUST, in the same atomic operation, remove any verification
-	// already queued for ev.StreamID, so a stream holds at most one.
+	// or [SSFEventKindStreamUpdated] it MUST, in the same atomic
+	// operation, remove any event of that Kind already queued for
+	// ev.StreamID, so a stream holds at most one of each.
+	//
+	// When a stream with ev.StreamID exists, Enqueue MUST return
+	// [ErrConflict] and store nothing if ev does not match the stream's
+	// current state: ev.Delivery differs from its delivery method, or,
+	// for Kind == [SSFEventKindEvent], the stream is disabled or ev.Held
+	// differs from the stream being paused. The check and the insert are
+	// one atomic operation with respect to [SSFStreamStore.Update], so an
+	// event built from a stream read before a status or delivery-method
+	// change can never land with the earlier state's tags. An event for a
+	// stream that does not exist is stored unchecked.
 	Enqueue(ctx context.Context, ev *SSFEvent) error
 
 	// ClaimDue leases up to n events with Delivery == [SSFDeliveryPush],
@@ -279,18 +305,6 @@ type SSFEventStore interface {
 	// lease or modify the events: they stay pending until acknowledged.
 	// n MUST be positive.
 	Pending(ctx context.Context, streamID string, n int) ([]*SSFEvent, bool, error)
-
-	// Retag applies a status or delivery-method change to the events
-	// queued for streamID. Every event takes Delivery = delivery, so
-	// control events follow the stream to its new method; only events of
-	// Kind == [SSFEventKindEvent] take Held = held, and control events
-	// stay unheld.
-	Retag(ctx context.Context, streamID string, delivery SSFDeliveryMethod, held bool) error
-
-	// Purge deletes the events queued for streamID. With includeControl
-	// false it deletes only Kind == [SSFEventKindEvent] events and keeps
-	// stream-updated and verification events queued.
-	Purge(ctx context.Context, streamID string, includeControl bool) error
 
 	// DeleteExpired deletes every event with ExpiresAt <= now and
 	// reports how many it deleted.

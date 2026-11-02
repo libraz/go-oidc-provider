@@ -34,13 +34,14 @@ const (
 
 const (
 	authDescAudience = "The access token is not issued for this transmitter"
+	authDescDelegate = "The access token is not a client_credentials token of the receiver"
 	authDescScope    = "The access token lacks the required scope"
 )
 
-// authorize accepts the request's access token and checks that its
-// audience contains the issuer and its scope covers level. It returns
-// the receiver's client_id, or writes the RFC 6750 §3.1 rejection and
-// reports false.
+// authorize accepts the request's access token and checks that the
+// receiver obtained it on its own behalf, that its audience contains the
+// issuer and that its scope covers level. It returns the receiver's
+// client_id, or writes the RFC 6750 §3.1 rejection and reports false.
 func (h *Handlers) authorize(w http.ResponseWriter, r *http.Request, level authLevel) (string, bool) {
 	access, err := endpointsupport.AcceptBearer(r, h.bearer)
 	if err != nil {
@@ -61,6 +62,10 @@ func (h *Handlers) authorize(w http.ResponseWriter, r *http.Request, level authL
 		authChallenge(w, http.StatusUnauthorized, scheme, "invalid_token", authDescAudience, "")
 		return "", false
 	}
+	if !authOwnBehalf(claims) {
+		authChallenge(w, http.StatusUnauthorized, scheme, "invalid_token", authDescDelegate, "")
+		return "", false
+	}
 	if !authScopeCovers(claims.Scope, level) {
 		want := ScopeRead
 		if level == authManage {
@@ -70,6 +75,13 @@ func (h *Handlers) authorize(w http.ResponseWriter, r *http.Request, level authL
 		return "", false
 	}
 	return claims.ClientID, true
+}
+
+// authOwnBehalf reports whether the token was issued to the client for
+// itself, as client_credentials issues it: subject equal to client_id and
+// no end-user grant behind it.
+func authOwnBehalf(c *tokens.AccessTokenClaims) bool {
+	return c.Subject == c.ClientID && c.GrantID == ""
 }
 
 // authScopeCovers reports whether scope grants level.

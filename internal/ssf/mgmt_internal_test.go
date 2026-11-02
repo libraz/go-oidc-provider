@@ -157,7 +157,6 @@ func (f *mgmtFixture) token(t *testing.T, form mgmtTokenForm, clientID string, s
 	if form == mgmtOpaque {
 		rec := &store.OpaqueAccessToken{
 			ID:        fmt.Sprintf("opaque-%d", f.seq),
-			GrantID:   "grant-" + clientID,
 			ClientID:  clientID,
 			Subject:   clientID,
 			Scope:     scope,
@@ -175,7 +174,6 @@ func (f *mgmtFixture) token(t *testing.T, form mgmtTokenForm, clientID string, s
 		Subject:   clientID,
 		Audience:  []string{testIssuer},
 		ClientID:  clientID,
-		GrantID:   "grant-" + clientID,
 		IssuedAt:  testNow.Add(-time.Minute).Unix(),
 		ExpiresAt: testNow.Add(time.Hour).Unix(),
 		JTI:       fmt.Sprintf("at-%d", f.seq),
@@ -506,6 +504,54 @@ func TestMgmtAuthRejections(t *testing.T) {
 	mgmtWantStatus(t, w, http.StatusMethodNotAllowed)
 }
 
+// TestMgmtRejectsUserDelegatedTokens pins that only a token the receiver
+// obtained for itself (client_credentials) reaches any SSF endpoint: a
+// code-flow token carrying ssf.manage, JWT or opaque, is invalid_token.
+func TestMgmtRejectsUserDelegatedTokens(t *testing.T) {
+	t.Parallel()
+	f := newMgmtFixture(t)
+	s := f.mgmtCreate(t, `{}`)
+	streamQuery := "?stream_id=" + url.QueryEscape(s.ID)
+	idBody := fmt.Sprintf(`{"stream_id":%q}`, s.ID)
+	requests := map[string]func() *http.Request{
+		"streams get":   func() *http.Request { return mgmtNewRequest(http.MethodGet, mgmtStreamsPath, "") },
+		"streams patch": func() *http.Request { return mgmtNewRequest(http.MethodPatch, mgmtStreamsPath, idBody) },
+		"status set": func() *http.Request {
+			return mgmtNewRequest(http.MethodPost, mgmtStatusPath, fmt.Sprintf(`{"stream_id":%q,"status":"paused"}`, s.ID))
+		},
+		"status get": func() *http.Request { return mgmtNewRequest(http.MethodGet, mgmtStatusPath+streamQuery, "") },
+		"verify":     func() *http.Request { return mgmtNewRequest(http.MethodPost, mgmtVerifyPath, idBody) },
+		"poll":       func() *http.Request { return mgmtNewRequest(http.MethodPost, "/ssf/poll/"+s.ID, `{}`) },
+	}
+	userCode := func(c *tokens.AccessTokenClaims) { c.Subject, c.GrantID = "alice", "grant-alice" }
+	clientGrant := func(c *tokens.AccessTokenClaims) { c.GrantID = "grant-" + mgmtClientA }
+	opaque := &store.OpaqueAccessToken{
+		ID: "opaque-user", GrantID: "grant-alice", ClientID: mgmtClientA, Subject: "alice",
+		Scope: mgmtScopeManage, Audience: testIssuer,
+		IssuedAt: testNow.Add(-time.Minute), ExpiresAt: testNow.Add(time.Hour),
+	}
+	if err := f.st.OpaqueAccessTokens().Save(context.Background(), opaque); err != nil {
+		t.Fatalf("Save opaque: %v", err)
+	}
+	for name, newReq := range requests {
+		for tokenName, raw := range map[string]string{
+			"user jwt":         f.token(t, mgmtJWT, mgmtClientA, mgmtScopeManage, userCode),
+			"grant-backed jwt": f.token(t, mgmtJWT, mgmtClientA, mgmtScopeManage, clientGrant),
+			"user opaque":      opaque.ID,
+		} {
+			r := newReq()
+			f.authorizeRequest(t, r, mgmtJWT, raw)
+			w := f.serve(r)
+			if w.Code != http.StatusUnauthorized || !strings.Contains(w.Header().Get("WWW-Authenticate"), `error="invalid_token"`) {
+				t.Errorf("%s with %s: status %d, WWW-Authenticate %q", name, tokenName, w.Code, w.Header().Get("WWW-Authenticate"))
+			}
+		}
+	}
+	if got := f.stream(t, s.ID); got.Status != store.SSFStreamEnabled {
+		t.Errorf("stream status = %q after rejected requests, want enabled", got.Status)
+	}
+}
+
 func TestMgmtCreateEdges(t *testing.T) {
 	t.Parallel()
 	session := string(EventSessionRevoked)
@@ -758,17 +804,31 @@ func TestMgmtUpdateEdges(t *testing.T) {
 		check  func(t *testing.T, f *mgmtFixture, s *store.SSFStream)
 	}{
 		{
-			name: "PATCH endpoint_url only keeps the header", method: http.MethodPatch, status: http.StatusOK,
+			// The sealed header was supplied for /a and never follows the stream to /b.
+			name: "PATCH endpoint_url without authorization_header refused", method: http.MethodPatch, status: http.StatusBadRequest,
 			body: `{"stream_id":%q,"delivery":{"endpoint_url":"https://rp.example.com/b"}}`,
+		},
+		{
+			name: "PATCH endpoint_url with a new authorization_header", method: http.MethodPatch, status: http.StatusOK,
+			body: `{"stream_id":%q,"delivery":{"endpoint_url":"https://rp.example.com/b","authorization_header":"Bearer other"}}`,
 			check: func(t *testing.T, f *mgmtFixture, s *store.SSFStream) {
 				if s.Delivery.EndpointURL != "https://rp.example.com/b" || s.Delivery.Method != store.SSFDeliveryPush {
 					t.Errorf("delivery = %+v", s.Delivery)
 				}
-				if plain, err := f.sealer.Unseal(s.ID, s.Delivery.SealedAuthorizationHeader); err != nil || plain != header {
-					t.Errorf("header = %q, %v; want kept", plain, err)
+				if plain, err := f.sealer.Unseal(s.ID, s.Delivery.SealedAuthorizationHeader); err != nil || plain != "Bearer other" {
+					t.Errorf("header = %q, %v; want the new one", plain, err)
 				}
 				if s.Description != "d" || !slices.Equal(s.EventsRequested, []string{session}) {
 					t.Errorf("omitted members changed: %+v", s)
+				}
+			},
+		},
+		{
+			name: "PATCH unchanged endpoint_url keeps the header", method: http.MethodPatch, status: http.StatusOK,
+			body: `{"stream_id":%q,"delivery":{"endpoint_url":"https://rp.example.com/a"}}`,
+			check: func(t *testing.T, f *mgmtFixture, s *store.SSFStream) {
+				if plain, err := f.sealer.Unseal(s.ID, s.Delivery.SealedAuthorizationHeader); err != nil || plain != header {
+					t.Errorf("header = %q, %v; want kept", plain, err)
 				}
 			},
 		},
@@ -841,7 +901,7 @@ func TestMgmtUpdateEdges(t *testing.T) {
 				if !mgmtIsBarePoll(s.Delivery) {
 					t.Errorf("delivery = %+v", s.Delivery)
 				}
-				// Retag moved the queued creation verification to poll.
+				// The update moved the queued creation verification to poll.
 				if types := mgmtPendingTypes(t, f.st, s.ID); !slices.Equal(types, []string{string(EventVerification)}) {
 					t.Errorf("pending after retag = %v", types)
 				}
@@ -870,7 +930,8 @@ func TestMgmtUpdateEdges(t *testing.T) {
 			mgmtWantStatus(t, w, tc.status)
 			after := f.stream(t, s.ID)
 			if tc.status != http.StatusOK {
-				if after.Description != s.Description || after.Delivery.EndpointURL != s.Delivery.EndpointURL {
+				if after.Description != s.Description || after.Delivery.EndpointURL != s.Delivery.EndpointURL ||
+					!slices.Equal(after.Delivery.SealedAuthorizationHeader, s.Delivery.SealedAuthorizationHeader) {
 					t.Errorf("rejected update changed the stream: %+v", after)
 				}
 				return
@@ -980,32 +1041,37 @@ func TestMgmtStatusTransitions(t *testing.T) {
 	}
 
 	setStatus("enabled", "")
-	pending(revoked, revoked, updated("paused"), updated("enabled"))
+	// A stream holds one stream-updated: the newest replaces the pending one.
+	pending(revoked, revoked, updated("enabled"))
 
 	setStatus("disabled", "")
 	publish()
-	// Ordinary events are dropped; every control event survives.
-	pending(updated("paused"), updated("enabled"), updated("disabled"))
+	// Ordinary events are dropped; the control events survive.
+	pending(updated("disabled"))
 
 	// Verification is still accepted and delivered while disabled.
 	mgmtWantStatus(t, f.do(t, mgmtScopeManage, http.MethodPost, mgmtVerifyPath,
 		fmt.Sprintf(`{"stream_id":%q,"state":"ping"}`, s.ID)), http.StatusNoContent)
-	pending(updated("paused"), updated("enabled"), updated("disabled"), string(EventVerification))
+	pending(updated("disabled"), string(EventVerification))
 
 	// Setting the current status again queues no stream-updated.
 	setStatus("disabled", "still off")
-	pending(updated("paused"), updated("enabled"), updated("disabled"), string(EventVerification))
+	pending(updated("disabled"), string(EventVerification))
 
-	setStatus("enabled", "")
-	pending(updated("paused"), updated("enabled"), updated("disabled"), updated("enabled"), string(EventVerification))
+	// Toggling the status never grows the queue past one stream-updated.
+	for range 10 {
+		setStatus("paused", "")
+		setStatus("enabled", "")
+	}
+	pending(updated("enabled"), string(EventVerification))
 
 	w := f.do(t, mgmtScopeRead, http.MethodGet, mgmtStatusPath+"?stream_id="+s.ID, "")
 	mgmtWantStatus(t, w, http.StatusOK)
 	if got := mgmtDecode(t, w); got["status"] != "enabled" {
 		t.Errorf("GET status = %v", got)
 	}
-	if n := len(f.rec.named(string(auditevent.AuditSSFStreamUpdated))); n != 5 {
-		t.Errorf("stream.updated events = %d, want 5", n)
+	if n := len(f.rec.named(string(auditevent.AuditSSFStreamUpdated))); n != 24 {
+		t.Errorf("stream.updated events = %d, want 24", n)
 	}
 }
 

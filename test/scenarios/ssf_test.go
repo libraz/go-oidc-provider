@@ -60,7 +60,14 @@ func newSSFProvider(t *testing.T, extra ...op.Option) *testkit.Provider {
 
 func newSSFProviderOpts(t *testing.T, shutdown bool, opts ...op.Option) *testkit.Provider {
 	t.Helper()
-	tk := testkit.NewProvider(t, testkit.WithOptions(opts...))
+	return newSSFProviderWith(t, shutdown, []testkit.Option{testkit.WithOptions(opts...)})
+}
+
+// newSSFProviderWith is [newSSFProviderOpts] taking testkit options, for a
+// row that also controls the clock.
+func newSSFProviderWith(t *testing.T, shutdown bool, tkOpts []testkit.Option) *testkit.Provider {
+	t.Helper()
+	tk := testkit.NewProvider(t, tkOpts...)
 	if shutdown {
 		t.Cleanup(func() {
 			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -270,7 +277,8 @@ func ssfWantIssSub(t *testing.T, tk *testkit.Provider, claims map[string]any, su
 }
 
 // ssfPoll polls the stream once and returns the verified SETs by event
-// type (the last one wins when a type repeats) plus the raw response.
+// type (the last one wins when a type repeats, so count with the jtis or
+// [ssfPollExact]) plus the raw response.
 // ack is sent verbatim; the jtis seen are returned for the caller to ack.
 func ssfPoll(t *testing.T, tk *testkit.Provider, token, streamID string, body map[string]any) (map[string]map[string]any, []string, map[string]any) {
 	t.Helper()
@@ -291,6 +299,18 @@ func ssfPoll(t *testing.T, tk *testkit.Provider, token, streamID string, body ma
 		byType[typ] = claims
 	}
 	return byType, jtis, resp
+}
+
+// ssfPollExact polls once with returnImmediately and fails unless exactly
+// want SETs come back, counted by jti so a duplicate of one event type is
+// seen. The by-type map is for reading a SET's content, never for counting.
+func ssfPollExact(t *testing.T, tk *testkit.Provider, token, streamID string, want int) (map[string]map[string]any, []string) {
+	t.Helper()
+	byType, jtis, _ := ssfPoll(t, tk, token, streamID, map[string]any{"returnImmediately": true})
+	if len(jtis) != want {
+		t.Fatalf("poll of %s returned %d SETs %v, want %d", streamID, len(jtis), byType, want)
+	}
+	return byType, jtis
 }
 
 // ssfDrain polls with returnImmediately and acks everything, leaving the
@@ -757,8 +777,8 @@ func TestScenario_SSF_016_DeleteStream(t *testing.T) {
 	if id2 == id {
 		t.Errorf("recreated stream reused id %s", id)
 	}
-	byType, _, _ := ssfPoll(t, tk, token, id2, map[string]any{"returnImmediately": true})
-	if len(byType) != 1 || byType[ssfEvVerification] == nil {
+	byType, _ := ssfPollExact(t, tk, token, id2, 1)
+	if byType[ssfEvVerification] == nil {
 		t.Errorf("new stream queue = %v, want only its creation verification", byType)
 	}
 }
@@ -850,9 +870,9 @@ func TestScenario_SSF_021_RevokeSubjectPublishesBeforeGrantRemoval(t *testing.T)
 	if err := tk.OP.RevokeSubject(context.Background(), "bob"); err != nil {
 		t.Fatalf("RevokeSubject: %v", err)
 	}
-	byType, jtis, _ := ssfPoll(t, tk, token, id, map[string]any{"returnImmediately": true})
+	byType, jtis := ssfPollExact(t, tk, token, id, 1)
 	revoked := byType[ssfEvSessionRevoked]
-	if revoked == nil || len(byType) != 1 {
+	if revoked == nil {
 		t.Fatalf("after RevokeSubject got %v, want exactly one session-revoked", byType)
 	}
 	ssfWantIssSub(t, tk, revoked, "bob")
@@ -866,10 +886,7 @@ func TestScenario_SSF_021_RevokeSubjectPublishesBeforeGrantRemoval(t *testing.T)
 	_, _, _ = ssfPoll(t, tk, token, id, map[string]any{"returnImmediately": true, "maxEvents": 0, "ack": jtis})
 
 	ssfEmitCredentialChange(t, tk, "bob")
-	byType, _, _ = ssfPoll(t, tk, token, id, map[string]any{"returnImmediately": true})
-	if len(byType) != 0 {
-		t.Errorf("event emitted after the grants were removed reached %v, want nothing", byType)
-	}
+	ssfPollExact(t, tk, token, id, 0)
 }
 
 // TestScenario_SSF_022_EmitPollAck pins the embedder path: the event
@@ -885,9 +902,9 @@ func TestScenario_SSF_022_EmitPollAck(t *testing.T) {
 	ssfSeedGrant(t, tk, "carol", ssfRxA)
 	ssfEmitCredentialChange(t, tk, "carol")
 
-	byType, jtis, _ := ssfPoll(t, tk, token, id, map[string]any{"returnImmediately": true})
+	byType, jtis := ssfPollExact(t, tk, token, id, 1)
 	claims := byType[ssfEvCredentialChange]
-	if claims == nil || len(jtis) != 1 {
+	if claims == nil {
 		t.Fatalf("first poll = %v, want one credential-change", byType)
 	}
 	ssfWantIssSub(t, tk, claims, "carol")
@@ -940,14 +957,13 @@ func TestScenario_SSF_023_RecipientSelection(t *testing.T) {
 	ssfEmitCredentialChange(t, tk, "dave")
 	ssfEmitCredentialChange(t, tk, "erin")
 
-	gotA, _, _ := ssfPoll(t, tk, tokenA, idA, map[string]any{"returnImmediately": true})
-	if len(gotA) != 1 || gotA[ssfEvCredentialChange] == nil {
+	// Exactly one SET, dave's: erin's would be a second credential-change.
+	gotA, _ := ssfPollExact(t, tk, tokenA, idA, 1)
+	if gotA[ssfEvCredentialChange] == nil {
 		t.Fatalf("receiver A got %v, want exactly dave's credential-change", gotA)
 	}
 	ssfWantIssSub(t, tk, gotA[ssfEvCredentialChange], "dave")
-	if gotB, _, _ := ssfPoll(t, tk, tokenB, idB, map[string]any{"returnImmediately": true}); len(gotB) != 0 {
-		t.Errorf("receiver B (event not requested) got %v, want nothing", gotB)
-	}
+	ssfPollExact(t, tk, tokenB, idB, 0)
 }
 
 // TestScenario_SSF_024_PausedHoldsUntilEnabled pins that a paused stream
@@ -966,7 +982,7 @@ func TestScenario_SSF_024_PausedHoldsUntilEnabled(t *testing.T) {
 	}
 	ssfEmitCredentialChange(t, tk, "frank")
 
-	byType, jtis, _ := ssfPoll(t, tk, token, id, map[string]any{"returnImmediately": true})
+	byType, jtis := ssfPollExact(t, tk, token, id, 1)
 	if byType[ssfEvCredentialChange] != nil {
 		t.Fatalf("paused stream delivered an ordinary event: %v", byType)
 	}
@@ -985,7 +1001,7 @@ func TestScenario_SSF_024_PausedHoldsUntilEnabled(t *testing.T) {
 	if status, body := ssfDoJSON(t, tk, http.MethodPost, "/oidc/ssf/status", token, map[string]any{"stream_id": id, "status": "enabled"}); status != http.StatusOK || body["status"] != "enabled" {
 		t.Fatalf("enable: status=%d body=%v", status, body)
 	}
-	byType, _, _ = ssfPoll(t, tk, token, id, map[string]any{"returnImmediately": true})
+	byType, _ = ssfPollExact(t, tk, token, id, 2)
 	held := byType[ssfEvCredentialChange]
 	if held == nil {
 		t.Fatalf("enabling did not release the held event: %v", byType)
@@ -1014,7 +1030,7 @@ func TestScenario_SSF_025_DisabledDropsButNotifies(t *testing.T) {
 	}
 	ssfEmitCredentialChange(t, tk, "gina") // after the transition
 
-	byType, _, _ := ssfPoll(t, tk, token, id, map[string]any{"returnImmediately": true})
+	byType, _ := ssfPollExact(t, tk, token, id, 1)
 	if byType[ssfEvCredentialChange] != nil {
 		t.Errorf("disabled stream kept or accepted an ordinary event: %v", byType)
 	}
@@ -1042,9 +1058,9 @@ func TestScenario_SSF_026_Verification(t *testing.T) {
 	token := ssfManageToken(t, tk, ssfRxA)
 	id := ssfCreateStream(t, tk, token, map[string]any{})
 
-	byType, jtis, _ := ssfPoll(t, tk, token, id, map[string]any{"returnImmediately": true})
+	byType, jtis := ssfPollExact(t, tk, token, id, 1)
 	v := byType[ssfEvVerification]
-	if v == nil || len(byType) != 1 {
+	if v == nil {
 		t.Fatalf("creation queue = %v, want one verification", byType)
 	}
 	if _, p := ssfEventOf(v); p["state"] != nil {
@@ -1060,8 +1076,8 @@ func TestScenario_SSF_026_Verification(t *testing.T) {
 			t.Fatalf("verify %q: status=%d body=%v, want 204", state, status, body)
 		}
 	}
-	byType, _, _ = ssfPoll(t, tk, token, id, map[string]any{"returnImmediately": true})
-	if _, p := ssfEventOf(byType[ssfEvVerification]); len(byType) != 1 || p["state"] != "second-state" {
+	byType, _ = ssfPollExact(t, tk, token, id, 1)
+	if _, p := ssfEventOf(byType[ssfEvVerification]); p["state"] != "second-state" {
 		t.Errorf("queue after two requests = %v, want one verification echoing the newer state", byType)
 	}
 }
@@ -1079,9 +1095,7 @@ func TestScenario_SSF_027_LongPoll(t *testing.T) {
 	ssfSeedGrant(t, tk, "hana", ssfRxA)
 
 	// returnImmediately true on an empty queue answers at once with no SETs.
-	if byType, _, _ := ssfPoll(t, tk, token, id, map[string]any{"returnImmediately": true}); len(byType) != 0 {
-		t.Fatalf("empty queue returned %v", byType)
-	}
+	ssfPollExact(t, tk, token, id, 0)
 
 	type result struct {
 		byType map[string]map[string]any

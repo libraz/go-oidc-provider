@@ -71,19 +71,46 @@ func (s *ssfStreamStore) ListActive(ctx context.Context) ([]*store.SSFStream, er
 	return out, nil
 }
 
-func (s *ssfStreamStore) Update(ctx context.Context, st *store.SSFStream) error {
+// Update rewrites the stream row first, so its row lock orders the queue
+// rewrite after every Enqueue that read the earlier state and before every
+// Enqueue that reads the new one.
+func (s *ssfStreamStore) Update(ctx context.Context, st *store.SSFStream, notice *store.SSFEvent) error {
 	if st == nil {
 		return errors.New("oidcsql: nil SSF stream")
 	}
+	q := s.parent.queries
+	tx, err := s.parent.beginInternalTx(ctx, "ssf_streams.Update.BeginTx")
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
 	// The SET list skips id and client_id, so the WHERE id is the only
 	// key bound after the assigned values.
 	args := ssfStreamArgs(st)
 	args = append(args[2:], st.ID)
-	res, err := s.parent.db.ExecContext(ctx, s.parent.queries.ssfStreamUpdate, args...)
+	res, err := tx.ExecContext(ctx, q.ssfStreamUpdate, args...)
 	if err != nil {
 		return wrapErr("ssf_streams.Update", err)
 	}
-	return requireRow(ctx, dbRunner{db: s.parent.db}, res, "ssf_streams.Update", s.parent.queries.ssfStreamExists, st.ID)
+	if err := requireRow(ctx, tx, res, "ssf_streams.Update", q.ssfStreamExists, st.ID); err != nil {
+		return err
+	}
+	ordinary := string(store.SSFEventKindEvent)
+	if st.Status == store.SSFStreamDisabled {
+		if _, err := tx.ExecContext(ctx, q.ssfEventPurgeKind, st.ID, ordinary); err != nil {
+			return wrapErr("ssf_streams.Update.drop", err)
+		}
+	}
+	if _, err := tx.ExecContext(ctx, q.ssfEventRetag,
+		string(st.Delivery.Method), ordinary, boolToInt64(st.Status == store.SSFStreamPaused), st.ID); err != nil {
+		return wrapErr("ssf_streams.Update.retag", err)
+	}
+	if notice != nil {
+		if err := s.parent.ssfEventsImpl.insertReplacing(ctx, tx, notice); err != nil {
+			return err
+		}
+	}
+	return wrapErr("ssf_streams.Update.Commit", tx.Commit())
 }
 
 func (s *ssfStreamStore) Delete(ctx context.Context, id string) error {
@@ -111,26 +138,56 @@ type ssfEventStore struct {
 	parent *Store
 }
 
+// Enqueue locks the stream row before checking its state, which
+// serialises it against Update and against other enqueues for the stream,
+// so two verifications cannot both miss each other's row.
 func (s *ssfEventStore) Enqueue(ctx context.Context, ev *store.SSFEvent) error {
 	if ev == nil {
 		return errors.New("oidcsql: nil SSF event")
-	}
-	if ev.Kind != store.SSFEventKindVerification {
-		return s.insert(ctx, s.parent.db, ev)
 	}
 	tx, err := s.parent.beginInternalTx(ctx, "ssf_events.Enqueue.BeginTx")
 	if err != nil {
 		return err
 	}
 	defer func() { _ = tx.Rollback() }()
-	if err := s.insert(ctx, tx, ev); err != nil {
+	var status, method string
+	err = tx.QueryRowContext(ctx, s.parent.queries.ssfStreamLockState, ev.StreamID).Scan(&status, &method)
+	switch {
+	case errors.Is(err, databasesql.ErrNoRows):
+	case err != nil:
+		return wrapErr("ssf_events.Enqueue.stream", err)
+	case !ssfEventMatchesStream(ev, store.SSFStreamStatus(status), store.SSFDeliveryMethod(method)):
+		return store.ErrConflict
+	}
+	if err := s.insertReplacing(ctx, tx, ev); err != nil {
 		return err
 	}
-	if _, err := tx.ExecContext(ctx, s.parent.queries.ssfEventDropOtherVerify,
-		ev.StreamID, string(store.SSFEventKindVerification), ev.JTI); err != nil {
-		return wrapErr("ssf_events.Enqueue.replace", err)
-	}
 	return wrapErr("ssf_events.Enqueue.Commit", tx.Commit())
+}
+
+// insertReplacing inserts ev and, for a control event, deletes the
+// stream's other queued event of the same Kind.
+func (s *ssfEventStore) insertReplacing(ctx context.Context, e execer, ev *store.SSFEvent) error {
+	if err := s.insert(ctx, e, ev); err != nil {
+		return err
+	}
+	if ev.Kind == store.SSFEventKindEvent {
+		return nil
+	}
+	_, err := e.ExecContext(ctx, s.parent.queries.ssfEventDropOtherOfKind, ev.StreamID, string(ev.Kind), ev.JTI)
+	return wrapErr("ssf_events.Enqueue.replace", err)
+}
+
+// ssfEventMatchesStream reports whether ev carries the tags a stream in
+// status and method gives a newly queued event.
+func ssfEventMatchesStream(ev *store.SSFEvent, status store.SSFStreamStatus, method store.SSFDeliveryMethod) bool {
+	if ev.Delivery != method {
+		return false
+	}
+	if ev.Kind != store.SSFEventKindEvent {
+		return true
+	}
+	return status != store.SSFStreamDisabled && ev.Held == (status == store.SSFStreamPaused)
 }
 
 func (s *ssfEventStore) insert(ctx context.Context, e execer, ev *store.SSFEvent) error {
@@ -222,22 +279,6 @@ func (s *ssfEventStore) Pending(ctx context.Context, streamID string, n int) ([]
 		return got[:n], true, nil
 	}
 	return got, false, nil
-}
-
-func (s *ssfEventStore) Retag(ctx context.Context, streamID string, delivery store.SSFDeliveryMethod, held bool) error {
-	_, err := s.parent.db.ExecContext(ctx, s.parent.queries.ssfEventRetag,
-		string(delivery), string(store.SSFEventKindEvent), boolToInt64(held), streamID)
-	return wrapErr("ssf_events.Retag", err)
-}
-
-func (s *ssfEventStore) Purge(ctx context.Context, streamID string, includeControl bool) error {
-	var err error
-	if includeControl {
-		_, err = s.parent.db.ExecContext(ctx, s.parent.queries.ssfEventPurgeStream, streamID)
-	} else {
-		_, err = s.parent.db.ExecContext(ctx, s.parent.queries.ssfEventPurgeKind, streamID, string(store.SSFEventKindEvent))
-	}
-	return wrapErr("ssf_events.Purge", err)
 }
 
 func (s *ssfEventStore) DeleteExpired(ctx context.Context, now time.Time) (int, error) {

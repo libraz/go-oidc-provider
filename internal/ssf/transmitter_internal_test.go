@@ -10,6 +10,7 @@ import (
 
 	"github.com/libraz/go-oidc-provider/internal/audit"
 	"github.com/libraz/go-oidc-provider/op/store"
+	"github.com/libraz/go-oidc-provider/op/storeadapter/inmem"
 )
 
 var errInjected = errors.New("injected backend fault")
@@ -185,8 +186,9 @@ func TestTransmitter_PausedHoldsDisabledSkips(t *testing.T) {
 	if len(enq) != 1 || enq[0].Extras["held"] != true || enq[0].Extras["stream_id"] != paused.ID {
 		t.Fatalf("enqueued audit = %+v", enq)
 	}
-	if err := st.SSFEvents().Retag(context.Background(), paused.ID, store.SSFDeliveryPoll, false); err != nil {
-		t.Fatalf("Retag: %v", err)
+	paused.Status = store.SSFStreamEnabled
+	if err := tr.UpdateStream(context.Background(), paused, nil); err != nil {
+		t.Fatalf("UpdateStream: %v", err)
 	}
 	if got := pendingEvents(t, st, paused.ID); len(got) != 1 {
 		t.Errorf("after resume: %d events, want the held one", len(got))
@@ -413,24 +415,28 @@ func TestTransmitter_PublishRejectsInvalidInput(t *testing.T) {
 	}
 }
 
-func TestTransmitter_EnqueueControlIgnoresStatus(t *testing.T) {
+func TestTransmitter_UpdateStreamNoticeIgnoresStatus(t *testing.T) {
 	t.Parallel()
 	st := newTestStores(t)
 	rec := &recordingAudit{}
 	tr := newTestTransmitter(t, testDeps(t, st, rec))
 	seedReceiver(t, st, "rp-a", "alice")
-	s := seedStream(t, st, "rp-a", store.SSFStreamDisabled, store.SSFDeliveryPoll)
+	s := seedStream(t, st, "rp-a", store.SSFStreamEnabled, store.SSFDeliveryPoll)
 
-	jti, err := tr.EnqueueControl(context.Background(), s, EventStreamUpdated, ControlFields{Status: store.SSFStreamDisabled, Reason: "operator"})
-	if err != nil || jti == "" {
-		t.Fatalf("EnqueueControl = %q, %v", jti, err)
+	s.Status = store.SSFStreamDisabled
+	if err := tr.UpdateStream(context.Background(), s, &ControlFields{Status: store.SSFStreamDisabled, Reason: "operator"}); err != nil {
+		t.Fatalf("UpdateStream: %v", err)
 	}
 	evs := pendingEvents(t, st, s.ID)
 	if len(evs) != 1 {
 		t.Fatalf("%d events, want 1", len(evs))
 	}
 	ev := evs[0]
-	if ev.JTI != jti || ev.Kind != store.SSFEventKindStreamUpdated || ev.Held {
+	enq := rec.named(eventEnqueued)
+	if len(enq) != 1 || enq[0].Extras["jti"] != ev.JTI {
+		t.Errorf("enqueued audit = %+v, want the notice", enq)
+	}
+	if ev.Kind != store.SSFEventKindStreamUpdated || ev.Held {
 		t.Errorf("row = %+v", ev)
 	}
 	c := decodeClaims(t, ev.Claims)
@@ -481,6 +487,9 @@ func TestTransmitter_EnqueueControlRejectsOrdinaryEvent(t *testing.T) {
 	if _, err := tr.EnqueueControl(context.Background(), s, EventSessionRevoked, ControlFields{}); !errors.Is(err, ErrInvalidEvent) {
 		t.Fatalf("err = %v", err)
 	}
+	if _, err := tr.EnqueueControl(context.Background(), s, EventStreamUpdated, ControlFields{Status: store.SSFStreamPaused}); !errors.Is(err, ErrInvalidEvent) {
+		t.Fatalf("stream-updated through EnqueueControl: err = %v, want ErrInvalidEvent", err)
+	}
 	if _, err := tr.EnqueueControl(context.Background(), nil, EventVerification, ControlFields{}); err == nil {
 		t.Fatal("nil stream accepted")
 	}
@@ -511,5 +520,106 @@ func TestTransmitter_NewRequiresDeps(t *testing.T) {
 	d.Audit, d.Clock = nil, nil
 	if _, err := New(d); err != nil {
 		t.Fatalf("New with nil Audit/Clock: %v", err)
+	}
+}
+
+// staleStreams answers ListActive with a snapshot taken before a status
+// or delivery-method change, the view a Publish racing that change holds.
+type staleStreams struct {
+	store.SSFStreamStore
+	snapshot []*store.SSFStream
+}
+
+func (s *staleStreams) ListActive(context.Context) ([]*store.SSFStream, error) {
+	out := make([]*store.SSFStream, 0, len(s.snapshot))
+	for _, v := range s.snapshot {
+		c := *v
+		out = append(out, &c)
+	}
+	return out, nil
+}
+
+// TestTransmitter_PublishRacingStateChange pins that a SET built from a
+// stream read before its status or delivery method changed lands under
+// the stream's current state: held when paused, dropped when disabled,
+// and tagged for the method the stream now uses.
+func TestTransmitter_PublishRacingStateChange(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name   string
+		change func(t *testing.T, st *inmem.Store, s *store.SSFStream)
+		want   int
+		check  func(t *testing.T, st *inmem.Store, s *store.SSFStream)
+	}{
+		{
+			name: "paused", want: 1,
+			change: func(t *testing.T, st *inmem.Store, s *store.SSFStream) {
+				s.Status = store.SSFStreamPaused
+				mustUpdate(t, st, s)
+			},
+			check: func(t *testing.T, st *inmem.Store, s *store.SSFStream) {
+				if got := pendingEvents(t, st, s.ID); len(got) != 0 {
+					t.Errorf("paused stream exposed %d events", len(got))
+				}
+				s.Status = store.SSFStreamEnabled
+				mustUpdate(t, st, s)
+				if got := pendingEvents(t, st, s.ID); len(got) != 1 {
+					t.Errorf("after resume: %d events, want the held one", len(got))
+				}
+			},
+		},
+		{
+			name: "disabled", want: 0,
+			change: func(t *testing.T, st *inmem.Store, s *store.SSFStream) {
+				s.Status = store.SSFStreamDisabled
+				mustUpdate(t, st, s)
+			},
+			check: func(t *testing.T, st *inmem.Store, s *store.SSFStream) {
+				s.Status = store.SSFStreamEnabled
+				mustUpdate(t, st, s)
+				if got := pendingEvents(t, st, s.ID); len(got) != 0 {
+					t.Errorf("disabled stream kept %d events", len(got))
+				}
+			},
+		},
+		{
+			name: "moved to push", want: 1,
+			change: func(t *testing.T, st *inmem.Store, s *store.SSFStream) {
+				s.Delivery = store.SSFDelivery{Method: store.SSFDeliveryPush, EndpointURL: "https://rp.example.com/push"}
+				mustUpdate(t, st, s)
+			},
+			check: func(t *testing.T, st *inmem.Store, _ *store.SSFStream) {
+				evs, err := st.SSFEvents().ClaimDue(context.Background(), testNow, 10, time.Minute)
+				if err != nil || len(evs) != 1 {
+					t.Errorf("ClaimDue = %d, %v; want the SET tagged push", len(evs), err)
+				}
+			},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			st := newTestStores(t)
+			seedReceiver(t, st, "rp-a", "alice")
+			s := seedStream(t, st, "rp-a", store.SSFStreamEnabled, store.SSFDeliveryPoll, EventSessionRevoked)
+			snapshot := *s
+			deps := testDeps(t, st, &recordingAudit{})
+			deps.Streams = &staleStreams{SSFStreamStore: st.SSFStreams(), snapshot: []*store.SSFStream{&snapshot}}
+			tr := newTestTransmitter(t, deps)
+			tc.change(t, st, s)
+			if n, err := tr.Publish(context.Background(), EventSessionRevoked, "alice", Fields{}); err != nil || n != tc.want {
+				t.Fatalf("Publish = %d, %v; want %d, nil", n, err, tc.want)
+			}
+			if tc.check != nil {
+				tc.check(t, st, s)
+			}
+		})
+	}
+}
+
+func mustUpdate(t *testing.T, st *inmem.Store, s *store.SSFStream) {
+	t.Helper()
+	if err := st.SSFStreams().Update(context.Background(), s, nil); err != nil {
+		t.Fatalf("Update: %v", err)
 	}
 }
