@@ -116,6 +116,27 @@ issuer.
 
 ### Security
 
+- An account picked at `prompt=select_account` now goes through the same
+  `LoginFlow` rules, `Decider` and risk step-up as a returning session. A
+  pick used to complete the login without them. A pick that re-authenticates
+  rotates the picked session with the new `auth_time`, `acr` and `amr`.
+
+- A grant revoked while a code exchange, refresh or token exchange is in
+  flight no longer leaves a live credential: the token endpoint re-checks
+  the grant after persisting and revokes what it just issued. Grant
+  revocation now records this under every access-token revocation strategy.
+
+- `/end_session` with a matching `id_token_hint` asks for confirmation when
+  the logout would also end other accounts signed in on the same browser.
+
+- Signed `/userinfo` responses always carry the OP's `iss` and the client's
+  `aud`, and a claim source can no longer supply `iss`, `aud` or another
+  reserved JWT claim name.
+
+- First-party consent skipping applies only when the client record resolved
+  for the request is static, admin-managed or legacy, so a listed client ID
+  served by a dynamically registered record gets the consent screen.
+
 - The ID Token no longer carries an `acr` the authentication did not
   satisfy. `op.DefaultACRPolicy` used to report the first requested
   `acr_values` entry once any factor had run, so a password-only login
@@ -697,9 +718,13 @@ issuer.
   changes and the other supported events; both go to the receivers whose client
   holds a grant for the subject. `op.WithAllowPrivateNetworkSharedSignals` and
   `op.WithAllowInsecureSharedSignalsPushForDev` relax the push destination
-  checks. Persistence is the optional `store.SharedSignalsStore`, implemented
-  by the in-memory, composite, SQL, Redis and DynamoDB adapters and covered by
-  `contract.RunSSF`; `op.New` refuses the feature on a store without it. The
+  checks. A user-delegated token carrying an `ssf.*` scope is refused, and a
+  PATCH that moves a push stream to a new `endpoint_url` must supply its
+  `authorization_header` again. Persistence is the optional
+  `store.SharedSignalsStore`, implemented by the in-memory, composite, SQL,
+  Redis and DynamoDB adapters and covered by `contract.RunSSF`; its streams and
+  events must share one backend, since a stream change moves the queued events
+  in the same operation. `op.New` refuses the feature on a store without it. The
   SQL adapter's v1.5.0 schema adds the `ssf_streams` and `ssf_events` tables,
   which `ValidateSchema` requires whether or not the feature is on; see the
   SQL migrations. `Provider.RevokeSubject` now emits session-revoked when the
@@ -801,6 +826,30 @@ covered by the SemVer promise.
   so these four event types are outside the SemVer promise.
 
 ### Fixed
+
+- A `RuleAfterFailedAttempts` captcha re-arms once failures reach its
+  threshold again after a solve.
+
+- A registered `AMR()` value of a user-defined external authenticator now
+  appears in `amr`.
+
+- A subject whose passkeys all fail the AAGUID re-check is no longer counted
+  as enrolled, and the login answers with a client error instead of a
+  `server_error`. An assertion whose signature counter is below the stored
+  one is reported as a cloned authenticator.
+
+- A CIBA `id_token_hint` is refused with `invalid_request` for a client whose
+  subject identifiers are projected by `op.WithSubjectGenerator`, instead of
+  handing the projected `sub` to the hint resolver.
+
+- `op.New` returns a configuration error instead of panicking when the
+  issuer path, mount prefix or an endpoint path contains a space, and
+  rejects an undefined `op.WithSessionDurabilityPosture` value.
+
+- Zero-argument flag options accept being passed twice, and `op.WithSPAUI` /
+  `op.WithConsentUI` placed under `op.WithDefaults` yield to an explicit one.
+
+- `op.LoadPublicJWKS` errors no longer include the file's directory.
 
 - A 500 from the authorization or interaction endpoint, for example a store
   error during login, now logs its cause at ERROR on the `op.WithLogger`
