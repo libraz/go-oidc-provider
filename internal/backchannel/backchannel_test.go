@@ -1049,7 +1049,7 @@ func TestNewCoordinator_RejectsMissingDeps(t *testing.T) {
 }
 
 // allowedAlgs returns the JWS alg allow-list parseSigned needs.
-// Logout tokens are ES256-only in v1.0.
+// These tests run with the default issuing algorithm, ES256.
 func allowedAlgs() []josev4.SignatureAlgorithm {
 	return []josev4.SignatureAlgorithm{josev4.ES256}
 }

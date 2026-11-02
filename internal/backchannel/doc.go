@@ -12,7 +12,7 @@
 // Package layout:
 //
 //   - [LogoutClaims] / [SignLogoutToken] mint the token. Signing
-//     reuses the OP's existing ES256 signing key; no new key material
+//     reuses the OP's existing signing key; no new key material
 //     is introduced.
 //   - [Deliverer] is the HTTP transport seam. The default
 //     [HTTPDeliverer] honours a per-RP timeout and refuses to follow

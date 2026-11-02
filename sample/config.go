@@ -73,8 +73,8 @@ type startupKeys struct {
 }
 
 // generateKeys mints the signing key and the two symmetric keys. The
-// signing key is ECDSA P-256 because the OP signs with ES256 and only
-// ES256; any other curve is rejected at construction.
+// signing key is ECDSA P-256 because the OP issues with its default
+// algorithm, ES256; any other curve is rejected at construction.
 func generateKeys() (startupKeys, error) {
 	signer, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {

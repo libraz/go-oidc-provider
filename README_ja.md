@@ -60,7 +60,7 @@ log.Fatal(http.ListenAndServe(":8080", handler))
 
 ```go
 op.WithProfile(profile.Baseline)      // OAuth 2.1: code 要求すべてに PKCE 必須
-op.WithProfile(profile.FAPI2Baseline) // PAR + JAR + DPoP, ES256, alg ロック
+op.WithProfile(profile.FAPI2Baseline) // PAR + JAR + DPoP, ES256 署名, alg ロック
 ```
 
 次に読むもの: [クイックスタート](https://go-oidc-provider.libraz.net/ja/getting-started/install)・[必須オプション](https://go-oidc-provider.libraz.net/ja/getting-started/required-options)・[ハンドラのマウント](https://go-oidc-provider.libraz.net/ja/getting-started/mount)・[セキュリティプロファイル](https://go-oidc-provider.libraz.net/ja/use-cases/security-profile)。[`examples/01-minimal`](examples/01-minimal/main.go) は同じ構成を、鍵生成・ストア接続・グレースフルシャットダウンまで含めた形で示しています。
@@ -91,7 +91,7 @@ op.WithProfile(profile.FAPI2Baseline) // PAR + JAR + DPoP, ES256, alg ロック
 
 仕様からの意図的な逸脱が 2 つあります。
 
-- **署名は ES256 のみです**。ID トークン、JWT アクセストークン、署名付き UserInfo、JARM レスポンスはすべて ES256 で署名します。段階的な移行の途中ではなく恒久的な方針です。OpenID Connect Core §15.1 は RS256 の実装を必須としているため、RS256 でしか検証できないリライングパーティはサポートしません。検証側はこれより広く、クライアント認証アサーションとリクエストオブジェクトについては RS256 / PS256 / ES256 / EdDSA を受け付けます。
+- **署名アルゴリズムは OP ごとに 1 つで、既定は ES256 です**。ID トークン、JWT アクセストークン、署名付き UserInfo、JARM レスポンスはすべて同じアルゴリズムで署名します。RS256 でしか検証できないリライングパーティ向けに、`op.WithSigningAlgorithm(op.AlgRS256)` で RS256 へ切り替えられます（OpenID Connect Core §15.1 は RS256 の実装を必須としています）。FAPI プロファイルとの併用は拒否され、クライアントごとの選択はできません。検証側はこれより広く、クライアント認証アサーションとリクエストオブジェクトについては RS256 / PS256 / ES256 / EdDSA を受け付けます。
 - **DPoP プルーフの検証失敗は OAuth のエラー封筒で返します**。フォームポストでプルーフを受け取るエンドポイントは、RFC 9449 §7 の `invalid_dpop_proof` ではなく `400 invalid_request` を返します。すでに OAuth のエラーコードを処理しているリライングパーティが、DPoP のためだけに分岐を増やさずに済むためです。独自のコードを維持するのは 2 つで、§8 のナンスチャレンジは `DPoP-Nonce` ヘッダとともに `use_dpop_nonce` を返し、保護リソースで拒否されたプルーフは `401 invalid_token` を返します。
 
 どちらの判断理由も、同種の判断とあわせて [Design judgments](https://go-oidc-provider.libraz.net/ja/security/design-judgments) に記録しています。

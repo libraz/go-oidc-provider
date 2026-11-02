@@ -30,8 +30,8 @@ const TokenType = "logout+jwt"
 // identifiers.
 const idLength = 16
 
-// SigningKey is the ES256 signing material used to mint Logout Tokens;
-// non-ECDSA keys fail at signer construction.
+// SigningKey is the signing material used to mint Logout Tokens, in the
+// OP's issuing algorithm (ES256 by default).
 type SigningKey = tokens.SigningKey
 
 // LogoutClaims is the OpenID Connect Back-Channel Logout 1.0 §2.4
@@ -75,7 +75,7 @@ type LogoutClaims struct {
 	JTI string
 }
 
-// SignLogoutToken serialises claims as an ES256-signed compact JWS
+// SignLogoutToken serialises claims as a compact JWS signed with the OP's issuing algorithm
 // with header typ="logout+jwt". The function rejects the token shapes
 // the spec forbids:
 //

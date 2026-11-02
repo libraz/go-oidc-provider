@@ -95,7 +95,7 @@ client may redeem a code without PKCE, and `op.New` logs a warning saying so:
 
 ```go
 op.WithProfile(profile.Baseline)      // OAuth 2.1: PKCE on every code request
-op.WithProfile(profile.FAPI2Baseline) // PAR + JAR + DPoP, ES256, alg lock
+op.WithProfile(profile.FAPI2Baseline) // PAR + JAR + DPoP, ES256 signing, alg lock
 ```
 
 Next steps: [Quick Start](https://go-oidc-provider.libraz.net/getting-started/install)
@@ -167,12 +167,13 @@ with results on the
 
 Two deliberate departures from the specifications:
 
-- **Signing is ES256 only.** ID tokens, JWT access tokens, signed UserInfo and
-  JARM responses are all signed with ES256, permanently rather than as a staged
-  rollout. OpenID Connect Core §15.1 makes RS256 mandatory to implement, so a
-  relying party that can only verify RS256 is not supported. Verification is
-  wider: RS256, PS256, ES256 and EdDSA are accepted on client assertions and
-  request objects.
+- **One signing algorithm per OP, ES256 by default.** ID tokens, JWT access
+  tokens, signed UserInfo and JARM responses are all signed with the same
+  algorithm. `op.WithSigningAlgorithm(op.AlgRS256)` switches it to RS256 for
+  relying parties that can only verify RS256 (OpenID Connect Core §15.1 makes
+  RS256 mandatory to implement); it is refused under every FAPI profile, and
+  there is no per-client choice. Verification is wider: RS256, PS256, ES256
+  and EdDSA are accepted on client assertions and request objects.
 - **A rejected DPoP proof answers in the OAuth error envelope.** Endpoints that
   accept a proof on a form post return `400 invalid_request` instead of
   RFC 9449 §7's `invalid_dpop_proof`, so a relying party that already handles

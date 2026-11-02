@@ -103,7 +103,7 @@
 // JWS instead of JSON. The JWT carries the OP's iss, the requesting
 // client_id as aud, the wall-clock iat, and the RFC 7662 §2.2 body
 // nested under the "token_introspection" claim. The JWS header sets
-// "typ": "token-introspection+jwt". v1.0 signs with ES256 only;
-// discovery advertises the alg list at
+// "typ": "token-introspection+jwt". The JWT is signed with the OP's
+// issuing algorithm (ES256 by default); discovery advertises it at
 // "introspection_signing_alg_values_supported".
 package introspectendpoint

@@ -88,8 +88,8 @@ func writeUserInfoJWT(
 	_, _ = w.Write([]byte(out)) //nolint:gosec // G705: JOSE output, JWT Content-Type, no HTML surface.
 }
 
-// signUserInfoJWT serialises body as a compact-serialised ES256 JWS
-// using the OP's active signing key (RFC 7515 / OIDC Core 1.0 §5.3.2).
+// signUserInfoJWT serialises body as a compact-serialised JWS
+// in the OP's issuing algorithm (ES256 by default) using the active signing key (RFC 7515 / OIDC Core 1.0 §5.3.2).
 // The `kid` header is set to the active Entry's KeyID; `typ` is [jose.TypJWT]
 // (OIDC Core 1.0 §5.3.2 mandates no value; RP libraries strict-checking the type recognise "JWT").
 // The function fails when [HandlerDeps.Keys] is nil (a misconfigured
