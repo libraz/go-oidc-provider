@@ -42,6 +42,7 @@ package main
 import (
 	"context"
 	"log"
+	"log/slog"
 	"net/http"
 	"time"
 
@@ -93,6 +94,7 @@ func run() error {
 		op.WithCookieKeys(keys.CookieKey),
 		op.WithProfile(profile.OAuth21),
 		op.WithLoginFlow(loginFlow),
+		op.WithLogger(slog.Default()),
 		op.WithStaticClients(op.PublicClient{
 			ID:           clientID,
 			RedirectURIs: []string{redirectURI},

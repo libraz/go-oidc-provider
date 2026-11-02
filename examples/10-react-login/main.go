@@ -2,10 +2,11 @@
 
 // Example 10 demonstrates [op.WithSPAUI]: the OP delegates the
 // login screens to a SPA at the configured mount paths while still
-// driving the OAuth + OIDC protocol surface. The SPA bundle comes
-// from examples/internal/webui — hand-rolled vanilla HTML/CSS/JS with
-// no build step, shared by every SPA example — so the demo runs out
-// of the box.
+// driving the OAuth + OIDC protocol surface. Despite the directory
+// name, no React is involved: the SPA bundle comes from
+// examples/internal/webui, hand-rolled vanilla HTML/CSS/JS with no
+// build step and shared by every SPA example, so the demo runs out
+// of the box. A React build is served the same way, from StaticDir.
 //
 // Run with the example build tag, from this directory so the shared
 // SPA bundle resolves:
@@ -24,7 +25,7 @@
 //
 //  1. Open http://127.0.0.1:9090/ — the RP landing page.
 //  2. Click "Log in via the OP" — the browser is redirected to the
-//     OP's /authorize, then to /login/{uid} where the SPA bundle
+//     OP's /oidc/auth, then to /login/{uid} where the SPA bundle
 //     loads.
 //  3. The SPA fetches /login/state/{uid}, renders the password
 //     prompt, and POSTs the submission. The OP completes the flow

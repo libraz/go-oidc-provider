@@ -30,6 +30,7 @@ package main
 
 import (
 	"log"
+	"log/slog"
 	"net/http"
 
 	"github.com/libraz/go-oidc-provider/examples/internal/devkeys"
@@ -57,6 +58,7 @@ func main() {
 		// replaced outright: there is no end user to authenticate and
 		// therefore nothing for the authorization_code grant to do.
 		op.WithGrants(grant.ClientCredentials),
+		op.WithLogger(slog.Default()),
 		// Secret verification defaults to Argon2id (about 90 ms and 64 MiB
 		// per call). For machine-to-machine hot paths with generated
 		// secrets, op.WithHighEntropyClientSecrets switches to a keyed hash;

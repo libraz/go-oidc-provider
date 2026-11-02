@@ -228,15 +228,42 @@ must implement `AuthnLockouts()` or be paired with
   hints, the default access-token revocation strategy, the dynamic
   registration substore, and the FAPI DPoP requirement.
 
-- When more than one required substore is missing, `op.New` reports them
-  together in one joined error instead of stopping at the first.
+- When more than one of the core and grant-gated substores is missing
+  (Clients, ConsumedJTIs, Users, AuthorizationCodes, RefreshTokens, Grants,
+  DeviceCodes, CIBARequests, PushedAuthRequests and the authorize-endpoint
+  capabilities), `op.New` reports them together in one joined error instead of
+  stopping at the first.
 
 - The warning that forwarded headers arrived while `op.WithTrustedProxies`
   is not configured goes to `slog.Default()` when no `op.WithLogger` is set;
   it was discarded before.
 
-- `op.New` warns at startup when `op.WithSPAUI` and
-  `op.WithInteractionDriver` are combined.
+- `op.New` refuses `op.WithSPAUI` combined with a bundled HTML driver
+  (`interaction.HTMLDriver` or `interaction.TemplateOverlayDriver`). The
+  configured driver renders and parses the prompts the SPA fetches from
+  `<LoginMount>/state`, and an HTML driver cannot produce them. Use
+  `op.WithSPAUI` alone, or a driver that returns JSON.
+
+- `op.New` logs one warning per static client that names a grant the OP has
+  not enabled, naming the option that enables it, and one when neither
+  `op.WithLogger` nor `op.WithAuditLogger` is set, because request-time logs
+  and audit records are then discarded.
+
+- The six `op.WithAllowPrivateNetwork*` options are documented as network
+  reach for relying parties on a private network. Each logs INFO at startup,
+  and WARN (SSRF exposure) when combined with open dynamic registration or
+  Client ID Metadata Documents.
+
+- The keyset error for an RSA key under ES256 suggests
+  `op.WithSigningAlgorithm(op.AlgRS256)`, and the cookie-key length error
+  reports the length it received.
+
+- The SQL adapter's schema check on PostgreSQL resolves tables through
+  `search_path`, as the queries do, and a missing-table error names where it
+  looked (the `search_path` schemas, or the MySQL database). Index names
+  produced by `WithTablePrefix` or `WithNaming` are length-checked at `New`,
+  and a missing-index hint points at `Store.Schema()` when names are
+  customised.
 
 - `MIGRATIONS.md` covers keeping the OP's migration history separate from
   the application's, and `store.UserPasswordHashUpdater` documents that

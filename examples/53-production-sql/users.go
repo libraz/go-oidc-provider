@@ -30,7 +30,21 @@ type userTable struct{ db *databasesql.DB }
 var (
 	_ store.UserPasswordStore       = (*userTable)(nil)
 	_ store.UserPasswordHashUpdater = (*userTable)(nil)
+	_ store.SchemaValidator         = (*userTable)(nil)
 )
+
+// ValidateSchema is called by op.New, so a missing app_users table or
+// column fails at startup instead of on the first login. It reads
+// nothing: WHERE 1 = 0 makes the database resolve every column and
+// return no rows.
+func (u *userTable) ValidateSchema(ctx context.Context) error {
+	rows, err := u.db.QueryContext(ctx,
+		"SELECT subject, email, display_name, password_hash, disabled_at FROM app_users WHERE 1 = 0")
+	if err != nil {
+		return fmt.Errorf("app_users table does not match what the user store reads: %w", err)
+	}
+	return rows.Close()
+}
 
 // FindBySubject resolves the "sub" claim back to a row.
 func (u *userTable) FindBySubject(ctx context.Context, sub string) (*store.User, error) {
