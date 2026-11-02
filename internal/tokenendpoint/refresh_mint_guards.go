@@ -11,63 +11,6 @@ import (
 	"github.com/libraz/go-oidc-provider/op/store"
 )
 
-// enforceGrantTombstoneMintRefusal implements the mint- refusal check
-// on the refresh path: under [store.RevocationStrategyGrantTombstone]
-// the OP refuses to sign a fresh access token when the underlying
-// grant has already been tombstoned. The lookup uses the consumed
-// refresh token's IssuedAt (its [store.RefreshToken.CreatedAt]) so
-// the verifier's "iat <= RevokedAt" rule is honoured: a chain that
-// was minted strictly before the tombstone is rejected even if the
-// wall-clock race produced an iat of "RevokedAt".
-//
-// The function is a no-op when:
-//
-//   - The strategy is not [store.RevocationStrategyGrantTombstone].
-//     [store.RevocationStrategyJTIRegistry] preserves the per-JTI
-//     behaviour where the next refresh attempt is blocked by the RT
-//     cascade hitting the chain root, not by a per-mint check.
-//     [store.RevocationStrategyNone] disables server-side JWT
-//     revocation entirely.
-//   - The substore is unwired (nil [Deps.GrantRevocations]). The
-//     embedder either pinned a non-tombstone strategy or wired a
-//     partial Store; either way the cascade is not enforced and the
-//     refresh proceeds.
-//   - The exchanged record carries no GrantID. A refresh chain
-//     without an authorize-side grant has no tombstone to consult;
-//     the rare case that surfaces here is a legacy chain issued
-//     before the GrantID column landed.
-//
-// Returns true when the request may proceed; false when a response
-// has already been written.
-func enforceGrantTombstoneMintRefusal(
-	ctx context.Context,
-	w http.ResponseWriter,
-	deps Deps,
-	exchanged *refresh.Exchanged,
-) bool {
-	if deps.RevocationStrategy != store.RevocationStrategyGrantTombstone {
-		return true
-	}
-	if deps.GrantRevocations == nil || exchanged == nil || exchanged.GrantID == "" {
-		return true
-	}
-	revoked, err := grantClosedToIssuance(ctx, deps.GrantRevocations, exchanged.GrantID, exchanged.IssuedAt)
-	if err != nil {
-		// Substore transport fault on the verify path: handling treats this
-		// as fatal because silently allowing the request would re-introduce
-		// a cascade gap. Surface as server_error rather than invalid_grant
-		// so the embedder's monitoring distinguishes a substore outage from
-		// a legitimate revocation.
-		endpointsupport.WriteOAuthError(w, http.StatusInternalServerError, errServerError, "")
-		return false
-	}
-	if revoked {
-		endpointsupport.WriteOAuthError(w, http.StatusBadRequest, errInvalidGrant, "refresh token rejected")
-		return false
-	}
-	return true
-}
-
 // retirePriorOpaqueAccessTokens runs the prior-access-token cascade that
 // every refresh exit path minting an opaque-format access token owes, and
 // reports whether the caller may go on to mint. It is the single

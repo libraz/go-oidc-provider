@@ -130,3 +130,58 @@ func TestNewRevoker_StampsTombstone(t *testing.T) {
 		t.Errorf("Reason=%q want logout", got.Reason)
 	}
 }
+
+// A teardown that closes the grant writes exactly one issuance-closing
+// tombstone under every strategy, with the same RevokedAt, retention and
+// reason, so GC reclaims it on one schedule; a scope that leaves issuance
+// open writes none outside the grant-tombstone strategy.
+func TestIssuanceClosureIsStrategyIndependent(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 11, 2, 12, 0, 0, 0, time.UTC)
+	for name, strategy := range map[string]store.AccessTokenRevocationStrategy{
+		"grant_tombstone": store.RevocationStrategyGrantTombstone,
+		"jti_registry":    store.RevocationStrategyJTIRegistry,
+		"none":            store.RevocationStrategyNone,
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			for scopeName, c := range map[string]struct {
+				scope revocation.Scope
+				want  int
+			}{
+				"whole grant":                     {revocation.WholeGrant("grant-1"), 1},
+				"compromised grant access tokens": {revocation.CompromisedGrantAccessTokens("grant-1"), 1},
+				"access tokens of grant":          {revocation.AccessTokensOfGrant("grant-1"), 0},
+			} {
+				revs := &fakeGrantRevocations{}
+				out := revocation.NewRevoker(nil, nil, inmem.New().AccessTokens(), revs, strategy,
+					30*time.Minute, now, "code_replay").Run(context.Background(), c.scope)
+				if !out.Complete() {
+					t.Fatalf("%s: outcome incomplete: %v", scopeName, out.Err())
+				}
+				want := c.want
+				if strategy == store.RevocationStrategyGrantTombstone && scopeName == "access tokens of grant" {
+					want = 1 // the access-token-only tombstone the JWT rung writes
+				}
+				if len(revs.tombstones) != want {
+					t.Fatalf("%s: tombstones=%d want %d", scopeName, len(revs.tombstones), want)
+				}
+				if want == 0 || scopeName == "access tokens of grant" {
+					continue
+				}
+				got := revs.tombstones[0]
+				if got.AccessTokensOnly {
+					t.Errorf("%s: closure tombstone is access-token-only", scopeName)
+				}
+				if !got.RevokedAt.Equal(now) || got.Reason != "code_replay" {
+					t.Errorf("%s: RevokedAt=%v Reason=%q", scopeName, got.RevokedAt, got.Reason)
+				}
+				if wantExp := now.Add(revocation.TombstoneRetention(30 * time.Minute)); !got.ExpiresAt.Equal(wantExp) {
+					t.Errorf("%s: ExpiresAt=%v want %v", scopeName, got.ExpiresAt, wantExp)
+				}
+			}
+		})
+	}
+}

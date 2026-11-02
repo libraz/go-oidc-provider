@@ -42,7 +42,7 @@ func issueRefreshResponse(
 	rotation *rotationOutcome,
 ) {
 	if exchanged.InGrace {
-		serveGraceRetry(ctx, w, deps, client, exchanged, binding, transactional)
+		serveGraceRetry(ctx, w, deps, client, exchanged, binding, transactional, rotation)
 		return
 	}
 	now := deps.now().UTC()
@@ -58,16 +58,10 @@ func issueRefreshResponse(
 	if !retirePriorOpaqueAccessTokens(ctx, w, deps, client, exchanged, transactional) {
 		return
 	}
-	// Mint refusal under a tombstoned grant: under the
-	// grant-tombstone strategy, refuse to mint a fresh access token when
-	// the underlying grant has already been tombstoned. Without this
-	// check a refresh racing a /end_session or code-replay cascade could
-	// slip a fresh AT through ahead of the tombstone's observable effect
-	// on resource-server lookups. The check surfaces as invalid_grant
-	// per RFC 6749 §5.2 because the grant was legitimately revoked, the
-	// refresh token is no longer usable, and the failure is a property
-	// of the grant rather than of the request shape.
-	if !enforceGrantTombstoneMintRefusal(ctx, w, deps, exchanged) {
+	// A grant already closed to issuance refuses before anything is minted
+	// (RFC 6749 §5.2 invalid_grant); a closure landing during the mint is
+	// caught by the same guard once the successor is durable.
+	if !refuseIssuanceUnderClosedGrant(ctx, w, deps, refreshIssuedUnderGrant(exchanged), "refresh token rejected") {
 		return
 	}
 	exchanged, err = withChainID(exchanged)
@@ -120,7 +114,16 @@ func issueRefreshResponse(
 		endpointsupport.WriteOAuthError(w, http.StatusInternalServerError, errServerError, "")
 		return
 	}
+	issued := refreshIssuedUnderGrant(exchanged)
+	issued.AccessToken, issued.RefreshToken = accessToken, response.RefreshToken
+	rotation.recordIssued(issued)
 	writeSuccess(w, response)
+}
+
+// refreshIssuedUnderGrant is the grant-closure probe for a refresh: the
+// consumed token's grant and issuance instant, with nothing persisted yet.
+func refreshIssuedUnderGrant(exchanged *refresh.Exchanged) issuedUnderGrant {
+	return issuedUnderGrant{GrantID: exchanged.GrantID, IssuedAt: exchanged.IssuedAt}
 }
 
 // mintRefreshAccessToken projects the subject the access token carries and

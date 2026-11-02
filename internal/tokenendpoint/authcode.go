@@ -313,13 +313,10 @@ func revokeChainForCode(ctx context.Context, deps Deps, code, replayGrantID stri
 	if grantID == "" {
 		return
 	}
-	// The teardown retires access tokens before refresh tokens: a
-	// refresh grant racing the revocation can still mint an AT, but the
-	// mint-refusal check on the refresh path (under
-	// RevocationStrategyGrantTombstone) closes that window, and under
-	// RevocationStrategyJTIRegistry the AT also passes through Register
-	// which is a fresh row, leaving the next refresh attempt blocked
-	// once the RT half of the cascade lands.
+	// The teardown also closes the grant to issuance under every
+	// strategy; an exchange racing it that persists a credential the
+	// teardown could not see refuses and retires it at its post-persist
+	// grant-closure check.
 	out := grantTeardown(deps, teardownReasonCodeReplay).Run(ctx, revocation.WholeGrant(grantID))
 	reportTeardown(ctx, deps, out, auditTokenRevokeFailed, teardownReasonCodeReplay, grantID)
 }
@@ -428,15 +425,12 @@ func issueAuthCodeResponse(
 		endpointsupport.WriteOAuthError(w, http.StatusInternalServerError, errServerError, "")
 		return
 	}
-	if !enforceAuthCodeGrantTombstoneMintRefusal(ctx, w, deps, exchanged.GrantID, exchanged.IssuedAt) {
-		// The grant carries an active tombstone, so the teardown is
-		// grant-wide rather than scoped to this exchange: every credential
-		// under a revoked grant has to stop working, including the access
-		// token this exchange had already minted — and, for the opaque
-		// format, persisted — before the refusal fired.
-		out := grantTeardown(deps, teardownReasonGrantTombstoned).
-			Run(ctx, revocation.WholeGrant(exchanged.GrantID))
-		reportTeardown(ctx, deps, out, auditTokenRevokeFailed, teardownReasonGrantTombstoned, exchanged.GrantID)
+	if !refuseIssuanceUnderClosedGrant(ctx, w, deps, issuedUnderGrant{
+		GrantID:      exchanged.GrantID,
+		IssuedAt:     exchanged.IssuedAt,
+		AccessToken:  accessToken,
+		RefreshToken: refreshToken,
+	}, "authorization code rejected") {
 		return
 	}
 	writeSuccess(w, successResponse{
@@ -471,54 +465,6 @@ func revokeOrphanedOpaqueAccessToken(ctx context.Context, deps Deps, grantID, ac
 	out := grantTeardown(deps, teardownReasonOrphanedMint).
 		Run(ctx, revocation.IssuedCredentials(accessToken, ""))
 	reportTeardown(ctx, deps, out, auditTokenRevokeFailed, teardownReasonOrphanedMint, grantID)
-}
-
-// enforceAuthCodeGrantTombstoneMintRefusal refuses to mint tokens when the
-// grant backing the redeemed authorization code carries an active tombstone.
-// issuedAt MUST be the code's issuance instant (its CreatedAt), not the
-// redemption clock: the store contract treats a grant as revoked for a token
-// iff iat <= RevokedAt, and an authorization code is always issued before its
-// grant could be tombstoned. Passing the redemption "now" would make the probe
-// pass only when redemption coincided with the revocation instant, silently
-// minting an access token and a refresh token on a revoked grant for any
-// elapsed time after revocation. This mirrors the refresh path, which probes
-// with the consumed token's IssuedAt for the same reason.
-func enforceAuthCodeGrantTombstoneMintRefusal(
-	ctx context.Context,
-	w http.ResponseWriter,
-	deps Deps,
-	grantID string,
-	issuedAt time.Time,
-) bool {
-	if deps.RevocationStrategy != store.RevocationStrategyGrantTombstone {
-		return true
-	}
-	if deps.GrantRevocations == nil || grantID == "" {
-		return true
-	}
-	revoked, err := grantClosedToIssuance(ctx, deps.GrantRevocations, grantID, issuedAt)
-	if err != nil {
-		endpointsupport.WriteOAuthError(w, http.StatusInternalServerError, errServerError, "")
-		return false
-	}
-	if revoked {
-		endpointsupport.WriteOAuthError(w, http.StatusBadRequest, errInvalidGrant, "authorization code rejected")
-		return false
-	}
-	return true
-}
-
-// grantClosedToIssuance reports whether a credential issued under grantID
-// at issuedAt may no longer mint. A store that keeps access-token-only
-// tombstones apart answers through [store.IssuanceRevocationChecker], so
-// revoking one refresh token leaves the grant's other chains and codes
-// redeemable; any other store answers through IsRevoked, which counts
-// every tombstone and so refuses more, never less.
-func grantClosedToIssuance(ctx context.Context, revs store.GrantRevocationStore, grantID string, issuedAt time.Time) (bool, error) {
-	if checker, ok := revs.(store.IssuanceRevocationChecker); ok {
-		return checker.IsIssuanceRevoked(ctx, grantID, issuedAt)
-	}
-	return revs.IsRevoked(ctx, grantID, "", issuedAt)
 }
 
 // grantIDForResponse returns grantID for the token response only when the
@@ -593,8 +539,11 @@ func projectPublicSubject(ctx context.Context, deps Deps, raw string, client *st
 // every "sub" visible to the client / RS matches the id_token "sub"
 // (RFC 9068 §3). Stores retain the raw value so userinfo /
 // introspection / revocation lookups continue to key on the stable
-// internal identifier. For client_credentials and other non-end-user
-// grants the two values are identical.
+// internal identifier — except a GrantID-less opaque row, which records
+// publicSubject: with no grant behind it a reader cannot tell the raw
+// value is internal, and would hand it out unprojected. For
+// client_credentials and other non-end-user grants the two values are
+// identical.
 //
 // grantID is empty for grants without an authorize-side record
 // (client_credentials synthesises one upstream so the cascade still
@@ -629,7 +578,11 @@ func mintAccessToken(
 	}
 	switch format {
 	case store.AccessTokenFormatOpaque:
-		return mintOpaqueAccessToken(ctx, deps, rawSubject, clientID, grantID, scope, resource, now, authTime, binding, authorizationDetails, over)
+		recorded := rawSubject
+		if grantID == "" {
+			recorded = publicSubject
+		}
+		return mintOpaqueAccessToken(ctx, deps, recorded, clientID, grantID, scope, resource, now, authTime, binding, authorizationDetails, over)
 	case store.AccessTokenFormatJWT:
 		fallthrough
 	default:

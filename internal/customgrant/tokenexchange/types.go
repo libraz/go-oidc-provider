@@ -59,6 +59,10 @@ type TokenView struct {
 	// ExpiresAt is the wall-clock time the original token expires.
 	ExpiresAt time.Time
 
+	// IssuedAt is when the original token was issued: its iat, or the
+	// opaque row's issuance instant. A grant closure is judged against it.
+	IssuedAt time.Time
+
 	// Confirmation projects the cnf claim of the original token. Nil
 	// when the token was unbound.
 	Confirmation *Confirmation

@@ -200,6 +200,11 @@ type Response struct {
 	// never sets it: an embedder handler's identity is its own.
 	GrantID string
 
+	// GrantIssuedAt is when the credential the handler's response
+	// descends from was issued under [GrantID]. The wire layer refuses
+	// and retires what it issued once a closure of that grant covers it.
+	GrantIssuedAt time.Time
+
 	// GrantSubject is the OP-internal subject of the [GrantID] record.
 	// The wire layer refuses the response once the user store no longer
 	// holds it, as it does every built-in redemption.

@@ -83,6 +83,17 @@ func handleCustomGrant(w http.ResponseWriter, r *http.Request, deps Deps, grantT
 		endpointsupport.WriteOAuthError(w, http.StatusInternalServerError, errServerError, "")
 		return
 	}
+	// A response issuing under an inherited grant honours a closure of it
+	// that landed while the credentials were being persisted.
+	if !refuseIssuanceUnderClosedGrant(ctx, w, deps, issuedUnderGrant{
+		GrantID:      resp.GrantID,
+		IssuedAt:     resp.GrantIssuedAt,
+		AccessToken:  issued.AccessToken,
+		RefreshToken: issued.RefreshToken,
+	}, "subject_token grant has been revoked") {
+		deps.CustomGrants.ReportFailure(ctx, dispatchIn, "grant_revoked")
+		return
+	}
 	if resp.OnIssued != nil {
 		resp.OnIssued(ctx, issued.RefreshToken != "")
 	}

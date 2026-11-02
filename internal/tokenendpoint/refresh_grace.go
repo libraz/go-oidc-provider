@@ -23,6 +23,7 @@ func serveGraceRetry(
 	exchanged *refresh.Exchanged,
 	binding tokenBinding,
 	transactional bool,
+	rotation *rotationOutcome,
 ) {
 	response, found, err := loadRefreshRetryResponse(ctx, deps, exchanged.ConsumedID)
 	if err != nil {
@@ -60,7 +61,7 @@ func serveGraceRetry(
 	// access token the original rotation produced exactly as it is; the
 	// re-minting branch owes the prior-token cascade.
 	if binding.constrained() {
-		reissueGraceAccessToken(ctx, w, deps, client, exchanged, binding, &response, transactional)
+		reissueGraceAccessToken(ctx, w, deps, client, exchanged, binding, &response, transactional, rotation)
 		return
 	}
 	writeSuccess(w, response)
@@ -83,7 +84,7 @@ func serveGraceRetry(
 // call would fail with an invalid_token thumbprint mismatch. The refresh
 // token stays fixed; only the access token is minted afresh against the
 // current binding, and the guards a first-issue refresh runs before its
-// mint run here too: the grant-tombstone mint refusal, so a replay cannot
+// mint run here too: the grant-closure refusal, so a replay cannot
 // slip a fresh access token past a grant that has since been revoked, and
 // the prior-opaque-access-token cascade, so the retry does not leave the
 // access token from the original rotation live alongside the one it hands
@@ -99,8 +100,9 @@ func reissueGraceAccessToken(
 	binding tokenBinding,
 	response *successResponse,
 	transactional bool,
+	rotation *rotationOutcome,
 ) {
-	if !enforceGrantTombstoneMintRefusal(ctx, w, deps, exchanged) {
+	if !refuseIssuanceUnderClosedGrant(ctx, w, deps, refreshIssuedUnderGrant(exchanged), "refresh token rejected") {
 		return
 	}
 	if !retirePriorOpaqueAccessTokens(ctx, w, deps, client, exchanged, transactional) {
@@ -120,6 +122,9 @@ func reissueGraceAccessToken(
 	response.AccessToken = accessToken
 	response.TokenType = binding.tokenTypeFor()
 	response.ExpiresIn = int64(deps.AccessTokenTTL.Seconds())
+	issued := refreshIssuedUnderGrant(exchanged)
+	issued.AccessToken = accessToken
+	rotation.recordIssued(issued)
 	writeSuccess(w, *response)
 }
 

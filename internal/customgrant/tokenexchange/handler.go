@@ -263,7 +263,7 @@ func (h *Handler) Handle(ctx context.Context, req customgrant.Request) (customgr
 		return customgrant.Response{}, err
 	}
 	if lineage != nil {
-		resp.GrantID, resp.GrantSubject = lineage.ID, lineage.Subject
+		resp.GrantID, resp.GrantSubject, resp.GrantIssuedAt = lineage.ID, lineage.Subject, subjectView.IssuedAt
 	}
 	return resp, nil
 }

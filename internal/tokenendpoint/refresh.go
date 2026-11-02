@@ -92,17 +92,20 @@ func handleRefreshToken(w http.ResponseWriter, r *http.Request, deps Deps) {
 	staged := httpx.NewBufferedWriter(http.StatusInternalServerError)
 	completeRefreshToken(ctx, staged, r, deps, client, in, dpopOut, nil, effectiveAuthorizationDetails, false, false, &cascade, &rotation)
 	// Each write above landed as it ran, so a recorded rotation is durable.
+	staged = rotation.confirm(ctx, deps, staged)
 	rotation.emit(ctx, deps)
 	cascade.run(ctx, deps)
 	_ = staged.Commit(w)
 }
 
-// rotationOutcome carries the token.refreshed record of a rotation out of
-// the exchange, so it is emitted only once the rotation is durable: after
-// Commit on the transactional path, where an attempt that loses a commit
-// race or rolls back rotated nothing.
+// rotationOutcome carries the token.refreshed record of a rotation, and
+// what the rotation persisted, out of the exchange, so both are acted on
+// only once the rotation is durable: after Commit on the transactional
+// path, where an attempt that loses a commit race or rolls back rotated
+// nothing.
 type rotationOutcome struct {
-	event *audit.Event
+	event  *audit.Event
+	issued *issuedUnderGrant
 }
 
 // record keeps ev for [rotationOutcome.emit].
@@ -110,6 +113,29 @@ func (o *rotationOutcome) record(ev audit.Event) {
 	if o != nil {
 		o.event = &ev
 	}
+}
+
+// recordIssued keeps what the exchange persisted for [rotationOutcome.confirm].
+func (o *rotationOutcome) recordIssued(issued issuedUnderGrant) {
+	if o != nil {
+		o.issued = &issued
+	}
+}
+
+// confirm runs the post-persist grant-closure guard over what the exchange
+// persisted, once that is durable, and returns the response to forward:
+// staged while the grant is open, the refusal once a revocation has closed
+// it. A refused rotation raises no token.refreshed record.
+func (o *rotationOutcome) confirm(ctx context.Context, deps Deps, staged *httpx.BufferedWriter) *httpx.BufferedWriter {
+	if o == nil || o.issued == nil {
+		return staged
+	}
+	refusal := httpx.NewBufferedWriter(http.StatusInternalServerError)
+	if refuseIssuanceUnderClosedGrant(ctx, refusal, deps, *o.issued, "refresh token rejected") {
+		return staged
+	}
+	o.event = nil
+	return refusal
 }
 
 // emit raises the recorded event, if a rotation recorded one.
@@ -351,6 +377,7 @@ func runRefreshTokenTransaction(
 		}
 		return nil, err
 	}
+	staged = rotation.confirm(ctx, deps, staged)
 	rotation.emit(ctx, deps)
 	return staged, nil
 }

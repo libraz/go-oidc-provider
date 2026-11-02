@@ -49,9 +49,11 @@ const (
 	classAccessTokens class = 1 << iota
 	// classRefresh covers refresh tokens.
 	classRefresh
-	// classIssuance closes the grant to further issuance: under the
-	// grant-tombstone strategy the tombstone also refuses the grant's
-	// refresh chains and unredeemed codes, not only its access tokens.
+	// classIssuance closes the grant to further issuance: a grant
+	// tombstone refusing the grant's refresh chains and unredeemed codes,
+	// written under every strategy whenever the substore is wired. Under
+	// the grant-tombstone strategy the same tombstone also retires the
+	// grant's JWT access tokens.
 	classIssuance
 )
 
@@ -193,6 +195,7 @@ const (
 	SurfaceJWTAccessTokens    = "jwt_access_tokens"
 	SurfaceOpaqueAccessTokens = "opaque_access_tokens"
 	SurfaceRefreshTokens      = "refresh_tokens"
+	SurfaceGrantIssuance      = "grant_issuance"
 )
 
 // Failure reports one rung of a teardown that did not run.
@@ -372,12 +375,44 @@ func (r Revoker) runGrant(ctx context.Context, s Scope) Outcome {
 			}
 		}
 	}
+	if s.classes&classIssuance != 0 && !(s.classes&classAccessTokens != 0 && r.jwtRungClosesIssuance()) && r.GrantRevocations != nil {
+		if err := r.GrantRevocations.RevokeGrant(ctx, r.issuanceTombstone(s.grantID)); err != nil {
+			out.add(SurfaceGrantIssuance, err)
+		}
+	}
 	if s.classes&classRefresh != 0 && r.RefreshTokens != nil {
 		if err := r.RefreshTokens.RevokeByGrant(ctx, s.grantID); err != nil {
 			out.add(SurfaceRefreshTokens, err)
 		}
 	}
 	return out
+}
+
+// jwtRungClosesIssuance reports whether the JWT access-token rung already
+// writes the grant tombstone that closes issuance: only the grant-tombstone
+// strategy (and any strategy the JWT rung treats like it) with a wired
+// substore does. Every other strategy still owes the closure record, which
+// the token endpoint consults after persisting so a credential minted while
+// the teardown ran cannot outlive it.
+func (r Revoker) jwtRungClosesIssuance() bool {
+	switch r.Strategy {
+	case store.RevocationStrategyJTIRegistry, store.RevocationStrategyNone:
+		return false
+	default:
+		return r.GrantRevocations != nil
+	}
+}
+
+// issuanceTombstone is the grant tombstone closing grantID to issuance, with
+// the same RevokedAt, retention and reason the JWT rung writes, so GC
+// reclaims it on the same schedule whichever rung wrote it.
+func (r Revoker) issuanceTombstone(grantID string) store.GrantTombstone {
+	return store.GrantTombstone{
+		GrantID:   grantID,
+		RevokedAt: r.Now,
+		ExpiresAt: r.Now.Add(r.TombstoneRetention),
+		Reason:    r.Reason,
+	}
 }
 
 // runChain retires the opaque access tokens of one refresh chain. No JWT
