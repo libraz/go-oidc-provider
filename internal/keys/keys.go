@@ -189,17 +189,11 @@ func NewSet(entries []Entry, opts ...SetOption) (*Set, error) {
 			return nil, fmt.Errorf("%w: duplicate KeyID %q", ErrInvalidKey, e.KeyID)
 		}
 		seen[e.KeyID] = struct{}{}
-		if e.Signer == nil {
-			return nil, fmt.Errorf("%w: entry %q has nil Signer", ErrInvalidKey, e.KeyID)
+		alg, err := entryAlg(e, i == 0, cfg.signingAlg)
+		if err != nil {
+			return nil, err
 		}
 		pub := e.Signer.Public()
-		alg, _, _, shapeOK := jose.KeyShape(pub)
-		if i == 0 && (!shapeOK || alg != string(cfg.signingAlg)) {
-			return nil, fmt.Errorf("%w: entry %q is not a %s key", ErrInvalidKey, e.KeyID, cfg.signingAlg)
-		}
-		if !shapeOK || (alg != string(jose.AlgES256) && alg != string(jose.AlgRS256)) {
-			return nil, fmt.Errorf("%w: entry %q has an unsupported key shape", ErrInvalidKey, e.KeyID)
-		}
 		jwks.Keys = append(jwks.Keys, josev4.JSONWebKey{
 			Key:       pub,
 			KeyID:     e.KeyID,
@@ -210,6 +204,22 @@ func NewSet(entries []Entry, opts ...SetOption) (*Set, error) {
 		out[i] = e
 	}
 	return &Set{entries: out, jwks: jwks, now: cfg.now, observer: cfg.observer}, nil
+}
+
+// entryAlg returns the algorithm e's key shape signs with. The active
+// entry must match signingAlg; any other entry must be ES256 or RS256.
+func entryAlg(e Entry, active bool, signingAlg jose.Algorithm) (string, error) {
+	if e.Signer == nil {
+		return "", fmt.Errorf("%w: entry %q has nil Signer", ErrInvalidKey, e.KeyID)
+	}
+	alg, _, _, shapeOK := jose.KeyShape(e.Signer.Public())
+	if active && (!shapeOK || alg != string(signingAlg)) {
+		return "", fmt.Errorf("%w: entry %q is not a %s key", ErrInvalidKey, e.KeyID, signingAlg)
+	}
+	if !shapeOK || (alg != string(jose.AlgES256) && alg != string(jose.AlgRS256)) {
+		return "", fmt.Errorf("%w: entry %q has an unsupported key shape", ErrInvalidKey, e.KeyID)
+	}
+	return alg, nil
 }
 
 // Active returns the signing key the OP uses for newly-issued tokens.

@@ -178,29 +178,41 @@ func parseSigningKey(raw []byte) (priv crypto.Signer, kid, reason string) {
 		strings.Contains(block.Headers["Proc-Type"], "ENCRYPTED") {
 		return nil, "", "encrypted PEM is not supported; decrypt the key before loading it"
 	}
-	var parsed any
+	parsed, reason := parsePEMKey(block)
+	if reason != "" {
+		return nil, "", reason
+	}
+	return acceptSigningKey(parsed)
+}
+
+// parsePEMKey decodes an unencrypted private-key block by its PEM type.
+func parsePEMKey(block *pem.Block) (parsed any, reason string) {
 	switch block.Type {
 	case "PRIVATE KEY":
 		k, err := x509.ParsePKCS8PrivateKey(block.Bytes)
 		if err != nil {
-			return nil, "", "malformed PKCS#8 key"
+			return nil, "malformed PKCS#8 key"
 		}
-		parsed = k
+		return k, ""
 	case "EC PRIVATE KEY":
 		k, err := x509.ParseECPrivateKey(block.Bytes)
 		if err != nil {
-			return nil, "", "malformed SEC1 key"
+			return nil, "malformed SEC1 key"
 		}
-		parsed = k
+		return k, ""
 	case "RSA PRIVATE KEY":
 		k, err := x509.ParsePKCS1PrivateKey(block.Bytes)
 		if err != nil {
-			return nil, "", "malformed PKCS#1 key"
+			return nil, "malformed PKCS#1 key"
 		}
-		parsed = k
+		return k, ""
 	default:
-		return nil, "", "unsupported PEM type " + block.Type
+		return nil, "unsupported PEM type " + block.Type
 	}
+}
+
+// acceptSigningKey admits ECDSA P-256 and RSA keys of the minimum size.
+func acceptSigningKey(parsed any) (priv crypto.Signer, kid, reason string) {
 	switch k := parsed.(type) {
 	case *ecdsa.PrivateKey:
 		if k.Curve != elliptic.P256() {

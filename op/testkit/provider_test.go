@@ -204,7 +204,7 @@ func TestWithSigningAlgorithm_RS256(t *testing.T) {
 	if hdr := decodeHeader(t, strings.Split(token, ".")[0]); hdr["alg"] != "RS256" {
 		t.Fatalf("alg=%v want RS256", hdr["alg"])
 	}
-	jws, err := josev4.ParseSigned(token, []josev4.SignatureAlgorithm{josev4.RS256})
+	jws, err := josev4.ParseSignedCompact(token, []josev4.SignatureAlgorithm{josev4.RS256})
 	if err != nil {
 		t.Fatalf("ParseSigned: %v", err)
 	}

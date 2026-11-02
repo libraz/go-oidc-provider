@@ -21,7 +21,9 @@ import (
 // testRSAKeys generates each RSA size at most once per test binary; RSA
 // generation dominates the cost of every test that needs one.
 var testRSAKeys = map[int]func() (*rsa.PrivateKey, error){
-	2047: sync.OnceValues(func() (*rsa.PrivateKey, error) { return rsa.GenerateKey(rand.Reader, 2047) }),
+	2047: sync.OnceValues(func() (*rsa.PrivateKey, error) {
+		return rsa.GenerateKey(rand.Reader, 2047) //nolint:gosec // deliberately below the 2048-bit floor
+	}),
 	2048: sync.OnceValues(func() (*rsa.PrivateKey, error) { return rsa.GenerateKey(rand.Reader, 2048) }),
 	4096: sync.OnceValues(func() (*rsa.PrivateKey, error) { return rsa.GenerateKey(rand.Reader, 4096) }),
 }
@@ -100,12 +102,27 @@ func TestWithSigningAlgorithm(t *testing.T) {
 	es := func(kid string) op.SigningKey { return newTestKey(t, kid) }
 	rs := func(kid string) op.SigningKey { return newRSATestKey(t, kid, 2048) }
 
-	cases := []struct {
+	type signingAlgCase struct {
 		name   string
 		opts   func() []op.Option
 		wantIs error
 		want   string // empty means New succeeds
-	}{
+	}
+	fapiCase := func(p profile.Profile) signingAlgCase {
+		return signingAlgCase{
+			name: "RS256 with " + p.String(),
+			opts: func() []op.Option {
+				return []op.Option{
+					op.WithSigningAlgorithm(op.AlgRS256),
+					op.WithKeyset(op.Keyset{rs("rsa")}),
+					op.WithProfile(p),
+				}
+			},
+			want: "WithProfile " + p.String() + " does not permit WithSigningAlgorithm(RS256); " +
+				"FAPI 2.0 Security Profile §5.4.1 allows PS256, ES256 or EdDSA",
+		}
+	}
+	cases := []signingAlgCase{
 		{
 			name: "unset defaults to ES256",
 			opts: func() []op.Option { return []op.Option{op.WithKeyset(op.Keyset{es("ec")})} },
@@ -256,25 +273,9 @@ func TestWithSigningAlgorithm(t *testing.T) {
 				}
 			},
 		},
-	}
-	for _, p := range []profile.Profile{profile.FAPI2Baseline, profile.FAPI2MessageSigning, profile.FAPICIBA} {
-		cases = append(cases, struct {
-			name   string
-			opts   func() []op.Option
-			wantIs error
-			want   string
-		}{
-			name: "RS256 with " + p.String(),
-			opts: func() []op.Option {
-				return []op.Option{
-					op.WithSigningAlgorithm(op.AlgRS256),
-					op.WithKeyset(op.Keyset{rs("rsa")}),
-					op.WithProfile(p),
-				}
-			},
-			want: "WithProfile " + p.String() + " does not permit WithSigningAlgorithm(RS256); " +
-				"FAPI 2.0 Security Profile §5.4.1 allows PS256, ES256 or EdDSA",
-		})
+		fapiCase(profile.FAPI2Baseline),
+		fapiCase(profile.FAPI2MessageSigning),
+		fapiCase(profile.FAPICIBA),
 	}
 
 	for _, tc := range cases {
