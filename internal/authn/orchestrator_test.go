@@ -647,6 +647,74 @@ func TestTickCaptchaAfterThreeFailures(t *testing.T) {
 	}
 }
 
+// A solved captcha re-arms: once failures re-accumulate to the rule's
+// threshold, the challenge runs again before the next credential is
+// evaluated.
+func TestTickCaptchaRearmsAfterFurtherFailures(t *testing.T) {
+	t.Parallel()
+
+	var evaluated int
+	pw := &stubAuthenticator{
+		typeID:  op.FactorPassword,
+		aal:     op.AAL1,
+		amr:     "pwd",
+		prompts: []string{"auth.password"},
+		beginFn: func(_ context.Context, _ op.BeginInput) (interaction.Step, error) {
+			return interaction.Step{Prompt: passwordPrompt()}, nil
+		},
+		continueFn: func(_ context.Context, _ op.ContinueInput) (interaction.Step, error) {
+			evaluated++
+			return interaction.Step{}, fmt.Errorf("wrong password: %w", authn.ErrFactorRetry)
+		},
+	}
+	verifier := &stubCaptcha{verify: func(context.Context, op.CaptchaInput) error { return nil }}
+	o, err := authn.New(authn.Config{
+		LoginFlow:      captchaFlow(t, pw, verifier),
+		StateRefSigner: newSigner(t),
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	ctx := context.Background()
+	submit := func(st authn.State, prompt *interaction.Prompt, values map[string]string) (authn.State, *interaction.Prompt) {
+		t.Helper()
+		next, step, err := o.Tick(ctx, st, authn.Input{
+			Submission: &interaction.FormSubmission{StateRef: prompt.StateRef, Values: values},
+			Now:        fakeNow(),
+		})
+		if err != nil {
+			t.Fatalf("Tick: %v", err)
+		}
+		if step.Prompt == nil {
+			t.Fatalf("expected a prompt, got %+v", step)
+		}
+		return next, step.Prompt
+	}
+	wrong := map[string]string{"password": "nope"}
+	solve := map[string]string{authn.CaptchaTokenField: "ok"}
+
+	st, step, err := o.Tick(ctx, initialState(), authn.Input{Now: fakeNow()})
+	if err != nil {
+		t.Fatalf("first Tick: %v", err)
+	}
+	prompt := step.Prompt
+	for round := range 2 {
+		for range captchaFailureThresholdForTest {
+			if prompt.Type != "auth.password" {
+				t.Fatalf("round %d: prompt %q before the threshold, want auth.password", round, prompt.Type)
+			}
+			st, prompt = submit(st, prompt, wrong)
+		}
+		if prompt.Type != "captcha" {
+			t.Fatalf("round %d: after %d failures the prompt is %q, want captcha", round, captchaFailureThresholdForTest, prompt.Type)
+		}
+		st, prompt = submit(st, prompt, solve)
+	}
+	if want := 2 * captchaFailureThresholdForTest; evaluated != want {
+		t.Errorf("credentials evaluated = %d, want %d (none between a threshold and its captcha)", evaluated, want)
+	}
+}
+
 // 6. Captcha failure re-emits the prompt; observers are NOT called for
 // captcha events.
 func TestTickCaptchaFailureReemits(t *testing.T) {
@@ -775,6 +843,35 @@ func TestTickUnregisteredAMRDropped(t *testing.T) {
 	_, amr, _ := authn.Aggregate(st.Factors)
 	if amr != nil {
 		t.Errorf("amr = %v, want nil (custom factor must not contribute)", amr)
+	}
+}
+
+// A user-defined factor type with a registered AMR value contributes
+// that value to the chain's amr.
+func TestTickRegisteredAMROfUserDefinedFactorKept(t *testing.T) {
+	t.Parallel()
+
+	pw := buildSuccessAuthenticator("myorg.signup", op.AAL1, "pwd")
+	o, err := authn.New(authn.Config{
+		LoginFlow:      chainFlow(t, pw),
+		StateRefSigner: newSigner(t),
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	st, step, err := o.Tick(context.Background(), initialState(), authn.Input{Now: fakeNow()})
+	if err != nil {
+		t.Fatalf("first tick: %v", err)
+	}
+	st, _, err = o.Tick(context.Background(), st, authn.Input{
+		Submission: &interaction.FormSubmission{StateRef: step.Prompt.StateRef},
+		Now:        fakeNow(),
+	})
+	if err != nil {
+		t.Fatalf("second tick: %v", err)
+	}
+	if _, amr, _ := authn.Aggregate(st.Factors); !equalSlices(amr, []string{"pwd"}) {
+		t.Errorf("amr = %v, want [pwd] from the authenticator's AMR()", amr)
 	}
 }
 

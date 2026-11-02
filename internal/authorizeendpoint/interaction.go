@@ -230,12 +230,10 @@ func dispatchTick(
 ) {
 	now := deps.now().UTC()
 	next, step, err := deps.Authn.Tick(r.Context(), authnState, authn.Input{
-		Submission: submission,
-		Now:        now,
+		Submission:  submission,
+		Now:         now,
+		ChooserPick: chooserPick(deps, state, now),
 	})
-	if err == nil && chooserJustBound(authnState, next) {
-		next, step, err = reauthenticateChooserPick(r, deps, state, next, step, now)
-	}
 	if err != nil {
 		failTick(w, r, deps, rec, state, next, now, err)
 		return
@@ -566,45 +564,40 @@ func noCredentialChainRan(st authn.State) bool {
 // on the chain state and is not necessarily the session the request
 // arrived with.
 func chooserReentryBound(st authn.State) bool {
-	return noCredentialChainRan(st) && st.ChooserBoundSubject &&
-		st.ChooserGroupID != "" && st.ChooserSelectedSessionID != ""
+	return noCredentialChainRan(st) && chooserPicked(st)
 }
 
-// chooserJustBound reports that the tick from before to after is the one
-// in which the account chooser bound a session to stand in for the
-// factor chain.
-func chooserJustBound(before, after authn.State) bool {
-	return !before.ChooserBoundSubject && !after.ReauthRequired && chooserReentryBound(after)
+// chooserPicked reports that the account chooser bound the session named
+// on the chain state.
+func chooserPicked(st authn.State) bool {
+	return st.ChooserBoundSubject && st.ChooserGroupID != "" && st.ChooserSelectedSessionID != ""
 }
 
-// reauthenticateChooserPick holds the session the account chooser just
-// bound to the constraints the door applied to the entry session. A
-// picked session that may not serve the request sends the chain through
-// the factors for its subject instead of letting the terminal gate
-// refuse the request. A session that cannot be read is left to the
-// terminal gate, which classifies it.
-func reauthenticateChooserPick(
-	r *http.Request,
-	deps resolved,
-	state authorize.RequestState,
-	st authn.State,
-	step interaction.Step,
-	now time.Time,
-) (authn.State, interaction.Step, error) {
-	picked := chooserSessionAuthn{
-		deps:      deps,
-		groupID:   st.ChooserGroupID,
-		sessionID: st.ChooserSelectedSessionID,
-		subject:   st.Subject,
+// chooserPick reads the session the account chooser bound for the
+// orchestrator, which plans the LoginFlow from it as from an entry
+// session. A session that may not serve the request under the
+// constraints the door applied to the entry session, or that cannot be
+// read, is withheld so the chain re-authenticates its subject.
+func chooserPick(deps resolved, state authorize.RequestState, now time.Time) func(context.Context, authn.State) *authn.EntryAuthn {
+	return func(ctx context.Context, st authn.State) *authn.EntryAuthn {
+		if !chooserPicked(st) {
+			return nil
+		}
+		authCtx, err := chooserSessionAuthn{
+			deps:      deps,
+			groupID:   st.ChooserGroupID,
+			sessionID: st.ChooserSelectedSessionID,
+			subject:   st.Subject,
+		}.authContext(ctx)
+		if err != nil {
+			return nil
+		}
+		entry := authCtx.entry(st.Subject)
+		if sessionMayServe(ctx, deps, state.Library.ToRequest(), entry, now) != nil {
+			return nil
+		}
+		return &entry
 	}
-	authCtx, err := picked.authContext(r.Context())
-	if err != nil {
-		return st, step, nil //nolint:nilerr // the terminal exit reads the same session and maps the failure
-	}
-	if sessionMayServe(r.Context(), deps, state.Library.ToRequest(), authCtx.entry(picked.subject), now) == nil {
-		return st, step, nil
-	}
-	return deps.Authn.Tick(r.Context(), authn.RequireReauth(st), authn.Input{Now: now})
 }
 
 // errInteractionNoCAS reports an interaction store that cannot serve the

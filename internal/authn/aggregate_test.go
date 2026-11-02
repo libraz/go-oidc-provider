@@ -225,6 +225,28 @@ func TestAggregateUnknownFactorContributesLevelOnly(t *testing.T) {
 	}
 }
 
+// TestAggregateUserDefinedFactorKeepsDeclaredAMR pins that a factor of a
+// user-defined type contributes the registered value its authenticator
+// declared, that "mfa" is computed rather than declared, and that a
+// built-in type keeps its type-derived value.
+func TestAggregateUserDefinedFactorKeepsDeclaredAMR(t *testing.T) {
+	t.Parallel()
+
+	_, amr, _ := authn.Aggregate([]authn.Factor{
+		{Type: op.FactorPassword, AssuranceLevel: op.AAL1, AMR: "otp"},
+		{Type: "myorg.sms_otp", AssuranceLevel: op.AAL2, AMR: "otp"},
+	})
+	if want := []string{"mfa", "otp", "pwd"}; !equalSlices(amr, want) {
+		t.Errorf("amr = %v, want %v", amr, want)
+	}
+	for _, declared := range []string{"", "mfa", "not-registered"} {
+		_, amr, _ := authn.Aggregate([]authn.Factor{{Type: "myorg.signup", AssuranceLevel: op.AAL1, AMR: declared}})
+		if amr != nil {
+			t.Errorf("declared %q: amr = %v, want nil", declared, amr)
+		}
+	}
+}
+
 // TestAggregateAllAAL0 exercises the all-factors-zero edge: the chain
 // runner reports unknown / no-assurance steps only. Foreign types
 // contribute no amr entries and the level stays at AAL0, so the result

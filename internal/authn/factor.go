@@ -42,6 +42,12 @@ type Factor struct {
 	// "swk" and "hwk" RFC 8176 tokens; other methods MAY leave it
 	// false.
 	UserVerified bool
+
+	// AMR is the RFC 8176 registered value the authenticator declared
+	// through [Authenticator.AMR], empty when it declared none or an
+	// unregistered one. [Factor.AMRValue] reads it only for a Type with
+	// no built-in mapping.
+	AMR string
 }
 
 // EffectiveAAL returns the assurance level the factor actually earned,
@@ -69,10 +75,12 @@ func (f Factor) EffectiveAAL() AAL {
 	return f.AssuranceLevel
 }
 
-// AMRValue returns the RFC 8176 §2 token corresponding to f.Type.
-// Unknown types return the empty string; [Aggregate] filters those
-// out so a foreign factor cannot pollute the amr claim. The receiver
-// is a value; AMRValue does not mutate the factor.
+// AMRValue returns the RFC 8176 §2 token corresponding to f.Type. A
+// type with no built-in mapping returns the registered value its
+// authenticator declared ([Factor.AMR]), never "mfa", which [Aggregate]
+// computes; without one it returns the empty string, which [Aggregate]
+// filters out. The receiver is a value; AMRValue does not mutate the
+// factor.
 //
 // Mapping rationale:
 //
@@ -111,6 +119,9 @@ func (f Factor) AMRValue() string {
 		}
 		return "swk"
 	default:
-		return ""
+		if f.AMR == amrMFA || !IsRegisteredAMR(f.AMR) {
+			return ""
+		}
+		return f.AMR
 	}
 }

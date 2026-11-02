@@ -374,3 +374,71 @@ func TestManager_Remove_SkipsNilRows(t *testing.T) {
 		t.Errorf("Remaining=%v want [%s]", rem.Remaining, first.SessionID)
 	}
 }
+
+// A chooser pick completed by a ceremony that ran authentication leaves
+// the browser on a record carrying that ceremony's auth_time, acr and
+// amr, as a re-authenticated entry session does; a pick with no
+// authentication only switches.
+func TestManager_PlanEstablishment_ChooserPickWithFreshAuthnRotates(t *testing.T) {
+	t.Parallel()
+
+	t0 := time.Date(2026, 4, 26, 12, 0, 0, 0, time.UTC)
+	mgr, _ := chooserManager(t, t0)
+	ctx := context.Background()
+
+	entry := establishFresh(t, mgr, sessions.Login{Subject: "user-a", AuthTime: t0, ACR: "weak", AMR: []string{"pwd"}}, t0)
+	stale := t0.Add(-72 * time.Hour)
+	picked := establishAddAccount(t, mgr, entry.Cookie, sessions.Login{
+		Subject: "user-b", AuthTime: stale, ACR: "weak", AMR: []string{"pwd"},
+	}, t0)
+	active, err := mgr.Resolve(ctx, entry.Cookie)
+	if err != nil {
+		t.Fatalf("Resolve entry: %v", err)
+	}
+	fresh := t0.Add(time.Minute)
+	plan := sessions.EstablishPlan{
+		Active:                   active,
+		Login:                    sessions.Login{Subject: "user-b", AuthTime: fresh, ACR: "strong", AMR: []string{"mfa", "otp", "pwd"}},
+		StableSessionID:          nextStableID("session"),
+		StableChooserGroupID:     nextStableID("chooser"),
+		ChooserGroupID:           picked.ChooserGroupID,
+		ChooserSelectedSessionID: picked.SessionID,
+		Now:                      fresh,
+	}
+
+	switched, err := mgr.PlanEstablishment(ctx, plan)
+	if err != nil {
+		t.Fatalf("PlanEstablishment without authentication: %v", err)
+	}
+	if switched.Mode != sessions.EstablishSwitch || switched.Record.ID != picked.SessionID || !switched.Record.AuthTime.Equal(stale) {
+		t.Fatalf("no-authentication pick: mode=%q id=%q auth_time=%v, want a switch to the unchanged pick",
+			switched.Mode, switched.Record.ID, switched.Record.AuthTime)
+	}
+
+	plan.FreshAuthn = true
+	rotated, err := mgr.PlanEstablishment(ctx, plan)
+	if err != nil {
+		t.Fatalf("PlanEstablishment with authentication: %v", err)
+	}
+	if rotated.Mode != sessions.EstablishRotate || rotated.PreviousSessionID != picked.SessionID {
+		t.Fatalf("re-authenticated pick: mode=%q previous=%q, want a rotation of %q",
+			rotated.Mode, rotated.PreviousSessionID, picked.SessionID)
+	}
+	out, err := mgr.Establish(ctx, rotated)
+	if err != nil {
+		t.Fatalf("Establish: %v", err)
+	}
+	if out.ChooserGroupID != picked.ChooserGroupID {
+		t.Errorf("rotated record left the chooser group: %q vs %q", out.ChooserGroupID, picked.ChooserGroupID)
+	}
+	got, err := mgr.AuthContext(ctx, out.ChooserGroupID, out.SessionID)
+	if err != nil {
+		t.Fatalf("AuthContext of the rotated record: %v", err)
+	}
+	if got.Subject != "user-b" || !got.AuthTime.Equal(fresh) || got.ACR != "strong" || len(got.AMR) != 3 {
+		t.Errorf("rotated record = %+v, want user-b at %v with the ceremony's acr/amr", got, fresh)
+	}
+	if _, err := mgr.AuthContext(ctx, picked.ChooserGroupID, picked.SessionID); err == nil {
+		t.Error("the stale picked record survived its rotation")
+	}
+}

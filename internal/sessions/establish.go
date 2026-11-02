@@ -30,6 +30,7 @@ const (
 	EstablishAddAccount EstablishMode = "add_account"
 
 	// EstablishSwitch selects an existing Session without mutating it.
+	// A chooser pick that ran authentication rotates instead.
 	EstablishSwitch EstablishMode = "switch"
 )
 
@@ -63,10 +64,14 @@ type EstablishPlan struct {
 func (m *Manager) PlanEstablishment(ctx context.Context, in EstablishPlan) (Establishment, error) {
 	now := in.Now.UTC()
 	if in.Active != nil && in.Active.Session != nil && in.Active.Session.Subject == in.Login.Subject {
-		return m.planSameSubjectEstablishment(in, now), nil
+		return m.planFromSession(in, in.Active.Session, EstablishReuse, now), nil
 	}
 	if in.ChooserGroupID != "" && in.ChooserSelectedSessionID != "" {
-		return m.planSwitchEstablishment(ctx, in)
+		target, err := m.findChooserSelection(ctx, in)
+		if err != nil {
+			return Establishment{}, err
+		}
+		return m.planFromSession(in, target, EstablishSwitch, now), nil
 	}
 	groupID := in.StableChooserGroupID
 	mode := EstablishIssue
@@ -91,13 +96,19 @@ func (m *Manager) PlanEstablishment(ctx context.Context, in EstablishPlan) (Esta
 	return Establishment{Mode: mode, Record: record}, nil
 }
 
-func (m *Manager) planSameSubjectEstablishment(
+// planFromSession plans a completion served from base, an existing
+// session of the login's subject: kept under keep when no authentication
+// ran, otherwise rotated onto a record that carries the ceremony's
+// auth_time, acr and amr, whether base is the entry or a chooser pick.
+func (m *Manager) planFromSession(
 	in EstablishPlan,
+	base *store.Session,
+	keep EstablishMode,
 	now time.Time,
 ) Establishment {
-	record := *cloneSession(in.Active.Session)
+	record := *cloneSession(base)
 	if !in.FreshAuthn {
-		return Establishment{Mode: EstablishReuse, Record: record}
+		return Establishment{Mode: keep, Record: record}
 	}
 	record.ID = in.StableSessionID
 	record.AuthTime = in.Login.AuthTime
@@ -109,14 +120,16 @@ func (m *Manager) planSameSubjectEstablishment(
 	return Establishment{
 		Mode:              EstablishRotate,
 		Record:            record,
-		PreviousSessionID: in.Active.Session.ID,
+		PreviousSessionID: base.ID,
 	}
 }
 
-func (m *Manager) planSwitchEstablishment(
+// findChooserSelection reads the session the account chooser picked and
+// confirms it still belongs to the login's subject and chooser group.
+func (m *Manager) findChooserSelection(
 	ctx context.Context,
 	in EstablishPlan,
-) (Establishment, error) {
+) (*store.Session, error) {
 	target, err := m.store.Find(ctx, in.ChooserSelectedSessionID)
 	if err == nil && target == nil {
 		// A nil record alongside a nil error violates the store contract.
@@ -126,16 +139,16 @@ func (m *Manager) planSwitchEstablishment(
 	}
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
-			return Establishment{}, ErrCurrentSessionExpired
+			return nil, ErrCurrentSessionExpired
 		}
-		return Establishment{}, fmt.Errorf("sessions: find selected stable session: %w", err)
+		return nil, fmt.Errorf("sessions: find selected stable session: %w", err)
 	}
 	if target.ID != in.ChooserSelectedSessionID ||
 		target.Subject != in.Login.Subject ||
 		target.ChooserGroupID != in.ChooserGroupID {
-		return Establishment{}, ErrCookieInvalid
+		return nil, ErrCookieInvalid
 	}
-	return Establishment{Mode: EstablishSwitch, Record: *cloneSession(target)}, nil
+	return target, nil
 }
 
 // Establish applies in idempotent fashion. Repeating the same input either

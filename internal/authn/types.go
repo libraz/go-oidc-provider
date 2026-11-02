@@ -1,6 +1,7 @@
 package authn
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"net/netip"
@@ -183,11 +184,11 @@ type State struct {
 	// the built-in account chooser screen. Populated by the
 	// orchestrator from the chooser submission's "session_id"
 	// field on a successful chooser Continue; the HTTP layer reads
-	// it at terminal-tick time to plan a
-	// [sessions.EstablishSwitch] rather than a
-	// [sessions.EstablishIssue], so the cookie rebinds within the
-	// existing chooser group rather than starting a new one. Empty
-	// for any chain that did not run the chooser.
+	// it at terminal-tick time to plan a [sessions.EstablishSwitch]
+	// (or a rotation of the picked session when factors ran) rather
+	// than a [sessions.EstablishIssue], so the cookie rebinds within
+	// the existing chooser group rather than starting a new one.
+	// Empty for any chain that did not run the chooser.
 	ChooserSelectedSessionID string `json:"chooser_selected_session_id,omitempty"`
 
 	// ChooserBoundSubject reports whether the built-in chooser
@@ -196,9 +197,10 @@ type State struct {
 	// with a non-empty Subject; the chooser self-skip path (no
 	// active group) records a marker entry in
 	// [State.InteractionsRun] without flipping this flag. The
-	// orchestrator's PhaseBeforeAuthn dispatch reads it to decide
-	// whether to skip the factor chain — a flag that is true only
-	// after the chooser screen actually picked an account.
+	// orchestrator's PhaseBeforeAuthn dispatch reads it to plan the
+	// LoginFlow from the picked session ([Input.ChooserPick]) — a flag
+	// that is true only after the chooser screen actually picked an
+	// account.
 	ChooserBoundSubject bool `json:"chooser_bound_subject,omitempty"`
 
 	// ChooserAddAccount reports that this interaction was started from
@@ -402,6 +404,12 @@ type Input struct {
 	// reads it from the configured [Clock] and passes it through
 	// so the orchestrator never calls [time.Now()] directly.
 	Now time.Time
+
+	// ChooserPick reads the session the account chooser bound on st and
+	// returns its authentication when that session may serve the
+	// request, or nil when it may not or cannot be read. A nil return,
+	// or a nil ChooserPick, re-authenticates the bound subject.
+	ChooserPick func(ctx context.Context, st State) *EntryAuthn
 }
 
 // Sentinel errors returned by [Orchestrator.Tick]. Callers compare

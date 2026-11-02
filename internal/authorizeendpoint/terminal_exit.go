@@ -275,19 +275,30 @@ func interactionExit(
 	case !noCredentialChainRan(st):
 		chain := chainAuthn{authn: deps.Authn, state: st, authTime: authTime}
 		if deps.Authn.AuthContext(st).Inherited {
-			chain.entry = entrySessionAuthn{r: r, deps: deps, subject: subject}
+			chain.entry = backingSession(r, deps, st, subject)
 		}
 		return exitInteractiveChain, chain
 	case chooserReentryBound(st):
-		return exitInteractiveChooserSession, chooserSessionAuthn{
+		return exitInteractiveChooserSession, backingSession(r, deps, st, subject)
+	default:
+		return exitInteractiveEntrySession, backingSession(r, deps, st, subject)
+	}
+}
+
+// backingSession locates the session a chain stands on: the one the
+// account chooser bound, else the one the request arrived with.
+//
+//nolint:ireturn // as interactionExit: the caller receives a locator, never a concrete reader.
+func backingSession(r *http.Request, deps resolved, st authn.State, subject string) terminalAuthn {
+	if chooserPicked(st) {
+		return chooserSessionAuthn{
 			deps:      deps,
 			groupID:   st.ChooserGroupID,
 			sessionID: st.ChooserSelectedSessionID,
 			subject:   subject,
 		}
-	default:
-		return exitInteractiveEntrySession, entrySessionAuthn{r: r, deps: deps, subject: subject}
 	}
+	return entrySessionAuthn{r: r, deps: deps, subject: subject}
 }
 
 // silentExit names the route a no-ceremony mint took. The two differ in

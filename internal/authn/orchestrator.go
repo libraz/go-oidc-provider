@@ -157,13 +157,12 @@ func validateChainShape(cfg Config) error {
 	return nil
 }
 
-// RequireReauth returns st re-entered at [PhaseAuthn] with
+// requireReauth returns st re-entered at [PhaseAuthn] with
 // [State.ReauthRequired] set, for a chain whose account chooser bound a
 // session that may not serve the request. The factor chain then runs
 // for the subject the chooser bound, exactly as when the flag was set at
-// chain start. Any prompt st had outstanding is withdrawn; the next
-// [Tick] without a submission emits the first factor.
-func RequireReauth(st State) State {
+// chain start. Any prompt st had outstanding is withdrawn.
+func requireReauth(st State) State {
 	st.ReauthRequired = true
 	st.EntryAuthn = nil
 	st.Phase = PhaseAuthn
@@ -411,14 +410,16 @@ func guardFactorResult(st State, auth Authenticator, result interaction.Result) 
 // appendFactor is the single point where the orchestrator records a
 // successful authenticator run. It enforces the invariant that only
 // RFC 8176-registered AMR values reach the session: an unregistered
-// return is logged and dropped (the Factor still contributes through
-// [Factor.AMRValue] which derives from [FactorType]).
+// return is logged and dropped, and a registered one is kept on the
+// Factor for [Factor.AMRValue].
 func (o *Orchestrator) appendFactor(st State, auth Authenticator, result interaction.Result) State {
-	if amr := auth.AMR(); amr != "" && !IsRegisteredAMR(amr) {
+	amr := auth.AMR()
+	if amr != "" && !IsRegisteredAMR(amr) {
 		o.logger.Warn("authn: dropping unregistered AMR value",
 			slog.String("authenticator_type", string(auth.Type())),
 			slog.String("amr", amr),
 		)
+		amr = ""
 	}
 	uv := false
 	if auth.Type() == FactorPasskey {
@@ -428,6 +429,7 @@ func (o *Orchestrator) appendFactor(st State, auth Authenticator, result interac
 		Type:           auth.Type(),
 		AssuranceLevel: auth.AAL(),
 		UserVerified:   uv,
+		AMR:            amr,
 	})
 	if result.Subject != "" {
 		st.Subject = result.Subject

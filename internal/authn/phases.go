@@ -46,23 +46,11 @@ func (o *Orchestrator) advanceOnce(ctx context.Context, st State, in Input) (Sta
 	switch st.Phase {
 	case PhaseBeforeAuthn:
 		next, step, transition, err := o.advancePhaseInteractions(ctx, st, in.Now, TriggerBeforeAuthn, PhaseAuthn)
-		// When the built-in chooser ran during the BeforeAuthn
-		// phase and actively bound a subject, skip the factor
-		// chain entirely. The check reads [State.ChooserBoundSubject]
-		// rather than [State.InteractionsRun]: the chooser self-skip
-		// path (no active chooser group) marks the interaction as
-		// run via an empty Result so subsequent ticks do not re-emit
-		// the prompt, but it leaves ChooserBoundSubject false. The
-		// flag is the unambiguous "factor chain has been replaced"
-		// signal.
-		//
-		// Replacing the factor chain is only legitimate when the
-		// picked session's authentication may serve the request.
-		// [State.ReauthRequired] says it may not, so the chain runs
-		// the factors against the subject the chooser bound rather
-		// than inheriting that session's auth_time / acr / amr.
+		// A subject the chooser actively bound enters PhaseAuthn standing
+		// on the picked session, so the LoginFlow plans it as it plans an
+		// entry session. The self-skip path leaves ChooserBoundSubject false.
 		if transition && next.Phase == PhaseAuthn && next.ChooserBoundSubject && !next.ReauthRequired {
-			next.Phase = PhaseAfterAuthn
+			next = adoptChooserPick(ctx, next, in)
 		}
 		return next, step, transition, err
 	case PhaseAuthn:
@@ -83,6 +71,24 @@ func (o *Orchestrator) advanceOnce(ctx context.Context, st State, in Input) (Sta
 		return next, step, false, err
 	}
 	return st, interaction.Step{}, false, ErrInvalidStep
+}
+
+// adoptChooserPick makes the session the account chooser bound the
+// chain's entry session, so [Orchestrator.advanceLoginFlow] applies the
+// Decider, the rules, risk and the inherited-step reading to it exactly
+// as to the session a request arrived with. A pick that may not serve
+// the request, or that the caller cannot vouch for, is re-authenticated
+// for the bound subject instead ([requireReauth]).
+func adoptChooserPick(ctx context.Context, st State, in Input) State {
+	var entry *EntryAuthn
+	if in.ChooserPick != nil {
+		entry = in.ChooserPick(ctx, st)
+	}
+	if entry == nil || entry.Subject == "" || entry.Subject != st.Subject {
+		return requireReauth(st)
+	}
+	st.EntryAuthn = entry
+	return st
 }
 
 // advancePhaseInteractions runs the BeforeAuthn / AfterAuthn /

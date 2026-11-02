@@ -41,17 +41,18 @@ type chooserFreshnessFixture struct {
 	clientID string
 	redirect string
 	cl       *http.Client
+	mgr      *sessions.Manager
 	entry    sessions.Outcome
 	sibling  sessions.Outcome
 }
 
-func newChooserFreshnessFixture(t *testing.T, siblingLogin sessions.Login) *chooserFreshnessFixture {
+func newChooserFreshnessFixture(t *testing.T, siblingLogin sessions.Login, opts ...op.Option) *chooserFreshnessFixture {
 	t.Helper()
 	clock := fakeClock{now: time.Date(2026, 5, 1, 12, 0, 0, 0, time.UTC)}
 	cookieKey := []byte(chooserCookieKey)
 	tk := testkit.NewProvider(t,
 		testkit.WithClock(clock),
-		testkit.WithOptions(op.WithCookieKeys(cookieKey)),
+		testkit.WithOptions(append([]op.Option{op.WithCookieKeys(cookieKey)}, opts...)...),
 	)
 	hasher := clientauth.Argon2id{}
 	hash, err := hasher.Hash("rp-secret")
@@ -84,6 +85,7 @@ func newChooserFreshnessFixture(t *testing.T, siblingLogin sessions.Login) *choo
 		clientID: rp.ID,
 		redirect: rp.RedirectURIs[0],
 		cl:       tk.HTTPClient(jar),
+		mgr:      mgr,
 		entry:    entry,
 		sibling:  sibling,
 	}
@@ -272,6 +274,25 @@ func TestEndToEnd_ChooserPickStaleSession_MaxAgeNotBypassed(t *testing.T) {
 	}
 	if loc.Query().Get("code") == "" {
 		t.Fatalf("re-authenticated pick did not mint a code: %s", loc)
+	}
+
+	// The browser is left on a record of the re-authentication, so the
+	// same max_age is met silently on the next request.
+	sessCookie := findCookie(final.Cookies(), cookie.SessionProfile.Name)
+	if sessCookie == nil {
+		t.Fatal("the re-authenticated pick set no session cookie")
+	}
+	active, err := f.mgr.Resolve(ctx, sessCookie.Value)
+	if err != nil {
+		t.Fatalf("Resolve the session cookie: %v", err)
+	}
+	if active.Session.Subject != "user-stale" || active.Session.ID == f.sibling.SessionID || !active.Session.AuthTime.Equal(start) {
+		t.Fatalf("session after re-authentication: id=%q subject=%q auth_time=%v; want a new user-stale record at %v",
+			active.Session.ID, active.Session.Subject, active.Session.AuthTime, start)
+	}
+	silent := f.authorizeWithSession(t, sessCookie.Value, url.Values{"prompt": {"none"}, "max_age": {"60"}})
+	if silent.Query().Get("code") == "" {
+		t.Fatalf("prompt=none with the same max_age after re-authentication: %s, want a code", silent)
 	}
 }
 

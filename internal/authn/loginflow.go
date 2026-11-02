@@ -563,11 +563,15 @@ func (o *Orchestrator) loginFlowContext(st State) LoginFlowContext {
 	}
 }
 
-// stepSettled reports whether kind needs no run in this attempt: it is
-// completed (or the entry session stands in for it), or it was skipped
-// as unenrolled.
-func stepSettled(st State, lc LoginFlowContext, kind string) bool {
-	return slices.Contains(lc.CompletedKinds, kind) || slices.Contains(st.SkippedStepKinds, kind)
+// stepSettled reports whether step needs no run now: it is completed (or
+// the entry session stands in for it), or it was skipped as unenrolled.
+// A solved captcha stays settled only until the next credential failure,
+// so a challenge re-arms whenever its rule matches again.
+func stepSettled(st State, lc LoginFlowContext, step compiledStep) bool {
+	if step.isCaptcha {
+		return slices.Contains(st.CompletedStepKinds, step.kind) && st.LastFailures == 0
+	}
+	return slices.Contains(lc.CompletedKinds, step.kind) || slices.Contains(st.SkippedStepKinds, step.kind)
 }
 
 // describeStepKind formats a step kind for log messages. Centralising
@@ -716,7 +720,7 @@ func (o *Orchestrator) evalLoginFlowDecider(ctx context.Context, st State, flow 
 			)
 			return true, st, interaction.Step{}, ErrInvalidStep
 		}
-		if stepSettled(st, lc, step.kind) {
+		if stepSettled(st, lc, step) {
 			// Decider asked for a step already completed or skipped —
 			// fall through to rules rather than spin on the same step.
 			return false, st, interaction.Step{}, nil
@@ -763,10 +767,7 @@ func (o *Orchestrator) evalLoginFlowCaptchaRules(ctx context.Context, st State, 
 func (o *Orchestrator) loginFlowCaptchaPending(st State, flow *CompiledLoginFlow) bool {
 	lc := o.loginFlowContext(st)
 	for i, r := range flow.rules {
-		if !r.then.isCaptcha {
-			continue
-		}
-		if slices.Contains(st.CompletedStepKinds, r.then.kind) {
+		if !r.then.isCaptcha || stepSettled(st, lc, r.then) {
 			continue
 		}
 		if recoverPredicate(o.logger, i, r.when, lc) {
@@ -798,7 +799,7 @@ func (o *Orchestrator) LoginFlowRequiresStep(ctx context.Context, st State) bool
 		return required
 	}
 	for i, r := range flow.rules {
-		if r.then.isCaptcha || stepSettled(st, lc, r.then.kind) {
+		if r.then.isCaptcha || stepSettled(st, lc, r.then) {
 			continue
 		}
 		if !recoverPredicate(o.logger, i, r.when, lc) {
@@ -830,7 +831,7 @@ func (o *Orchestrator) deciderRequiresStep(ctx context.Context, st State, flow *
 		if !ok {
 			return true, true
 		}
-		if !step.isCaptcha && !stepSettled(st, lc, step.kind) && !skipsUnenrolled(ctx, st.Subject, step) {
+		if !step.isCaptcha && !stepSettled(st, lc, step) && !skipsUnenrolled(ctx, st.Subject, step) {
 			return true, true
 		}
 	}
@@ -893,7 +894,7 @@ func (o *Orchestrator) evalLoginFlowRuleGroup(ctx context.Context, st State, flo
 		if r.then.isCaptcha != captcha {
 			continue
 		}
-		if stepSettled(st, lc, r.then.kind) {
+		if stepSettled(st, lc, r.then) {
 			continue
 		}
 		if !recoverPredicate(o.logger, i, r.when, lc) {
@@ -1185,7 +1186,9 @@ func (o *Orchestrator) recordLoginFlowResult(ctx context.Context, st State, step
 		st = o.appendFactor(st, step.auth, res)
 		o.observeSuccess(ctx, st, now, step.auth.Type())
 	}
-	st.CompletedStepKinds = append(st.CompletedStepKinds, step.kind)
+	if !slices.Contains(st.CompletedStepKinds, step.kind) {
+		st.CompletedStepKinds = append(st.CompletedStepKinds, step.kind)
+	}
 	if parent, ok := o.cfg.LoginFlow.parentOf[step.kind]; ok {
 		if !slices.Contains(st.CompletedStepKinds, parent) {
 			st.CompletedStepKinds = append(st.CompletedStepKinds, parent)

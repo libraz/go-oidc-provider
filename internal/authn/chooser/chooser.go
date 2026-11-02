@@ -17,8 +17,8 @@
 //     state field [authn.State.ChooserSelectedSessionID]).
 //   - Continue returns [interaction.Result] with Subject set to the
 //     picked session's subject. The orchestrator special-cases the
-//     built-in chooser name to propagate Subject onto State and to
-//     skip the factor chain.
+//     built-in chooser name to propagate Subject onto State and plans
+//     the LoginFlow from the picked session ([authn.Input.ChooserPick]).
 //
 // The cookie rebind itself happens at the HTTP layer in
 // internal/authorizeendpoint/interaction_terminal.go::terminateInteraction,
