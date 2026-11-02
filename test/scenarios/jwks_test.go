@@ -18,7 +18,6 @@ import (
 	"testing"
 
 	"github.com/libraz/go-oidc-provider/op"
-	"github.com/libraz/go-oidc-provider/op/storeadapter/inmem"
 	"github.com/libraz/go-oidc-provider/op/testkit"
 )
 
@@ -529,17 +528,23 @@ func publishedKIDs(keys []any) map[string]struct{} {
 func TestScenario_JWKS_042_RotationIssuesNewKid(t *testing.T) {
 	t.Parallel()
 
-	dupA := newScenarioSigningKey(t, "scenario-jwks-042-dup")
-	dupB := newScenarioSigningKey(t, "scenario-jwks-042-dup")
+	const dupKID = "scenario-jwks-042-dup"
+	dupA := newScenarioSigningKey(t, dupKID)
+	dupB := newScenarioSigningKey(t, dupKID)
 
-	_, err := op.New(
-		op.WithIssuer("https://op.testkit.invalid"),
-		op.WithStore(inmem.New()),
-		op.WithKeyset(op.Keyset{dupA, dupB}),
-		op.WithCookieKeys(testkit.NewCookieKey(t)),
-	)
+	_, err := op.New(testkit.MinimalOptions(t, op.WithKeyset(op.Keyset{dupA, dupB}))...)
 	if err == nil {
 		t.Fatal("op.New accepted a duplicate-kid Keyset; rotation MUST mint a fresh kid")
+	}
+	if msg := err.Error(); !strings.Contains(msg, "duplicate KeyID") || !strings.Contains(msg, dupKID) {
+		t.Errorf("op.New error = %q, want it to name the duplicate KeyID %q", msg, dupKID)
+	}
+
+	// Control: the same options with distinct kids construct.
+	distinctA := newScenarioSigningKey(t, "scenario-jwks-042-a")
+	distinctB := newScenarioSigningKey(t, "scenario-jwks-042-b")
+	if _, err := op.New(testkit.MinimalOptions(t, op.WithKeyset(op.Keyset{distinctA, distinctB}))...); err != nil {
+		t.Fatalf("op.New rejected a distinct-kid Keyset: %v", err)
 	}
 }
 

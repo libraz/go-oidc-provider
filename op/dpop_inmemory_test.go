@@ -124,20 +124,36 @@ func TestNewInMemoryDPoPNonceSource_AcceptsPreviousAcrossRotation(t *testing.T) 
 func TestNewInMemoryDPoPNonceSource_StopsRotatingOnCancel(t *testing.T) {
 	t.Parallel()
 
+	ticks := make(chan time.Time)
 	ctx, cancel := context.WithCancel(context.Background())
-	src, err := op.NewInMemoryDPoPNonceSource(ctx, 10*time.Millisecond)
+	src, err := op.NewInMemoryDPoPNonceSource(ctx, time.Hour, op.WithInMemoryDPoPNonceTicksForTest(ticks))
 	if err != nil {
 		t.Fatalf("NewInMemoryDPoPNonceSource: %v", err)
 	}
 	cancel()
 
-	// Give the rotation goroutine time to observe the cancellation.
-	time.Sleep(50 * time.Millisecond)
-	frozen := src.IssueNonce()
-	time.Sleep(40 * time.Millisecond)
-	if got := src.IssueNonce(); got != frozen {
-		t.Errorf("IssueNonce kept rotating after ctx.Cancel: frozen=%q later=%q", frozen, got)
+	// A goroutine that has observed the cancellation stops receiving
+	// ticks. When it is still racing toward its next select, Go may pick a
+	// ready tick over the closed context, so a stopped loop can accept the
+	// odd tick; a loop that ignores the context accepts every one.
+	const attempts = 40
+	accepted := 0
+	for range attempts {
+		timedOut := false
+		select {
+		case ticks <- time.Time{}:
+			accepted++
+		case <-time.After(20 * time.Millisecond):
+			timedOut = true
+		}
+		if timedOut {
+			break
+		}
 	}
+	if accepted >= attempts/2 {
+		t.Errorf("rotation goroutine accepted %d ticks after ctx.Cancel; it must stop", accepted)
+	}
+	frozen := src.IssueNonce()
 	// Validation MUST keep working after cancellation; embedders rely
 	// on in-flight RP retries succeeding even when the OP is shutting
 	// down.

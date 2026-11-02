@@ -25,6 +25,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/http/cookiejar"
 	"net/http/httptest"
@@ -102,12 +103,29 @@ type cdServer struct {
 	mu   sync.Mutex
 	path map[string]int
 	hits atomic.Int32
+	// accepts counts TCP connections the listener accepted, whether or not
+	// a request followed.
+	accepts atomic.Int32
+}
+
+// countingListener tallies accepted connections.
+type countingListener struct {
+	net.Listener
+	n *atomic.Int32
+}
+
+func (l *countingListener) Accept() (net.Conn, error) {
+	c, err := l.Listener.Accept()
+	if err == nil {
+		l.n.Add(1)
+	}
+	return c, err
 }
 
 func newCDServer(t *testing.T, opts cdServerOpts) *cdServer {
 	t.Helper()
 	s := &cdServer{opts: opts, path: map[string]int{}}
-	s.srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	s.srv = httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		s.hits.Add(1)
 		s.mu.Lock()
 		s.path[r.URL.Path]++
@@ -118,6 +136,8 @@ func newCDServer(t *testing.T, opts cdServerOpts) *cdServer {
 		}
 		s.serve(w, r)
 	}))
+	s.srv.Listener = &countingListener{Listener: s.srv.Listener, n: &s.accepts}
+	s.srv.Start()
 	t.Cleanup(s.srv.Close)
 	return s
 }
@@ -753,11 +773,11 @@ func TestScenario_CIMD_URL_08_LengthHostAndEncoding(t *testing.T) {
 		t.Errorf("a 256-byte client_id produced %d cimd.* events, want 0", got)
 	}
 
-	// A non-ASCII host is refused without a lookup.
-	before := srv.hits.Load()
-	e.probe(t, "http://münchen.example/client.json").requireUnknown(t)
-	if srv.hits.Load() != before {
-		t.Error("an IDN host reached the document server")
+	// A non-ASCII host is refused without a fetch.
+	idn := "http://münchen.example/client.json"
+	e.probe(t, idn).requireUnknown(t)
+	if got := len(e.eventsFor(cdFetched, idn)) + len(e.eventsFor(cdFailed, idn)); got != 0 {
+		t.Errorf("a non-ASCII host produced %d cimd.* events, want 0", got)
 	}
 
 	// Percent-encoding in the path is part of the identifier string.
@@ -1112,8 +1132,16 @@ func TestScenario_CIMD_RES_11_SSRFBlocksPrivateRanges(t *testing.T) {
 		strict.probe(t, id).requireUnknown(t)
 		strict.requireFailure(t, id, "network")
 	}
-	if got := srv.hits.Load(); got != 0 {
-		t.Errorf("document server reached %d times through the production envelope, want 0", got)
+	if got := srv.accepts.Load(); got != 0 {
+		t.Errorf("document server accepted %d connections through the production envelope, want 0", got)
+	}
+
+	// Control: with the dev option the same address is dialled, so the
+	// counter above is able to move.
+	dialled := newCDEnv(t, cdCfg{})
+	dialled.probe(t, "https://127.0.0.1:"+port+"/client.json")
+	if srv.accepts.Load() == 0 {
+		t.Error("the dev envelope never connected to the loopback server; the strict check above cannot fail")
 	}
 
 	// The same name is reachable only once the dev option lifts the loopback ban...
@@ -1143,7 +1171,7 @@ func TestScenario_CIMD_RES_12_FetchTimeoutIsFixed(t *testing.T) {
 
 	start := time.Now()
 	e.probe(t, id).requireUnknown(t)
-	if elapsed := time.Since(start); elapsed < 4*time.Second {
+	if elapsed := time.Since(start); elapsed < 4*time.Second || elapsed > 10*time.Second {
 		t.Errorf("a stalled document was abandoned after %s, want the fixed 5s timeout", elapsed)
 	}
 	e.requireFailure(t, id, "network")
@@ -1553,7 +1581,8 @@ func TestScenario_CIMD_CACHE_01_CacheKeyIsExactString(t *testing.T) {
 func TestScenario_CIMD_CACHE_02_ConcurrentFetchesCoalesce(t *testing.T) {
 	t.Parallel()
 	const callers = 12
-	e := newCDEnv(t, cdCfg{})
+	rec := &cdAllowRecorder{}
+	e := newCDEnv(t, cdCfg{allow: rec.allow})
 	gate := make(chan struct{})
 	var srv *cdServer
 	srv = newCDServer(t, cdServerOpts{custom: func(w http.ResponseWriter, r *http.Request) {
@@ -1576,12 +1605,15 @@ func TestScenario_CIMD_CACHE_02_ConcurrentFetchesCoalesce(t *testing.T) {
 			results[i] = f.authorize(t, f.authorizeQuery("")).interacted()
 		}()
 	}
-	deadline := time.Now().Add(10 * time.Second)
-	for srv.hits.Load() == 0 && time.Now().Before(deadline) {
-		time.Sleep(5 * time.Millisecond)
+	// Every caller passes the allow hook before it can join or start the
+	// fetch, which the gate holds open; wait for all of them to arrive.
+	deadline := time.Now().Add(30 * time.Second)
+	for len(rec.snapshot()) < callers && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
 	}
-	// Give the remaining callers time to join the in-flight fetch.
-	time.Sleep(300 * time.Millisecond)
+	if got := len(rec.snapshot()); got < callers {
+		t.Fatalf("only %d of %d callers reached the fetch", got, callers)
+	}
 	close(gate)
 	wg.Wait()
 

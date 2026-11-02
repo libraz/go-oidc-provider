@@ -238,21 +238,31 @@ func TestHTTPDeliverer_CustomClientCannotReenableRedirects(t *testing.T) {
 func TestHTTPDeliverer_CustomClientCannotDisableTimeout(t *testing.T) {
 	t.Parallel()
 
+	release := make(chan struct{})
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		time.Sleep(250 * time.Millisecond)
+		<-release
 		w.WriteHeader(http.StatusOK)
 	}))
 	defer srv.Close()
+	defer close(release)
 
 	d := backchannel.NewHTTPDeliverer(20 * time.Millisecond)
 	d.AllowPrivateNetwork = true
 	d.Client = &http.Client{Transport: srv.Client().Transport, Timeout: 0}
-	started := time.Now()
-	if err := d.Deliver(context.Background(), backchannel.Target{URL: srv.URL}, "tok"); err == nil {
-		t.Fatal("Deliver succeeded after configured timeout; want error")
-	}
-	if elapsed := time.Since(started); elapsed > 200*time.Millisecond {
-		t.Fatalf("Deliver waited %s; custom client bypassed configured timeout", elapsed)
+	done := make(chan error, 1)
+	go func() {
+		done <- d.Deliver(context.Background(), backchannel.Target{URL: srv.URL}, "tok")
+	}()
+
+	// The handler stays blocked until the deferred release, so Deliver can
+	// only return because the configured budget cut it.
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("Deliver succeeded while the handler was still blocked; want a timeout error")
+		}
+	case <-time.After(30 * time.Second):
+		t.Fatal("Deliver still waiting on a blocked handler; custom client bypassed configured timeout")
 	}
 }
 
