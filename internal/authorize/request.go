@@ -210,3 +210,13 @@ type Policy struct {
 	// Registration step; otherwise "create" is an unrecognised value.
 	PromptCreate bool
 }
+
+// DropClaimsUnless discards the parsed OIDC Core 1.0 §5.5 claims payload
+// when the claims parameter is disabled (op.WithClaimsParameterSupported(false)),
+// so the snapshot, grant and token projections behave as if it had been
+// ignored. It is a no-op when enabled.
+func (r *Request) DropClaimsUnless(enabled bool) {
+	if !enabled {
+		r.Claims = nil
+	}
+}

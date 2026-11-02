@@ -4,13 +4,13 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"strconv"
 	"strings"
 	"time"
 
 	josev4 "github.com/go-jose/go-jose/v4"
 
 	"github.com/libraz/go-oidc-provider/internal/jose"
+	"github.com/libraz/go-oidc-provider/internal/securefetch"
 )
 
 // ParseKeySet decodes a JWK Set document with the package-wide member cap
@@ -70,7 +70,7 @@ var jwksContentTypes = []string{"application/json", "application/jwk-set+json"}
 // receiving outbound encryptions — with no operator-visible signal and no way
 // short of a process restart to force a refetch.
 func ttlFromResponse(resp *http.Response, ceiling time.Duration) time.Duration {
-	maxAge, ok := parseMaxAge(resp.Header.Get("Cache-Control"))
+	maxAge, ok := parseMaxAge(strings.Join(resp.Header.Values("Cache-Control"), ", "))
 	if !ok || maxAge <= 0 {
 		return 0
 	}
@@ -81,40 +81,11 @@ func ttlFromResponse(resp *http.Response, ceiling time.Duration) time.Duration {
 }
 
 // parseMaxAge pulls a numeric "max-age" directive out of a Cache-Control header
-// value. The parser is intentionally minimal: it accepts the canonical form
-// ("max-age=300") and ignores quoted forms or leading whitespace. Anything more
-// elaborate is silently treated as absent so the caller falls back to the
-// configured TTL.
+// value; anything malformed is treated as absent so the caller falls back to
+// the configured TTL.
 func parseMaxAge(cc string) (time.Duration, bool) {
-	if cc == "" {
-		return 0, false
-	}
-	for _, raw := range strings.Split(cc, ",") {
-		token := strings.TrimSpace(strings.ToLower(raw))
-		const prefix = "max-age="
-		if !strings.HasPrefix(token, prefix) {
-			continue
-		}
-		secs, err := parseUnsignedSeconds(token[len(prefix):])
-		if err != nil {
-			return 0, false
-		}
-		return time.Duration(secs) * time.Second, true
-	}
-	return 0, false
-}
-
-// parseUnsignedSeconds decodes a non-negative decimal integer, returning an
-// error on any non-digit input or a value above 2^31.
-func parseUnsignedSeconds(s string) (int64, error) {
-	n, err := strconv.ParseUint(s, 10, 64)
-	if err != nil {
-		return 0, err
-	}
-	if n > 1<<31 {
-		return 0, errors.New("overflow")
-	}
-	return int64(n), nil
+	parsed := securefetch.ParseCacheControl([]string{cc})
+	return parsed.MaxAge, parsed.HasMaxAge
 }
 
 // SigningUsable reports whether a JWK whose "use" member is use may verify a

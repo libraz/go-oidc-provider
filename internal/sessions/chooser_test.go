@@ -442,3 +442,27 @@ func TestManager_PlanEstablishment_ChooserPickWithFreshAuthnRotates(t *testing.T
 		t.Error("the stale picked record survived its rotation")
 	}
 }
+
+func TestManager_Accounts_SkipsNilRows(t *testing.T) {
+	t.Parallel()
+
+	t0 := time.Date(2026, 4, 26, 12, 0, 0, 0, time.UTC)
+	clock := func() time.Time { return t0 }
+	mgr, err := sessions.NewManager(sessions.Config{
+		Codec: newSessionCodec(t),
+		Store: nilRowStore{newSessionStore(t, inmem.WithClock(clockFunc(clock)))},
+		Clock: clock,
+	})
+	if err != nil {
+		t.Fatalf("NewManager: %v", err)
+	}
+
+	first := establishFresh(t, mgr, sessions.Login{Subject: "user-a", AuthTime: t0}, t0)
+	accounts, err := mgr.Accounts(context.Background(), first.ChooserGroupID)
+	if err != nil {
+		t.Fatalf("Accounts: %v", err)
+	}
+	if len(accounts) != 1 || accounts[0].SessionID != first.SessionID {
+		t.Errorf("Accounts=%v want one entry for %s", accounts, first.SessionID)
+	}
+}

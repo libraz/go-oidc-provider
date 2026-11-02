@@ -181,16 +181,6 @@ func TestTTLFromResponse_ClampsToCeiling(t *testing.T) {
 	}
 }
 
-func TestParseUnsignedSeconds_Rejects(t *testing.T) {
-	t.Parallel()
-
-	for _, s := range []string{"", "-1", "12a", "99999999999"} {
-		if _, err := parseUnsignedSeconds(s); err == nil {
-			t.Errorf("accepted %q", s)
-		}
-	}
-}
-
 func TestErrFetch_IsTheFallbackSentinel(t *testing.T) {
 	t.Parallel()
 

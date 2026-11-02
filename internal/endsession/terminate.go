@@ -64,7 +64,7 @@ func terminateSessionForScope(w http.ResponseWriter, r *http.Request, deps Deps,
 
 	switch lookup.state {
 	case sessionAbsent:
-		clearSessionCookie(w)
+		cookie.ClearOn(w, cookie.SessionProfile)
 		return nil
 	case sessionStoreUnavailable:
 		// No session was ever resolved, so there is nothing this
@@ -78,7 +78,7 @@ func terminateSessionForScope(w http.ResponseWriter, r *http.Request, deps Deps,
 
 	sess := lookup.fingerprint
 	if sess.sessionID == "" {
-		clearSessionCookie(w)
+		cookie.ClearOn(w, cookie.SessionProfile)
 		return nil
 	}
 
@@ -187,7 +187,7 @@ func terminateSessionForScope(w http.ResponseWriter, r *http.Request, deps Deps,
 			return nil
 		}
 	}
-	clearSessionCookie(w)
+	cookie.ClearOn(w, cookie.SessionProfile)
 	return nil
 }
 
@@ -210,15 +210,8 @@ func notifyBackchannelForSnapshot(ctx context.Context, deps Deps, snapshot []*st
 	if deps.Backchannel == nil {
 		return
 	}
-	seen := make(map[string]struct{}, len(snapshot))
-	for _, row := range snapshot {
-		if row == nil || row.Subject == "" || row.ID == "" {
-			continue
-		}
-		if _, ok := seen[row.Subject]; ok {
-			continue
-		}
-		seen[row.Subject] = struct{}{}
+	hasID := func(row *store.Session) bool { return row.ID != "" }
+	for _, row := range distinctSubjects(snapshot, hasID) {
 		deps.Backchannel.NotifyDetached(ctx, backchannel.Notice{
 			Subject:   row.Subject,
 			SessionID: row.ID,
@@ -289,16 +282,8 @@ func revokeAccessTokens(ctx context.Context, deps Deps, subject string) error {
 // grant and refresh-token walks would be both wasteful and capable of turning
 // an otherwise harmless idempotent logout into a backend error storm.
 func revokeAccessTokensForSnapshot(ctx context.Context, deps Deps, snapshot []*store.Session) error {
-	seen := make(map[string]struct{}, len(snapshot))
 	var errs []error
-	for _, row := range snapshot {
-		if row == nil || row.Subject == "" {
-			continue
-		}
-		if _, ok := seen[row.Subject]; ok {
-			continue
-		}
-		seen[row.Subject] = struct{}{}
+	for _, row := range distinctSubjects(snapshot, nil) {
 		if err := revokeAccessTokens(ctx, deps, row.Subject); err != nil {
 			errs = append(errs, fmt.Errorf("subject %s: %w", row.Subject, err))
 		}
@@ -312,13 +297,20 @@ func revokeAccessTokensForSnapshot(ctx context.Context, deps Deps, snapshot []*s
 // OP equally cannot claim the sign-out happened.
 var errSessionNotDestroyed = errors.New("endsession: session termination could not be confirmed")
 
-// clearSessionCookie writes a Set-Cookie header that retires the
-// session cookie. Errors during construction are swallowed: a failure
-// here is a programming bug (the profile is a package constant) and
-// surfacing it would mask the original response we were emitting.
-// Mirrors authorizeendpoint.clearCookie.
-func clearSessionCookie(w http.ResponseWriter) {
-	if c, err := cookie.Clear(cookie.SessionProfile); err == nil {
-		http.SetCookie(w, c)
+// distinctSubjects returns the first snapshot row per non-empty subject,
+// ignoring nil rows and rows keep rejects. keep may be nil.
+func distinctSubjects(snapshot []*store.Session, keep func(*store.Session) bool) []*store.Session {
+	seen := make(map[string]struct{}, len(snapshot))
+	out := make([]*store.Session, 0, len(snapshot))
+	for _, row := range snapshot {
+		if row == nil || row.Subject == "" || (keep != nil && !keep(row)) {
+			continue
+		}
+		if _, ok := seen[row.Subject]; ok {
+			continue
+		}
+		seen[row.Subject] = struct{}{}
+		out = append(out, row)
 	}
+	return out
 }

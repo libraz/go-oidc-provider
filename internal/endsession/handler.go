@@ -187,10 +187,7 @@ type Deps struct {
 }
 
 func (d Deps) audit() audit.Emitter {
-	if d.Audit == nil {
-		return audit.Discard()
-	}
-	return d.Audit
+	return audit.OrDiscard(d.Audit)
 }
 
 // Handler returns the HTTP handler the OP mounts at its /end_session
@@ -358,7 +355,7 @@ func enforceCSRFGate(w http.ResponseWriter, r *http.Request, deps Deps, f flow) 
 		writeLogoutError(w, http.StatusBadRequest, descCSRFRejected)
 		return false
 	}
-	clearConfirmCookie(w)
+	cookie.ClearOn(w, cookie.LogoutCSRFProfile)
 	return true
 }
 

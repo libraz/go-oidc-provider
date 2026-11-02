@@ -3,6 +3,7 @@ package registrationendpoint
 import (
 	"net/http"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/libraz/go-oidc-provider/internal/endpointsupport"
 )
@@ -54,7 +55,11 @@ func sanitizeDescription(s string) string {
 	}, s)
 	s = strings.Join(strings.Fields(s), " ")
 	if len(s) > maxDescriptionBytes {
-		s = s[:maxDescriptionBytes]
+		cut := maxDescriptionBytes
+		for cut > 0 && !utf8.RuneStart(s[cut]) {
+			cut--
+		}
+		s = s[:cut]
 	}
 	return s
 }

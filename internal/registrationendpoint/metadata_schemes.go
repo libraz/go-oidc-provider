@@ -70,13 +70,7 @@ func validateNativeRedirectURIScheme(u *url.URL, allowLocalhostLoopback bool) er
 	case "https":
 		return validateHTTPSRedirectAuthority(u, "redirect_uri")
 	case "http":
-		if !isLoopbackRedirectHost(u.Hostname(), allowLocalhostLoopback) {
-			if allowLocalhostLoopback {
-				return errInvalidRedirectURI("native client redirect_uri http scheme requires a loopback host (127.0.0.1, [::1], or localhost) per RFC 8252 §7.3")
-			}
-			return errInvalidRedirectURI("native client redirect_uri http scheme requires a loopback IP literal (127.0.0.1, [::1]) per RFC 8252 §7.3 + §8.3; pass op.WithAllowLocalhostLoopback() to also admit the textual \"localhost\" host")
-		}
-		return nil
+		return requireLoopbackHTTP(u, allowLocalhostLoopback, nativeRedirectLoopback)
 	default:
 		return validateNativeCustomScheme(u.Scheme)
 	}
@@ -118,13 +112,7 @@ func validateWebRedirectURIScheme(u *url.URL, hasImplicit, allowLocalhostLoopbac
 		}
 		return nil
 	case "http":
-		if !isLoopbackRedirectHost(u.Hostname(), allowLocalhostLoopback) {
-			if allowLocalhostLoopback {
-				return errInvalidRedirectURI("redirect_uri http scheme is permitted only for loopback hosts (127.0.0.1, [::1], or localhost) per RFC 8252 §7.3")
-			}
-			return errInvalidRedirectURI("redirect_uri http scheme is permitted only for loopback IP literals (127.0.0.1, [::1]) per RFC 8252 §7.3 + §8.3; pass op.WithAllowLocalhostLoopback() to also admit the textual \"localhost\" host")
-		}
-		return nil
+		return requireLoopbackHTTP(u, allowLocalhostLoopback, webRedirectLoopback)
 	default:
 		return errInvalidRedirectURI("web client redirect_uri scheme must be https; custom URI schemes require application_type=native")
 	}
@@ -192,13 +180,7 @@ func validateNativePostLogoutScheme(u *url.URL, allowLocalhostLoopback bool) err
 	case "https":
 		return validateHTTPSRedirectAuthority(u, "post_logout_redirect_uris entry")
 	case "http":
-		if !isLoopbackRedirectHost(u.Hostname(), allowLocalhostLoopback) {
-			if allowLocalhostLoopback {
-				return errInvalidClientMetadata("post_logout_redirect_uris http scheme for native clients requires a loopback host (127.0.0.1, [::1], or localhost) per RFC 8252 §7.3")
-			}
-			return errInvalidClientMetadata("post_logout_redirect_uris http scheme for native clients requires a loopback IP literal (127.0.0.1, [::1]); pass op.WithAllowLocalhostLoopback() to also admit the textual \"localhost\" host")
-		}
-		return nil
+		return requireLoopbackHTTP(u, allowLocalhostLoopback, nativePostLogoutLoopback)
 	default:
 		if err := validateNativeCustomScheme(u.Scheme); err != nil {
 			return errInvalidClientMetadata("post_logout_redirect_uris " + u.String() + ": " + err.Error() + " (loopback http hosts: 127.0.0.1, [::1], localhost)")
@@ -217,16 +199,59 @@ func validateWebPostLogoutScheme(u *url.URL, allowLocalhostLoopback bool) error 
 	case "https":
 		return validateHTTPSRedirectAuthority(u, "post_logout_redirect_uris entry")
 	case "http":
-		if !isLoopbackRedirectHost(u.Hostname(), allowLocalhostLoopback) {
-			if allowLocalhostLoopback {
-				return errInvalidClientMetadata("post_logout_redirect_uris http scheme is permitted only for loopback hosts (127.0.0.1, [::1], or localhost) per RFC 8252 §7.3")
-			}
-			return errInvalidClientMetadata("post_logout_redirect_uris http scheme is permitted only for loopback IP literals (127.0.0.1, [::1]); pass op.WithAllowLocalhostLoopback() to also admit the textual \"localhost\" host")
-		}
-		return nil
+		return requireLoopbackHTTP(u, allowLocalhostLoopback, webPostLogoutLoopback)
 	default:
 		return errInvalidClientMetadata("post_logout_redirect_uris scheme must be https for web clients; loopback http (127.0.0.1, [::1], localhost) and custom URI schemes require application_type=native")
 	}
+}
+
+// loopbackHTTPMessages names the constructor and the two diagnostics a
+// scheme validator reports when an http URL does not use an admitted
+// loopback host.
+type loopbackHTTPMessages struct {
+	newErr func(string) error
+	// withLocalhost is reported when the textual "localhost" is admitted.
+	withLocalhost string
+	// ipOnly is reported when only the loopback IP literals are admitted.
+	ipOnly string
+}
+
+// Per-validator loopback diagnostics; read-only.
+//
+//nolint:gochecknoglobals // closed message tables; never mutated.
+var (
+	nativeRedirectLoopback = loopbackHTTPMessages{
+		newErr:        errInvalidRedirectURI,
+		withLocalhost: "native client redirect_uri http scheme requires a loopback host (127.0.0.1, [::1], or localhost) per RFC 8252 §7.3",
+		ipOnly:        "native client redirect_uri http scheme requires a loopback IP literal (127.0.0.1, [::1]) per RFC 8252 §7.3 + §8.3; pass op.WithAllowLocalhostLoopback() to also admit the textual \"localhost\" host",
+	}
+	webRedirectLoopback = loopbackHTTPMessages{
+		newErr:        errInvalidRedirectURI,
+		withLocalhost: "redirect_uri http scheme is permitted only for loopback hosts (127.0.0.1, [::1], or localhost) per RFC 8252 §7.3",
+		ipOnly:        "redirect_uri http scheme is permitted only for loopback IP literals (127.0.0.1, [::1]) per RFC 8252 §7.3 + §8.3; pass op.WithAllowLocalhostLoopback() to also admit the textual \"localhost\" host",
+	}
+	nativePostLogoutLoopback = loopbackHTTPMessages{
+		newErr:        errInvalidClientMetadata,
+		withLocalhost: "post_logout_redirect_uris http scheme for native clients requires a loopback host (127.0.0.1, [::1], or localhost) per RFC 8252 §7.3",
+		ipOnly:        "post_logout_redirect_uris http scheme for native clients requires a loopback IP literal (127.0.0.1, [::1]); pass op.WithAllowLocalhostLoopback() to also admit the textual \"localhost\" host",
+	}
+	webPostLogoutLoopback = loopbackHTTPMessages{
+		newErr:        errInvalidClientMetadata,
+		withLocalhost: "post_logout_redirect_uris http scheme is permitted only for loopback hosts (127.0.0.1, [::1], or localhost) per RFC 8252 §7.3",
+		ipOnly:        "post_logout_redirect_uris http scheme is permitted only for loopback IP literals (127.0.0.1, [::1]); pass op.WithAllowLocalhostLoopback() to also admit the textual \"localhost\" host",
+	}
+)
+
+// requireLoopbackHTTP admits an http URL only for a loopback host; the
+// textual "localhost" needs allowLocalhostLoopback.
+func requireLoopbackHTTP(u *url.URL, allowLocalhostLoopback bool, msgs loopbackHTTPMessages) error {
+	if isLoopbackRedirectHost(u.Hostname(), allowLocalhostLoopback) {
+		return nil
+	}
+	if allowLocalhostLoopback {
+		return msgs.newErr(msgs.withLocalhost)
+	}
+	return msgs.newErr(msgs.ipOnly)
 }
 
 func validateHTTPSRedirectAuthority(u *url.URL, field string) error {

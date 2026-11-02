@@ -1,5 +1,10 @@
 package jarm
 
+import (
+	"slices"
+	"strings"
+)
+
 // ResponseMode is the typed enumeration of JARM response_mode values.
 // The zero value is invalid; constructors return a typed value with an
 // ok flag so callers branch on the bool rather than on string equality.
@@ -83,23 +88,7 @@ func Resolve(mode ResponseMode, responseType string) ResponseMode {
 // intentionally permissive: any response_type that contains "token" or
 // "id_token" as a space-separated value falls under the fragment path.
 func responseTypeImpliesFragment(responseType string) bool {
-	for i := 0; i < len(responseType); {
-		// Skip leading spaces.
-		for i < len(responseType) && responseType[i] == ' ' {
-			i++
-		}
-		j := i
-		for j < len(responseType) && responseType[j] != ' ' {
-			j++
-		}
-		if i == j {
-			break
-		}
-		token := responseType[i:j]
-		if token == "token" || token == "id_token" {
-			return true
-		}
-		i = j
-	}
-	return false
+	return slices.ContainsFunc(strings.Split(responseType, " "), func(token string) bool {
+		return token == "token" || token == "id_token"
+	})
 }

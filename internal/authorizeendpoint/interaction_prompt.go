@@ -1,13 +1,9 @@
 package authorizeendpoint
 
 import (
-	"encoding/json"
-	"fmt"
 	"net/http"
 	"net/url"
 	"slices"
-	"strconv"
-	"strings"
 
 	"github.com/libraz/go-oidc-provider/internal/audit"
 	"github.com/libraz/go-oidc-provider/internal/authn"
@@ -129,50 +125,14 @@ func stampChooserAddAccountURL(deps resolved, prompt *interaction.Prompt, st aut
 }
 
 func chooserAddAccountValues(s authorize.RequestSnapshot, chooserGroupID string) (url.Values, error) {
-	values := url.Values{}
-	setIfNotEmpty(values, "client_id", s.ClientID)
-	setIfNotEmpty(values, "response_type", s.ResponseType)
-	setIfNotEmpty(values, "redirect_uri", s.RedirectURI)
-	setIfNotEmpty(values, "state", s.State)
-	setIfNotEmpty(values, "nonce", s.Nonce)
-	setIfNotEmpty(values, "code_challenge", s.CodeChallenge)
-	setIfNotEmpty(values, "code_challenge_method", s.CodeChallengeMethod)
-	setIfNotEmpty(values, "scope", strings.Join(s.Scope, " "))
-	setIfNotEmpty(values, "resource", s.Resource)
-	setIfNotEmpty(values, "acr_values", strings.Join(s.ACRValues, " "))
-	setIfNotEmpty(values, "ui_locales", strings.Join(s.UILocales, " "))
-	if s.MaxAge != nil {
-		values.Set("max_age", strconv.FormatInt(int64(*s.MaxAge), 10))
+	values, err := s.Values()
+	if err != nil {
+		return nil, err
 	}
-	setIfNotEmpty(values, "login_hint", s.LoginHint)
-	setIfNotEmpty(values, "response_mode", s.ResponseMode)
-	setIfNotEmpty(values, "dpop_jkt", s.DPoPJKT)
-	if s.Claims != nil {
-		raw, err := json.Marshal(s.Claims)
-		if err != nil {
-			return nil, fmt.Errorf("authorizeendpoint: marshal claims for chooser add-account: %w", err)
-		}
-		values.Set("claims", string(raw))
-	}
-	if len(s.AuthorizationDetails) > 0 {
-		raw, err := json.Marshal(s.AuthorizationDetails)
-		if err != nil {
-			return nil, fmt.Errorf("authorizeendpoint: marshal authorization_details for chooser add-account: %w", err)
-		}
-		values.Set("authorization_details", string(raw))
-	}
-	setIfNotEmpty(values, "grant_management_action", s.GrantManagementAction)
-	setIfNotEmpty(values, "grant_id", s.GrantID)
 	values.Set("prompt", interaction.PromptLogin)
 	values.Set("_oidc_add_account", "1")
 	values.Set("_oidc_chooser_group", chooserGroupID)
 	return values, nil
-}
-
-func setIfNotEmpty(values url.Values, name, value string) {
-	if value != "" {
-		values.Set(name, value)
-	}
 }
 
 // stampPromptLocale walks the locale priority chain through the

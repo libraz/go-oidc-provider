@@ -332,10 +332,7 @@ func (d *Deps) logger() *slog.Logger {
 // collapses to [audit.Discard()] so handler code can call
 // deps.audit().Emit unconditionally without a nil-check.
 func (d *Deps) audit() audit.Emitter {
-	if d.Audit == nil {
-		return audit.Discard()
-	}
-	return d.Audit
+	return audit.OrDiscard(d.Audit)
 }
 
 // profilePolicy bundles the profile-level client-authentication

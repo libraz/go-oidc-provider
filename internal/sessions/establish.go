@@ -130,18 +130,9 @@ func (m *Manager) findChooserSelection(
 	ctx context.Context,
 	in EstablishPlan,
 ) (*store.Session, error) {
-	target, err := m.store.Find(ctx, in.ChooserSelectedSessionID)
-	if err == nil && target == nil {
-		// A nil record alongside a nil error violates the store contract.
-		// The selected session cannot be shown to be live, so the plan takes
-		// the same path a garbage-collected session takes.
-		err = store.ErrNotFound
-	}
+	target, err := m.findSession(ctx, in.ChooserSelectedSessionID)
 	if err != nil {
-		if errors.Is(err, store.ErrNotFound) {
-			return nil, ErrCurrentSessionExpired
-		}
-		return nil, fmt.Errorf("sessions: find selected stable session: %w", err)
+		return nil, err
 	}
 	if target.ID != in.ChooserSelectedSessionID ||
 		target.Subject != in.Login.Subject ||

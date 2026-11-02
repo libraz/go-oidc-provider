@@ -26,17 +26,11 @@ func (r *Request) RequestedACRValues() []string {
 	if r == nil {
 		return nil
 	}
-	out := make([]string, 0, len(r.ACRValues))
-	seen := make(map[string]struct{}, len(r.ACRValues))
+	all := make([]string, 0, len(r.ACRValues))
 	add := func(v string) {
-		if v == "" {
-			return
+		if v != "" {
+			all = append(all, v)
 		}
-		if _, dup := seen[v]; dup {
-			return
-		}
-		seen[v] = struct{}{}
-		out = append(out, v)
 	}
 	for _, v := range r.ACRValues {
 		add(v)
@@ -51,10 +45,7 @@ func (r *Request) RequestedACRValues() []string {
 			}
 		}
 	}
-	if len(out) == 0 {
-		return nil
-	}
-	return out
+	return DedupePreserve(all)
 }
 
 // UnsupportedACRValue returns the first authentication context the

@@ -202,15 +202,15 @@ func resumeInteractionCompletion(
 	if err != nil {
 		if errors.Is(err, errGrantNotOwned) {
 			_ = deleteCompletionAnchor(r.Context(), deps, rec)
-			clearCookie(w, cookie.InteractionProfile)
-			clearCookie(w, cookie.CSRFProfile)
+			cookie.ClearOn(w, cookie.InteractionProfile)
+			cookie.ClearOn(w, cookie.CSRFProfile)
 			emitAuthorizeError(w, r, deps, req, errInvalidGrant, "grant_id is not owned by this subject/client")
 			return
 		}
 		if errors.Is(err, store.ErrAlreadyConsumed) {
 			_ = deleteCompletionAnchor(r.Context(), deps, rec)
-			clearCookie(w, cookie.InteractionProfile)
-			clearCookie(w, cookie.CSRFProfile)
+			cookie.ClearOn(w, cookie.InteractionProfile)
+			cookie.ClearOn(w, cookie.CSRFProfile)
 			emitAuthorizeError(w, r, deps, req, errAccessDenied, "request_uri is no longer valid")
 			return
 		}
@@ -240,8 +240,8 @@ func resumeInteractionCompletion(
 	if deleteErr == nil {
 		emitCompletionAudit(r.Context(), deps, intent, req.ClientID, code.GrantID, out, consentAutoGranted(state))
 	}
-	clearCookie(w, cookie.InteractionProfile)
-	clearCookie(w, cookie.CSRFProfile)
+	cookie.ClearOn(w, cookie.InteractionProfile)
+	cookie.ClearOn(w, cookie.CSRFProfile)
 	emitAuthorizeSuccess(w, r, deps, req, code.ID)
 }
 

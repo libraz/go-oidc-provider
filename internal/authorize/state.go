@@ -3,7 +3,10 @@ package authorize
 import (
 	"encoding/json"
 	"fmt"
+	"net/url"
 	"slices"
+	"strconv"
+	"strings"
 	"time"
 )
 
@@ -177,6 +180,54 @@ func (s RequestSnapshot) ToRequest() *Request {
 		GrantManagementAction: s.GrantManagementAction,
 		GrantID:               s.GrantID,
 	}
+}
+
+// Values is the inverse of [ParseValues] for the captured fields: it
+// re-encodes the snapshot as authorization request parameters, omitting
+// empty ones. The request object, request_uri and PAR reference are not
+// carried, so the result is a self-contained by-value request.
+func (s RequestSnapshot) Values() (url.Values, error) {
+	values := url.Values{}
+	set := func(name, value string) {
+		if value != "" {
+			values.Set(name, value)
+		}
+	}
+	set("client_id", s.ClientID)
+	set("response_type", s.ResponseType)
+	set("redirect_uri", s.RedirectURI)
+	set("state", s.State)
+	set("nonce", s.Nonce)
+	set("code_challenge", s.CodeChallenge)
+	set("code_challenge_method", s.CodeChallengeMethod)
+	set("scope", strings.Join(s.Scope, " "))
+	set("resource", s.Resource)
+	set("prompt", strings.Join(s.Prompt, " "))
+	set("acr_values", strings.Join(s.ACRValues, " "))
+	set("ui_locales", strings.Join(s.UILocales, " "))
+	if s.MaxAge != nil {
+		values.Set("max_age", strconv.FormatInt(*s.MaxAge, 10))
+	}
+	set("login_hint", s.LoginHint)
+	set("response_mode", s.ResponseMode)
+	set("dpop_jkt", s.DPoPJKT)
+	if s.Claims != nil {
+		raw, err := json.Marshal(s.Claims)
+		if err != nil {
+			return nil, fmt.Errorf("authorize: marshal claims: %w", err)
+		}
+		values.Set("claims", string(raw))
+	}
+	if len(s.AuthorizationDetails) > 0 {
+		raw, err := json.Marshal(s.AuthorizationDetails)
+		if err != nil {
+			return nil, fmt.Errorf("authorize: marshal authorization_details: %w", err)
+		}
+		values.Set("authorization_details", string(raw))
+	}
+	set("grant_management_action", s.GrantManagementAction)
+	set("grant_id", s.GrantID)
+	return values, nil
 }
 
 // CloneAuthorizationDetails copies the authorization_details slice and each

@@ -568,13 +568,3 @@ func requireFound[T any](rec *T, err error) (*T, error) {
 	}
 	return rec, err
 }
-
-// clearCookie writes a Set-Cookie header that instructs the browser to
-// remove the named cookie. Errors during construction are swallowed: a
-// failure here is a programming bug (the profile is a package constant)
-// and surfacing it would mask the original response we were emitting.
-func clearCookie(w http.ResponseWriter, profile cookie.Profile) {
-	if c, err := cookie.Clear(profile); err == nil {
-		http.SetCookie(w, c)
-	}
-}

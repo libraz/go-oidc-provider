@@ -260,10 +260,7 @@ func NewCoordinator(cfg Config) (*Coordinator, error) {
 	if deliverer == nil {
 		deliverer = NewHTTPDeliverer(DefaultTimeout)
 	}
-	emitter := cfg.Emitter
-	if emitter == nil {
-		emitter = audit.Discard()
-	}
+	emitter := audit.OrDiscard(cfg.Emitter)
 	clock := timex.OrSystem(cfg.Clock)
 	ttl := cfg.TokenTTL
 	if ttl <= 0 {

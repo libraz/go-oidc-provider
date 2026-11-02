@@ -61,7 +61,7 @@ func serve(w http.ResponseWriter, r *http.Request, deps Deps) {
 	if !ok {
 		return
 	}
-	applyClaimsToggle(req, deps.ClaimsParameterEnabled)
+	req.DropClaimsUnless(deps.ClaimsParameterEnabled)
 	// RFC 9126 §2.1 has the AS validate the pushed parameters here, so
 	// /par admits exactly the effective request /authorize would.
 	if err := req.ValidateEffectiveRequest(client, deps.Scopes, deps.RequestPolicy, deps.ACRValuesSupported); err != nil {
@@ -252,15 +252,10 @@ func applyDPoPJKT(w http.ResponseWriter, values url.Values, jkt string) (url.Val
 // supersedes the parsed value before the snapshot is persisted, so the
 // stored RawParams still reflect a single coherent identity.
 func stripAuthFields(in url.Values) url.Values {
-	out := make(url.Values, len(in))
-	for k, v := range in {
-		switch k {
-		case "client_secret", "client_assertion", "client_assertion_type":
-			continue
-		default:
-			out[k] = append([]string(nil), v...)
-		}
-	}
+	out := jar.CloneValues(in)
+	out.Del("client_secret")
+	out.Del("client_assertion")
+	out.Del("client_assertion_type")
 	return out
 }
 
@@ -290,18 +285,6 @@ func parseAuthorizeRequest(w http.ResponseWriter, values url.Values, authenticat
 	// downstream Validate path uniform with /authorize.
 	req.ClientID = authenticatedID
 	return req, true
-}
-
-// applyClaimsToggle enforces op.WithClaimsParameterSupported(false) at
-// the /par boundary by clearing any parsed §5.5 payload before the
-// snapshot is persisted. The function is a no-op when the toggle is
-// on (the wire payload survives onto the snapshot intact) so callers
-// can invoke it unconditionally.
-func applyClaimsToggle(req *authorize.Request, enabled bool) {
-	if enabled {
-		return
-	}
-	req.Claims = nil
 }
 
 // writeAuthorizeError translates an [authorize.Error] (or any other error

@@ -172,7 +172,7 @@ rows:
       requests an HS* algorithm, the OP issues a client_secret on the
       same grounds as DCR-SEC-03.
     status: out-of-scope
-    out_of_scope_reason: "Same root cause as DCR-SEC-03: v1.0 rejects HS* algorithms across the JWA surface. userinfo_signed_response_alg is accepted only as the OP's issuing algorithm or none, and request_object_signing_alg is gated by validateRequestObjectSigningAlg to {RS256, PS256, ES256, EdDSA} — HS variants never reach the secret-issuance fork. The 'HS forces secret' contract is non-spec residue."
+    out_of_scope_reason: "Same root cause as DCR-SEC-03: v1.0 rejects HS* algorithms across the JWA surface. userinfo_signed_response_alg is accepted only as the OP's issuing algorithm or none, and request_object_signing_alg is gated by validateSigningAlg to {RS256, PS256, ES256, EdDSA} — HS variants never reach the secret-issuance fork. The 'HS forces secret' contract is non-spec residue."
 
   - id: DCR-SEC-05
     severity: P0

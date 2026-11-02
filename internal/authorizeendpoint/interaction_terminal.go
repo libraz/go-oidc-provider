@@ -31,8 +31,8 @@ func terminateInteraction(
 		if !claimTerminalInteraction(w, r, deps, rec) {
 			return
 		}
-		clearCookie(w, cookie.InteractionProfile)
-		clearCookie(w, cookie.CSRFProfile)
+		cookie.ClearOn(w, cookie.InteractionProfile)
+		cookie.ClearOn(w, cookie.CSRFProfile)
 		emitAuthorizeError(w, r, deps, req, errAccessDenied, "subject was not authenticated")
 		return
 	}
@@ -134,8 +134,8 @@ func failTerminalInteraction(
 	if !claimTerminalInteraction(w, r, deps, rec) {
 		return
 	}
-	clearCookie(w, cookie.InteractionProfile)
-	clearCookie(w, cookie.CSRFProfile)
+	cookie.ClearOn(w, cookie.InteractionProfile)
+	cookie.ClearOn(w, cookie.CSRFProfile)
 	emitAuthorizeError(w, r, deps, req, code, description)
 }
 

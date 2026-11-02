@@ -182,8 +182,8 @@ func serveInteractionDelete(w http.ResponseWriter, r *http.Request, deps resolve
 		renderServerError(w, r, deps, "could not cancel interaction", err)
 		return
 	}
-	clearCookie(w, cookie.InteractionProfile)
-	clearCookie(w, cookie.CSRFProfile)
+	cookie.ClearOn(w, cookie.InteractionProfile)
+	cookie.ClearOn(w, cookie.CSRFProfile)
 	httpx.StampNoStore(w)
 	if state.Library.RedirectURI == "" {
 		w.WriteHeader(http.StatusNoContent)

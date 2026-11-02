@@ -75,10 +75,7 @@ var _ store.ClientStore = (*Store)(nil)
 // singleflight it carries are only effective when every endpoint shares them.
 func New(cfg Config) *Store {
 	clock := timex.OrSystem(cfg.Clock)
-	emitter := cfg.Audit
-	if emitter == nil {
-		emitter = audit.Discard()
-	}
+	emitter := audit.OrDiscard(cfg.Audit)
 	timeout := securefetch.DefaultTimeout
 	if cfg.timeout > 0 {
 		timeout = cfg.timeout

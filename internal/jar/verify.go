@@ -323,12 +323,12 @@ func NewVerifier(cfg VerifierConfig) (*Verifier, error) {
 // mirrors internal/jose so JAR widens with every new alg the rest of
 // the codebase admits without a separate audit.
 func defaultAllowedAlgs() []jose.Algorithm {
-	return []jose.Algorithm{
-		jose.AlgRS256,
-		jose.AlgPS256,
-		jose.AlgES256,
-		jose.AlgEdDSA,
+	names := jose.AllowedAlgorithmNames()
+	out := make([]jose.Algorithm, len(names))
+	for i, name := range names {
+		out[i] = jose.Algorithm(name)
 	}
+	return out
 }
 
 // AuthorizeMergeMode returns the [MergeMode] /authorize applies to a

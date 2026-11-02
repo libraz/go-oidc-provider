@@ -282,13 +282,9 @@ func newJARRequestURICache(clock Clock) *remotecache.Cache[string] {
 // cannot express, so [isJARRequestObjectContentType] applies it at the
 // call site instead.
 func jarRequestURIPolicy(allowPrivate bool) securefetch.Policy {
-	schemes := []string{"https"}
-	if allowPrivate {
-		schemes = []string{"http", "https"}
-	}
 	return securefetch.Policy{
 		AllowPrivateNetwork: allowPrivate,
-		AllowedSchemes:      schemes,
+		AllowedSchemes:      securefetch.Schemes(allowPrivate),
 		Timeout:             securefetch.DefaultTimeout,
 		MaxBodyBytes:        securefetch.DefaultMaxBody,
 		// MaxRedirects=0 (the default) refuses every 30x; the redirect

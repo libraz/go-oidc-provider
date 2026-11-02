@@ -498,6 +498,9 @@ func (m *Manager) Accounts(ctx context.Context, chooserGroupID string) ([]Accoun
 	}
 	out := make([]Account, 0, len(sessions))
 	for _, s := range sessions {
+		if s == nil {
+			continue
+		}
 		out = append(out, Account{
 			SessionID: s.ID,
 			Subject:   s.Subject,

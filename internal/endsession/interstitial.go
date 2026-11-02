@@ -267,19 +267,6 @@ func validateConfirmToken(r *http.Request) bool {
 	return csrf.ConstantTimeEqual(c.Value, got)
 }
 
-// clearConfirmCookie writes a Set-Cookie header that retires the
-// CSRF cookie. The handler calls this on the POST success path so the
-// token is single-use; a replayed POST against the cleared cookie
-// fails the cookie-presence check rather than the constant-time
-// compare. Errors during construction are swallowed: a failure here is
-// a programming bug (the profile is a package constant) and surfacing
-// it would mask the response we were emitting.
-func clearConfirmCookie(w http.ResponseWriter) {
-	if c, err := cookie.Clear(cookie.LogoutCSRFProfile); err == nil {
-		http.SetCookie(w, c)
-	}
-}
-
 // confirmationBodyTemplate is the static HTML the interstitial
 // confirmation page renders. The page is self-contained: no scripts,
 // no external resources, and the only caller-controlled values

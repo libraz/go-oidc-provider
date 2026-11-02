@@ -178,15 +178,9 @@ func resolveAuthorizeRequest(
 		writeAuthorizeParseError(w, r, deps, err)
 		return nil, false
 	}
-	if !deps.ClaimsParameterEnabled {
-		// op.WithClaimsParameterSupported(false): drop the parsed
-		// payload so the snapshot, the persisted grant, and the
-		// downstream id_token / userinfo projection all behave as if
-		// the parameter had been silently ignored. The wire-level
-		// rejection of a malformed payload still fires above so a
-		// hostile RP cannot probe the OP through claims-shaped junk.
-		req.Claims = nil
-	}
+	// The wire-level rejection of a malformed payload fires above, so a
+	// hostile RP cannot probe the OP through claims-shaped junk.
+	req.DropClaimsUnless(deps.ClaimsParameterEnabled)
 	return req, true
 }
 
@@ -265,7 +259,7 @@ func dispatchAuthorize(
 		// arm a corrupted cookie is treated as "no session" but left in the
 		// browser, so every subsequent request re-sends the garbage value
 		// and re-fails the decode; expiring it lets the browser start clean.
-		clearCookie(w, cookie.SessionProfile)
+		cookie.ClearOn(w, cookie.SessionProfile)
 	}
 	hint, err := computeAuthorizeHint(r.Context(), deps, req, client, active, now)
 	if err != nil {

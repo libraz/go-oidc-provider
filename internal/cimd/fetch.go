@@ -5,7 +5,6 @@ import (
 	"errors"
 	"net"
 	"net/http"
-	"strconv"
 	"strings"
 	"time"
 
@@ -73,14 +72,10 @@ func validationCode(err error) string {
 // opt-in widens the scheme set to http and lifts the private and loopback
 // deny-list together; cloud-metadata addresses stay refused either way.
 func fetchPolicy(allowPrivate bool, timeout time.Duration, lookup func(context.Context, string) ([]net.IPAddr, error)) securefetch.Policy {
-	schemes := []string{"https"}
-	if allowPrivate {
-		schemes = []string{"http", "https"}
-	}
 	return securefetch.Policy{
 		AllowPrivateNetwork:  allowPrivate,
 		AllowLoopbackNetwork: allowPrivate,
-		AllowedSchemes:       schemes,
+		AllowedSchemes:       securefetch.Schemes(allowPrivate),
 		MaxBodyBytes:         maxDocumentBytes,
 		AcceptContentTypes:   acceptContentTypes,
 		Timeout:              timeout,
@@ -131,14 +126,14 @@ func classifyFetchError(err error) string {
 // floor. An unparseable Expires is treated as already expired (RFC 9111
 // §5.3), which the clamp lifts to the floor.
 func documentTTL(h http.Header, now time.Time) time.Duration {
-	cc := parseCacheControl(h.Values("Cache-Control"))
-	if cc.noStore || cc.noCache || cc.private {
+	cc := securefetch.ParseCacheControl(h.Values("Cache-Control"))
+	if cc.NoStore || cc.NoCache || cc.Private {
 		return minDocumentTTL
 	}
 	ttl := minDocumentTTL
 	switch {
-	case cc.hasMaxAge:
-		ttl = cc.maxAge
+	case cc.HasMaxAge:
+		ttl = cc.MaxAge
 	case h.Get("Expires") != "":
 		if exp, err := http.ParseTime(h.Get("Expires")); err == nil {
 			ttl = exp.Sub(now)
@@ -147,41 +142,4 @@ func documentTTL(h http.Header, now time.Time) time.Duration {
 		}
 	}
 	return min(max(ttl, minDocumentTTL), maxDocumentTTL)
-}
-
-type cacheControl struct {
-	noStore, noCache, private bool
-	hasMaxAge                 bool
-	maxAge                    time.Duration
-}
-
-// parseCacheControl reads the directives documentTTL consults. A directive
-// argument on no-cache or private (a field-name list) still counts as the
-// directive. The first well-formed max-age wins; a malformed one is ignored.
-func parseCacheControl(values []string) cacheControl {
-	var cc cacheControl
-	for _, v := range values {
-		for raw := range strings.SplitSeq(v, ",") {
-			name, arg, _ := strings.Cut(strings.TrimSpace(raw), "=")
-			switch strings.ToLower(strings.TrimSpace(name)) {
-			case "no-store":
-				cc.noStore = true
-			case "no-cache":
-				cc.noCache = true
-			case "private":
-				cc.private = true
-			case "max-age":
-				if cc.hasMaxAge {
-					continue
-				}
-				secs, err := strconv.ParseInt(strings.Trim(strings.TrimSpace(arg), `"`), 10, 64)
-				if err != nil || secs < 0 {
-					continue
-				}
-				cc.hasMaxAge = true
-				cc.maxAge = time.Duration(min(secs, int64(maxDocumentTTL/time.Second))) * time.Second
-			}
-		}
-	}
-	return cc
 }

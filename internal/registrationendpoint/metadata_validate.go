@@ -84,7 +84,7 @@ func validatePolicy(
 		},
 		func() error { return validateAuthMethod(canonical.TokenEndpointAuthMethod, profile.authMethods) },
 		func() error {
-			return validateTokenEndpointAuthSigningAlg(canonical.TokenEndpointAuthSigningAlg, profile.signingAlgs)
+			return validateSigningAlg("token_endpoint_auth_signing_alg", canonical.TokenEndpointAuthSigningAlg, profile.signingAlgs)
 		},
 		func() error { return validateSubjectType(canonical.SubjectType, pairwiseEnabled) },
 		func() error {
@@ -93,7 +93,7 @@ func validatePolicy(
 		func() error { return validateRequestedScopes(canonical.Scope, iatScopes, scopes) },
 		func() error { return validateMetadataURIs(canonical, allowInsecureBackchannelLogoutForDev) },
 		func() error {
-			return validateRequestObjectSigningAlg(canonical.RequestObjectSigningAlg, profile.signingAlgs)
+			return validateSigningAlg("request_object_signing_alg", canonical.RequestObjectSigningAlg, profile.signingAlgs)
 		},
 		func() error {
 			return validateRequestObjectEncryption(canonical.RequestObjectEncryptionAlg, canonical.RequestObjectEncryptionEnc, jwePolicy)
@@ -467,19 +467,19 @@ func validateAuthMethod(m string, allowed []clientauth.Method) error {
 	}
 }
 
-func validateTokenEndpointAuthSigningAlg(alg string, allowed []internaljose.Algorithm) error {
+// validateSigningAlg checks a registered signing algorithm against the
+// library-supported set and the profile's client-signing allow-list.
+func validateSigningAlg(field, alg string, allowed []internaljose.Algorithm) error {
 	if alg == "" {
 		return nil
 	}
-	switch alg {
-	case "RS256", "PS256", "ES256", "EdDSA":
-		if !signingAlgAllowed(alg, allowed) {
-			return errInvalidClientMetadata("token_endpoint_auth_signing_alg " + alg + " is not allowed by active profile")
-		}
-		return nil
-	default:
-		return errInvalidClientMetadata("token_endpoint_auth_signing_alg " + alg + " is not supported")
+	if _, ok := internaljose.ParseAlgorithm(alg); !ok {
+		return errInvalidClientMetadata(field + " " + alg + " is not supported")
 	}
+	if !signingAlgAllowed(alg, allowed) {
+		return errInvalidClientMetadata(field + " " + alg + " is not allowed by active profile")
+	}
+	return nil
 }
 
 // validateSubjectType rejects "pairwise" when the OP was constructed
@@ -565,34 +565,7 @@ func validateBackchannelLogoutURI(raw string, allowDevLoopback bool) error {
 	if raw == "" {
 		return nil
 	}
-	if !allowDevLoopback {
-		return validateHTTPSAbsoluteURI("backchannel_logout_uri", raw)
-	}
-	u, err := url.Parse(raw)
-	if err != nil {
-		return errInvalidClientMetadata("backchannel_logout_uri is not a valid URL")
-	}
-	if !u.IsAbs() {
-		return errInvalidClientMetadata("backchannel_logout_uri must be absolute")
-	}
-	if u.Fragment != "" {
-		return errInvalidClientMetadata("backchannel_logout_uri must not contain a fragment")
-	}
-	if u.Host == "" || u.Hostname() == "" {
-		return errInvalidClientMetadata("backchannel_logout_uri must include a host")
-	}
-	if u.User != nil {
-		return errInvalidClientMetadata("backchannel_logout_uri must not contain userinfo")
-	}
-	if u.Scheme == "https" {
-		return nil
-	}
-	if u.Scheme == "http" && isLoopbackHost(u.Hostname()) {
-		return nil
-	}
-	return errInvalidClientMetadata(
-		"backchannel_logout_uri must use https (or http with a loopback host under WithAllowInsecureBackchannelLogoutForDev)",
-	)
+	return validateAbsoluteURL("backchannel_logout_uri", raw, urlRules{allowLoopbackHTTP: allowDevLoopback})
 }
 
 // isLoopbackHost reports whether host is one of the dev-mode
@@ -624,29 +597,7 @@ func validateBackchannelLogoutCoupling(m ClientMetadata) error {
 }
 
 func validateHTTPSAbsoluteURI(field, raw string) error {
-	if raw == "" {
-		return nil
-	}
-	u, err := url.Parse(raw)
-	if err != nil {
-		return errInvalidClientMetadata(field + " is not a valid URL")
-	}
-	if !u.IsAbs() {
-		return errInvalidClientMetadata(field + " must be absolute")
-	}
-	if u.Scheme != "https" {
-		return errInvalidClientMetadata(field + " must use https")
-	}
-	if u.Fragment != "" {
-		return errInvalidClientMetadata(field + " must not contain a fragment")
-	}
-	if u.Host == "" || u.Hostname() == "" {
-		return errInvalidClientMetadata(field + " must include a host")
-	}
-	if u.User != nil {
-		return errInvalidClientMetadata(field + " must not contain userinfo")
-	}
-	return nil
+	return validateAbsoluteURL(field, raw, urlRules{})
 }
 
 // validateRequestURI enforces the same https / absolute / host rules as
@@ -662,6 +613,21 @@ func validateHTTPSAbsoluteURI(field, raw string) error {
 // audit / SSRF / allowlist boundary refuses parser-confusion URLs
 // uniformly across every metadata field that accepts an https URL.
 func validateRequestURI(field, raw string) error {
+	return validateAbsoluteURL(field, raw, urlRules{allowFragment: true})
+}
+
+// urlRules selects the variations of the shared absolute-URL ladder.
+type urlRules struct {
+	// allowFragment admits a URI fragment.
+	allowFragment bool
+	// allowLoopbackHTTP admits plain http for loopback hosts and moves the
+	// scheme check after the structural checks.
+	allowLoopbackHTTP bool
+}
+
+// validateAbsoluteURL applies the https-only absolute-URL rules, varied by
+// rules. An empty raw is accepted.
+func validateAbsoluteURL(field, raw string, rules urlRules) error {
 	if raw == "" {
 		return nil
 	}
@@ -672,14 +638,22 @@ func validateRequestURI(field, raw string) error {
 	if !u.IsAbs() {
 		return errInvalidClientMetadata(field + " must be absolute")
 	}
-	if u.Scheme != "https" {
+	if !rules.allowLoopbackHTTP && u.Scheme != "https" {
 		return errInvalidClientMetadata(field + " must use https")
+	}
+	if !rules.allowFragment && u.Fragment != "" {
+		return errInvalidClientMetadata(field + " must not contain a fragment")
 	}
 	if u.Host == "" || u.Hostname() == "" {
 		return errInvalidClientMetadata(field + " must include a host")
 	}
 	if u.User != nil {
 		return errInvalidClientMetadata(field + " must not contain userinfo")
+	}
+	if rules.allowLoopbackHTTP && u.Scheme != "https" && (u.Scheme != "http" || !isLoopbackHost(u.Hostname())) {
+		return errInvalidClientMetadata(
+			field + " must use https (or http with a loopback host under WithAllowInsecureBackchannelLogoutForDev)",
+		)
 	}
 	return nil
 }
@@ -878,21 +852,6 @@ func hasEncryptionKey(keys []internaljose.JWK, requestedAlg string, policy inter
 		}
 	}
 	return false
-}
-
-func validateRequestObjectSigningAlg(alg string, allowed []internaljose.Algorithm) error {
-	if alg == "" {
-		return nil
-	}
-	switch alg {
-	case "RS256", "PS256", "ES256", "EdDSA":
-		if !signingAlgAllowed(alg, allowed) {
-			return errInvalidClientMetadata("request_object_signing_alg " + alg + " is not allowed by active profile")
-		}
-		return nil
-	default:
-		return errInvalidClientMetadata("request_object_signing_alg " + alg + " is not supported")
-	}
 }
 
 // signingAlgAllowed reports whether alg is inside the profile's

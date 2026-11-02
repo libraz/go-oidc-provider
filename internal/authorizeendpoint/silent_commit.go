@@ -84,7 +84,7 @@ func mintAndRedirect(
 			UserAgent: truncateUserAgent(r.UserAgent()),
 			Extras: map[string]any{
 				"grant_id": durableGrant.ID,
-				"scope":    append([]string(nil), req.Scope...),
+				"scope":    slices.Clone(req.Scope),
 			},
 		})
 	}
@@ -169,7 +169,7 @@ func attemptSilentAuthorization(
 		ClientID: client.ID,
 		Subject:  durableGrant.Subject,
 		GrantID:  durableGrant.ID,
-		Scope:    append([]string(nil), req.Scope...),
+		Scope:    slices.Clone(req.Scope),
 		AuthTime: reported.AuthTime,
 		ACR:      reported.ACR,
 		AMR:      slices.Clone(reported.AMR),
