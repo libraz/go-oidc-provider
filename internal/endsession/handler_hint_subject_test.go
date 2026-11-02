@@ -423,3 +423,47 @@ func TestHandler_ProjectorFailureFallsBackToConfirmation(t *testing.T) {
 		t.Errorf("session terminated despite an unusable projection: err=%v", err)
 	}
 }
+
+// TestHandler_MatchingHintWithOtherAccountsInGroupRequiresConfirmation
+// pins that a hint proving the current account does not stand in for
+// the confirmation of the other accounts a group-wide logout would take
+// down; an explicit current scope has no such side effect and is direct.
+func TestHandler_MatchingHintWithOtherAccountsInGroupRequiresConfirmation(t *testing.T) {
+	t.Parallel()
+
+	h := newHarness(t)
+	firstCookie, firstID := h.issueSession(t) // subject "user-1"
+	activeCookie, secondID := addSiblingSession(t, h, firstCookie)
+	seedGrantWithAccessToken(t, h, "g-other", "jti-other", "user-1")
+	hint := h.signIDToken(t, func(c map[string]any) { c["sub"] = "user-2" })
+
+	v := url.Values{}
+	v.Set("id_token_hint", hint)
+	v.Set("post_logout_redirect_uri", h.postLogoutURI)
+	resp := h.doGET(t, v, activeCookie)
+	body := readBody(t, resp)
+	if resp.StatusCode != http.StatusOK || !strings.Contains(body, "Confirm sign-out") {
+		t.Fatalf("status=%d want 200 confirmation page; body=%s", resp.StatusCode, body)
+	}
+	for _, id := range []string{firstID, secondID} {
+		if _, err := h.store.Sessions().Find(context.Background(), id); err != nil {
+			t.Errorf("session %s terminated without confirmation: %v", id, err)
+		}
+	}
+	if accessTokenRevoked(t, h, "jti-other") {
+		t.Error("another account's access token revoked without confirmation")
+	}
+
+	v.Set("logout_scope", "current")
+	resp = h.doGET(t, v, activeCookie)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusFound {
+		t.Fatalf("current scope: status=%d want 302", resp.StatusCode)
+	}
+	if _, err := h.store.Sessions().Find(context.Background(), secondID); !errors.Is(err, store.ErrNotFound) {
+		t.Errorf("hinted session remains after current-scope logout: %v", err)
+	}
+	if _, err := h.store.Sessions().Find(context.Background(), firstID); err != nil {
+		t.Errorf("other account's session removed by current-scope logout: %v", err)
+	}
+}

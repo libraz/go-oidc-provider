@@ -18,9 +18,10 @@
 //     id_token_hint and client_id are present they MUST agree (the
 //     "aud" of the id_token contains the client_id).
 //   - post_logout_redirect_uri (OPTIONAL): the URI the browser is
-//     redirected to after logout. MUST be exact-match preregistered
-//     for the resolved client through
-//     [op/store.Client.PostLogoutRedirectURIs].
+//     redirected to after logout. MUST match a URI preregistered for
+//     the resolved client through [op/store.Client.PostLogoutRedirectURIs]:
+//     exact match, except that a registered loopback URI also matches
+//     any port (RFC 8252 section 7.3).
 //   - state (OPTIONAL): opaque string echoed in the redirect query
 //     string when post_logout_redirect_uri is present.
 //   - logout_scope (OPTIONAL): the only accepted explicit value is

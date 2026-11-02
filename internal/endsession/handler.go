@@ -71,9 +71,8 @@ type Deps struct {
 	Origins *csrf.Allowlist
 
 	// Clock supplies the current wall-clock reading. A nil Clock
-	// falls back to [timex.SystemClock]; see [Deps.Clock]
-	// godoc for why the field exists despite the v1.0 verifier not
-	// consulting it.
+	// falls back to [timex.SystemClock]. The id_token_hint verifier
+	// reads it for its iat-age cap.
 	Clock Clock
 
 	// LocaleResolver selects the locale of the confirmation page and
@@ -376,6 +375,10 @@ func enforceCSRFGate(w http.ResponseWriter, r *http.Request, deps Deps, f flow) 
 // hint short-circuits the gate only when it names the subject the
 // session cookie authenticates.
 //
+// The match admits only when the request destroys nothing beyond the
+// hinted account (see [scopeTouchesOnlySubject]); a group-wide logout
+// that would take other accounts down needs the user's confirmation.
+//
 // Two admissions remain:
 //
 //   - The cookie proved there is no session ([sessionAbsent]). There is
@@ -405,7 +408,33 @@ func hintAuthorizesSession(ctx context.Context, deps Deps, f flow) bool {
 		return false
 	}
 	projected, ok := projectSessionSubject(ctx, deps, sess.subject, f.client)
-	return ok && projected == f.hint.subject
+	if !ok || projected != f.hint.subject {
+		return false
+	}
+	return scopeTouchesOnlySubject(ctx, deps, f)
+}
+
+// scopeTouchesOnlySubject reports whether the requested logout scope
+// destroys nothing beyond the hinted account. A current-scope request
+// removes one row; an all-scope request removes the whole chooser
+// group, so every row in it must belong to the session subject or the
+// confirmation page must speak for the other accounts. A group that
+// cannot be read counts as "touches others".
+func scopeTouchesOnlySubject(ctx context.Context, deps Deps, f flow) bool {
+	sess := f.session.fingerprint
+	if f.req.logoutScope == logoutScopeCurrent || sess.chooserGroupID == "" {
+		return true
+	}
+	group, err := deps.Sessions.SnapshotGroup(ctx, sess.chooserGroupID)
+	if err != nil {
+		return false
+	}
+	for _, row := range group {
+		if row.Subject != sess.subject {
+			return false
+		}
+	}
+	return true
 }
 
 // projectSessionSubject maps the OP-internal session subject onto the
