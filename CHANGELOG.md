@@ -112,7 +112,8 @@ claims from `Users()`; see `Changed`. An option list that passes the same
 single-valued option twice, typically a shared base list followed by an
 override, must wrap the base in `op.WithDefaults`, or `op.New` refuses to
 start. `op.WithAllowInsecureBackchannelLogoutForDev` requires a development
-issuer.
+issuer. A DynamoDB deployment must create the new `cascade_links` table (from
+`Store.TableDefinitions`) before upgrading; `ValidateSchema` requires it.
 
 ### Security
 
@@ -754,7 +755,9 @@ issuer.
   `store.SharedSignalsStore`, implemented by the in-memory, composite, SQL,
   Redis and DynamoDB adapters and covered by `contract.RunSSF`; its streams and
   events must share one backend, since a stream change moves the queued events
-  in the same operation. `op.New` refuses the feature on a store without it. The
+  in the same operation. Push delivery takes at most four SETs per stream
+  in each claim and keeps one push in flight per stream, so a slow or stalled
+  receiver does not delay the others. `op.New` refuses the feature on a store without it. The
   SQL adapter's v1.5.0 schema adds the `ssf_streams` and `ssf_events` tables,
   which `ValidateSchema` requires whether or not the feature is on; see the
   SQL migrations. `Provider.RevokeSubject` now emits session-revoked when the
@@ -858,6 +861,24 @@ covered by the SemVer promise.
   so these four event types are outside the SemVer promise.
 
 ### Fixed
+
+- On DynamoDB, revoking a grant, chain, client or subject now reaches tokens
+  and grants written moments earlier. Each write also records a link item in
+  the new `cascade_links` table, which cascades read with a strongly
+  consistent query; rows written before the upgrade are still found through
+  the secondary indexes.
+
+- Two replicas reconciling the same static client at once no longer fail
+  with a conflict on the SQL and DynamoDB adapters when the client records
+  are equivalent.
+
+- The SQL adapter's `Store.GC` no longer stops at the first failing sweep.
+  It skips every table the configuration may leave uncreated, not only PAR,
+  and returns the failures joined with the counts that did land.
+
+- `op.New` checks the refresh-token table in every configuration, since
+  revocation and introspection read it even when the `refresh_token` grant
+  is off.
 
 - A `RuleAfterFailedAttempts` captcha re-arms once failures reach its
   threshold again after a solve.
