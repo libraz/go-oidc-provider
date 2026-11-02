@@ -13,6 +13,7 @@ import (
 
 	"github.com/libraz/go-oidc-provider/internal/clientauth"
 	"github.com/libraz/go-oidc-provider/internal/jose"
+	"github.com/libraz/go-oidc-provider/internal/resourceindicator"
 	"github.com/libraz/go-oidc-provider/internal/rpjwks"
 	"github.com/libraz/go-oidc-provider/internal/timex"
 	"github.com/libraz/go-oidc-provider/internal/tokens"
@@ -76,8 +77,7 @@ func New(cfg Config) (*Verifier, error) {
 }
 
 // PeekIssuer returns the unverified iss of raw, so a caller can apply a
-// per-issuer policy (the allowed-client list) before [Verifier.Verify]
-// consumes the jti. It verifies nothing; a failure is an [*Error] with
+// per-issuer policy (the allowed-client list) before verifying it. It verifies nothing; a failure is an [*Error] with
 // [ReasonParse] or [ReasonIssuer].
 func PeekIssuer(raw string) (string, error) {
 	jws, _, err := jose.ParseSigned(raw)
@@ -88,6 +88,9 @@ func PeekIssuer(raw string) (string, error) {
 }
 
 // Verify runs the verification stages on raw for the authenticated client.
+// It does not consume the jti: the caller runs [Verifier.Consume] once every
+// refusal the client could fix by changing its request has been ruled out,
+// and before issuing anything.
 func (v *Verifier) Verify(ctx context.Context, raw string, client ClientContext) (*Result, error) {
 	// parse: compact JWS only, alg inside the project allow-list, no crit.
 	jws, _, err := jose.ParseSigned(raw)
@@ -151,11 +154,27 @@ func (v *Verifier) Verify(ctx context.Context, raw string, client ClientContext)
 		res.Scopes, res.Resources = scopes, resources
 	}
 
-	// replay: last, so only an otherwise-acceptable assertion is consumed.
-	if err := v.markJTI(ctx, issName, c); err != nil {
-		return nil, err
+	// replay: the jti's shape only; [Verifier.Consume] spends it.
+	jti, ok := stringClaim(c.raw["jti"])
+	if !ok || jti == "" || len(jti) > jose.MaxJTILen {
+		return nil, reject(ReasonReplay, errors.New("jti missing, empty, oversized or not a string"))
 	}
+	res.jti = jti
 	return res, nil
+}
+
+// Consume spends the jti of an assertion [Verifier.Verify] accepted. A jti
+// already spent is an [*Error] with [ReasonReplay]; any other store failure
+// is a server-side fault.
+func (v *Verifier) Consume(ctx context.Context, res *Result) error {
+	key := clientauth.ReplayKey(replayKeyPrefix, res.Subject.Issuer, res.jti)
+	if err := v.jtis.Mark(ctx, key, res.ExpiresAt.Add(leeway)); err != nil {
+		if errors.Is(err, store.ErrAlreadyConsumed) {
+			return reject(ReasonReplay, errors.New("jti already consumed"))
+		}
+		return fmt.Errorf("assertiongrant: jti store: %w", err)
+	}
+	return nil
 }
 
 func reject(reason Reason, err error) *Error {
@@ -370,8 +389,9 @@ func checkIDJAGScope(raw json.RawMessage, client ClientContext) ([]string, error
 	return scopes, nil
 }
 
-// checkIDJAGResource parses the optional resource claim and requires every
-// value to be registered for the client.
+// checkIDJAGResource parses the optional resource claim, requires every
+// value to be registered for the client under the RFC 8707 comparison the
+// rest of the OP uses, and returns the values in canonical form.
 func checkIDJAGResource(raw json.RawMessage, client ClientContext) ([]string, error) {
 	if raw == nil {
 		return nil, nil
@@ -380,12 +400,15 @@ func checkIDJAGResource(raw json.RawMessage, client ClientContext) ([]string, er
 	if err != nil {
 		return nil, fmt.Errorf("resource: %w", err)
 	}
+	canonical := make([]string, 0, len(rs))
 	for _, r := range rs {
-		if !slices.Contains(client.Resources, r) {
+		canon, err := resourceindicator.Canonicalize(r)
+		if err != nil || !resourceindicator.Contains(client.Resources, canon) {
 			return nil, fmt.Errorf("resource %q is not registered for the client", r)
 		}
+		canonical = append(canonical, canon)
 	}
-	return rs, nil
+	return canonical, nil
 }
 
 // checkConfirmation requires cnf to carry exactly one method, jkt or
@@ -416,23 +439,6 @@ func checkConfirmation(raw json.RawMessage, b Binding) error {
 	}
 	if want == "" || got != want {
 		return fmt.Errorf("cnf.%s does not match the request binding", method)
-	}
-	return nil
-}
-
-// markJTI consumes the assertion's jti. A store failure other than replay is
-// a server-side fault and is returned unwrapped by [*Error].
-func (v *Verifier) markJTI(ctx context.Context, iss string, c *claims) error {
-	jti, ok := stringClaim(c.raw["jti"])
-	if !ok || jti == "" || len(jti) > jose.MaxJTILen {
-		return reject(ReasonReplay, errors.New("jti missing, empty, oversized or not a string"))
-	}
-	key := clientauth.ReplayKey(replayKeyPrefix, iss, jti)
-	if err := v.jtis.Mark(ctx, key, c.exp.Add(leeway)); err != nil {
-		if errors.Is(err, store.ErrAlreadyConsumed) {
-			return reject(ReasonReplay, errors.New("jti already consumed"))
-		}
-		return fmt.Errorf("assertiongrant: jti store: %w", err)
 	}
 	return nil
 }

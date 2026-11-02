@@ -103,18 +103,22 @@ type Result struct {
 	// Scopes is the ID-JAG scope claim split on spaces; nil when absent or
 	// under [ProfileJWT].
 	Scopes []string
-	// Resources is the ID-JAG resource claim; nil when absent or under
-	// [ProfileJWT].
+	// Resources is the ID-JAG resource claim in RFC 8707 canonical form;
+	// nil when absent or under [ProfileJWT].
 	Resources []string
 	// ExpiresAt is the assertion's exp.
 	ExpiresAt time.Time
+
+	// jti is the identifier [Verifier.Consume] spends.
+	jti string
 }
 
 // Reason names the verification stage that rejected an assertion. It is the
 // reason the jwt_bearer.rejected audit event carries.
 type Reason string
 
-// The verification stages, in the order [Verifier.Verify] runs them.
+// The verification stages, in the order [Verifier.Verify] and
+// [Verifier.Consume] run them.
 const (
 	ReasonParse     Reason = "parse"
 	ReasonIssuer    Reason = "issuer"

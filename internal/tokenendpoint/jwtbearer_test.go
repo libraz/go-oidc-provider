@@ -673,3 +673,77 @@ func TestJWTBearer_NotConfigured_UnsupportedGrantType(t *testing.T) {
 
 	jbExpectError(t, f.post(t, jbClient, jbForm(f.plain(t, "alice"))), http.StatusBadRequest, "unsupported_grant_type")
 }
+
+// A request the client can correct by changing its parameters leaves the
+// assertion redeemable: the resource selection is settled before the jti
+// is spent.
+func TestJWTBearer_CorrectableResourceKeepsAssertion(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name    string
+		claim   any
+		refused string
+	}{
+		{name: "request outside claim", claim: jbAPI, refused: jbOther},
+		{name: "several claimed, none selected", claim: []string{jbAPI, jbOther}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			f := newJBFixture(t)
+			claims := f.idjagClaims("alice")
+			claims["resource"] = tc.claim
+			assertion := f.idjag(t, claims)
+
+			form := jbForm(assertion)
+			if tc.refused != "" {
+				form.Set("resource", tc.refused)
+			}
+			jbExpectError(t, f.post(t, jbClient, form), http.StatusBadRequest, "invalid_target")
+			_, at := f.expectOK(t, f.post(t, jbClient, jbForm(assertion, "resource", jbAPI)))
+			if len(at.Audience) != 1 || at.Audience[0] != jbAPI {
+				t.Errorf("aud = %v, want [%s]", at.Audience, jbAPI)
+			}
+		})
+	}
+}
+
+// An ID-JAG scope claim sharing nothing with the client's registration
+// narrows to nothing, which is invalid_scope rather than an empty token.
+func TestJWTBearer_IDJAGScopeDisjointFromRegistration_InvalidScope(t *testing.T) {
+	t.Parallel()
+	f := newJBFixture(t)
+	claims := f.idjagClaims("alice")
+	claims["scope"] = "admin"
+
+	rec := f.post(t, jbClient, jbForm(f.idjag(t, claims)))
+	jbExpectError(t, rec, http.StatusBadRequest, "invalid_scope")
+	if _, has := jbBody(t, rec)["access_token"]; has {
+		t.Error("an empty scope set must not be issued")
+	}
+	f.expectRejectedReason(t, "scope")
+}
+
+// A resource claim spelled differently from the registration (host case,
+// trailing slash) names the same RFC 8707 resource, and the audience the
+// token carries is the canonical form whichever path selected it.
+func TestJWTBearer_IDJAGResourceClaimComparedCanonically(t *testing.T) {
+	t.Parallel()
+	const spelled = "https://API.example.com/mcp/"
+	for name, extra := range map[string][]string{
+		"claim becomes audience":     nil,
+		"parameter selects claim":    {"resource", jbAPI},
+		"parameter spelled as claim": {"resource", spelled},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			f := newJBFixture(t)
+			claims := f.idjagClaims("alice")
+			claims["resource"] = spelled
+			_, at := f.expectOK(t, f.post(t, jbClient, jbForm(f.idjag(t, claims), extra...)))
+			if len(at.Audience) != 1 || at.Audience[0] != jbAPI {
+				t.Errorf("aud = %v, want [%s]", at.Audience, jbAPI)
+			}
+		})
+	}
+}

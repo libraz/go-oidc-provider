@@ -41,14 +41,13 @@ const (
 )
 
 // jwtBearerRequest is the request state gathered before the assertion is
-// verified, so a request the client can fix never consumes the assertion's
-// single-use jti.
+// verified. A request the client can fix never consumes the assertion's
+// single-use jti: every such refusal runs before [assertiongrant.Verifier.Consume].
 type jwtBearerRequest struct {
 	client    *store.Client
 	assertion string
 	issuer    string
 	requested []string
-	scope     []string
 	resource  string
 	binding   tokenBinding
 }
@@ -72,13 +71,17 @@ func handleJWTBearer(w http.ResponseWriter, r *http.Request, deps Deps) {
 	if !ok {
 		return
 	}
-	subject, ok := resolveJWTBearerSubject(ctx, w, deps, req, result)
+	scope, resource, ok := narrowToAssertion(ctx, w, deps, req, result)
 	if !ok {
 		return
 	}
-	scope, resource, ok := narrowToAssertion(w, req, result)
+	// Spent before the resolver runs, so a replay never reaches it.
+	if err := deps.JWTBearer.Consume(ctx, result); err != nil {
+		writeAssertionRejection(ctx, w, deps, req.client.ID, req.issuer, err)
+		return
+	}
+	subject, ok := resolveJWTBearerSubject(ctx, w, deps, req, result)
 	if !ok {
-		emitJWTBearerRejected(ctx, deps, req.client.ID, req.issuer, jwtBearerReasonResource)
 		return
 	}
 	issueJWTBearerResponse(ctx, w, deps, req, result, subject, scope, resource)
@@ -86,7 +89,7 @@ func handleJWTBearer(w http.ResponseWriter, r *http.Request, deps Deps) {
 
 // acceptJWTBearerRequest runs every check that needs no verified assertion:
 // client authentication and grant registration, the public-client refusal,
-// the per-issuer client allow-list, scope and resource against the client's
+// the per-issuer client allow-list, the resource against the client's
 // registration, and the request's sender constraint.
 func acceptJWTBearerRequest(
 	ctx context.Context,
@@ -161,11 +164,10 @@ func admitAssertionIssuer(
 	return issuer, true
 }
 
-// applyJWTBearerRequestScope resolves the scope and resource parameters
-// against the client's registration. The requested scope is narrowed to the
-// registered set and "openid" is dropped (no id_token is issued); an absent
-// scope falls back to the registered set. A resource indicator must be
-// registered for the client.
+// applyJWTBearerRequestScope parses the scope and resource parameters. A
+// resource indicator must be registered for the client; "openid" is dropped
+// from the scope (no id_token is issued), which [narrowToAssertion] narrows
+// once the assertion's own scope claim is known.
 func applyJWTBearerRequestScope(
 	ctx context.Context,
 	w http.ResponseWriter,
@@ -182,31 +184,12 @@ func applyJWTBearerRequestScope(
 		emitJWTBearerRejected(ctx, deps, req.client.ID, req.issuer, jwtBearerReasonResource)
 		return false
 	}
-	requested = oidcscope.WithoutOpenID(requested)
-	var scope []string
-	if len(requested) == 0 {
-		scope = oidcscope.WithoutOpenID(req.client.Scopes)
-	} else {
-		scope = slices.DeleteFunc(slices.Clone(requested), func(s string) bool {
-			return !slices.Contains(req.client.Scopes, s)
-		})
-		if len(scope) == 0 {
-			emitJWTBearerRejected(ctx, deps, req.client.ID, req.issuer, jwtBearerReasonScope)
-			endpointsupport.WriteOAuthError(w, http.StatusBadRequest, errInvalidScope,
-				"requested scope exceeds the client's registered set")
-			return false
-		}
-	}
-	if !checkTokenScopeAllowlist(w, deps, req.client.ID, scope) {
-		emitJWTBearerRejected(ctx, deps, req.client.ID, req.issuer, jwtBearerReasonScope)
-		return false
-	}
-	req.requested, req.scope, req.resource = requested, scope, resource
+	req.requested, req.resource = oidcscope.WithoutOpenID(requested), resource
 	return true
 }
 
-// verifyJWTBearerAssertion runs the verifier and maps its outcome onto the
-// wire: an assertion defect is invalid_grant, a transient issuer key-source
+// verifyJWTBearerAssertion runs the verifier, which leaves the jti unspent,
+// and maps its outcome onto the wire: an assertion defect is invalid_grant, a transient issuer key-source
 // outage is 503 as on the client_assertion path, anything else is
 // server_error.
 func verifyJWTBearerAssertion(
@@ -231,8 +214,8 @@ func verifyJWTBearerAssertion(
 	return result, true
 }
 
-// writeAssertionRejection answers an error from [assertiongrant.PeekIssuer]
-// or [assertiongrant.Verifier.Verify].
+// writeAssertionRejection answers an error from [assertiongrant.PeekIssuer],
+// [assertiongrant.Verifier.Verify] or [assertiongrant.Verifier.Consume].
 func writeAssertionRejection(ctx context.Context, w http.ResponseWriter, deps Deps, clientID, issuer string, err error) {
 	var rejected *assertiongrant.Error
 	switch {
@@ -287,26 +270,44 @@ func resolveJWTBearerSubject(
 	return subject, true
 }
 
-// narrowToAssertion applies the ID-JAG scope and resource claims to the
-// registration-checked request. The verifier already holds the requested
-// scope to the scope claim and every claimed resource to the client's
+// narrowToAssertion settles the issued scope and audience from the request,
+// the client's registration and the verified assertion, and refuses what the
+// client could fix by changing its request. It runs before the jti is spent.
+//
+// The scope is the requested set, or the registered set when none was
+// requested, narrowed to the registration and to an ID-JAG scope claim; an
+// empty result is invalid_scope. The verifier already holds a requested scope
+// to the claim and every claimed resource, in canonical form, to the
 // registration. With a resource parameter it must be one the claim names;
 // without one the claim's resource becomes the audience, and a claim naming
 // several needs the parameter to pick one (this endpoint issues a single
-// audience). An absent scope parameter is narrowed to the scope claim.
-func narrowToAssertion(w http.ResponseWriter, req *jwtBearerRequest, result *assertiongrant.Result) ([]string, string, bool) {
-	scope, resource := req.scope, req.resource
-	if result.Scopes != nil && len(req.requested) == 0 {
-		scope = slices.DeleteFunc(slices.Clone(scope), func(s string) bool {
-			return !slices.Contains(result.Scopes, s)
-		})
+// audience). Returns false when a response has been written.
+func narrowToAssertion(
+	ctx context.Context,
+	w http.ResponseWriter,
+	deps Deps,
+	req *jwtBearerRequest,
+	result *assertiongrant.Result,
+) ([]string, string, bool) {
+	scope := narrowJWTBearerScope(req.requested, req.client.Scopes, result.Scopes)
+	if len(scope) == 0 {
+		emitJWTBearerRejected(ctx, deps, req.client.ID, req.issuer, jwtBearerReasonScope)
+		endpointsupport.WriteOAuthError(w, http.StatusBadRequest, errInvalidScope,
+			"no requested scope is both registered for the client and granted by the assertion")
+		return nil, "", false
 	}
+	if !checkTokenScopeAllowlist(w, deps, req.client.ID, scope) {
+		emitJWTBearerRejected(ctx, deps, req.client.ID, req.issuer, jwtBearerReasonScope)
+		return nil, "", false
+	}
+	resource := req.resource
 	if len(result.Resources) == 0 {
 		return scope, resource, true
 	}
 	switch {
 	case resource != "":
 		if !resourceindicator.Contains(result.Resources, resource) {
+			emitJWTBearerRejected(ctx, deps, req.client.ID, req.issuer, jwtBearerReasonResource)
 			endpointsupport.WriteOAuthError(w, http.StatusBadRequest, errInvalidTarget,
 				"resource indicator is not granted by the assertion")
 			return nil, "", false
@@ -314,11 +315,25 @@ func narrowToAssertion(w http.ResponseWriter, req *jwtBearerRequest, result *ass
 	case len(result.Resources) == 1:
 		resource = result.Resources[0]
 	default:
+		emitJWTBearerRejected(ctx, deps, req.client.ID, req.issuer, jwtBearerReasonResource)
 		endpointsupport.WriteOAuthError(w, http.StatusBadRequest, errInvalidTarget,
 			"the assertion names several resources: a resource parameter must select one")
 		return nil, "", false
 	}
 	return scope, resource, true
+}
+
+// narrowJWTBearerScope is the one place the jwt-bearer scope is narrowed:
+// requested (or, when empty, registered without "openid") kept to what is
+// registered and, when the assertion carries a scope claim, to what it grants.
+func narrowJWTBearerScope(requested, registered, claimed []string) []string {
+	base := requested
+	if len(base) == 0 {
+		base = oidcscope.WithoutOpenID(registered)
+	}
+	return slices.DeleteFunc(slices.Clone(base), func(s string) bool {
+		return !slices.Contains(registered, s) || (claimed != nil && !slices.Contains(claimed, s))
+	})
 }
 
 // issueJWTBearerResponse mints the access token and writes the success

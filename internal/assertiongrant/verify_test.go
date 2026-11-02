@@ -394,16 +394,60 @@ func TestVerify_NonASCIISubjectPassesVerbatim(t *testing.T) {
 	}
 }
 
+// verifyAndConsume runs both halves of a redemption.
+func verifyAndConsume(ctx context.Context, f *fixture, raw string, client assertiongrant.ClientContext) error {
+	res, err := f.verifier.Verify(ctx, raw, client)
+	if err != nil {
+		return err
+	}
+	return f.verifier.Consume(ctx, res)
+}
+
 func TestVerify_RejectsReusedJTI(t *testing.T) {
 	t.Parallel()
 	f := newFixture(t)
 	raw := sign(t, baseAssertion(assertiongrant.ProfileJWT, f.key))
-	if _, err := f.verifier.Verify(context.Background(), raw, baseClient()); err != nil {
-		t.Fatalf("first Verify: %v", err)
+	if err := verifyAndConsume(context.Background(), f, raw, baseClient()); err != nil {
+		t.Fatalf("first redemption: %v", err)
 	}
-	_, err := f.verifier.Verify(context.Background(), raw, baseClient())
+	err := verifyAndConsume(context.Background(), f, raw, baseClient())
 	if got := reasonOf(err); got != assertiongrant.ReasonReplay {
-		t.Fatalf("second Verify reason = %q (err %v), want replay", got, err)
+		t.Fatalf("second redemption reason = %q (err %v), want replay", got, err)
+	}
+}
+
+// TestVerify_LeavesJTIUnspent pins that verification alone consumes nothing,
+// so a caller can still refuse a correctable request before Consume.
+func TestVerify_LeavesJTIUnspent(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t)
+	raw := sign(t, baseAssertion(assertiongrant.ProfileJWT, f.key))
+	for i := range 2 {
+		if _, err := f.verifier.Verify(context.Background(), raw, baseClient()); err != nil {
+			t.Fatalf("Verify #%d: %v", i+1, err)
+		}
+	}
+	if err := verifyAndConsume(context.Background(), f, raw, baseClient()); err != nil {
+		t.Fatalf("redemption after verification only: %v", err)
+	}
+}
+
+// TestVerify_IDJAGResourceComparedCanonically pins that a resource claim
+// spelled differently from the registration (host case, trailing slash) is
+// the same RFC 8707 resource, and is reported in canonical form.
+func TestVerify_IDJAGResourceComparedCanonically(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t)
+	for _, spelled := range []string{"https://API.example.com", "https://api.example.com/", "HTTPS://api.example.com:443"} {
+		a := baseAssertion(assertiongrant.ProfileIDJAG, f.key)
+		a.claims["resource"] = spelled
+		res, err := f.verifier.Verify(context.Background(), sign(t, a), baseClient())
+		if err != nil {
+			t.Fatalf("resource %q: %v", spelled, err)
+		}
+		if len(res.Resources) != 1 || res.Resources[0] != apiRes {
+			t.Errorf("resource %q: Resources = %v, want [%s]", spelled, res.Resources, apiRes)
+		}
 	}
 }
 
@@ -420,8 +464,8 @@ func TestVerify_ReplayKeyIsIssuerScopedAndSeparateFromClientAssertions(t *testin
 	jag := baseAssertion(assertiongrant.ProfileIDJAG, f.key)
 	jag.claims["jti"] = "shared"
 	for _, a := range []*assertion{plain, jag} {
-		if _, err := f.verifier.Verify(ctx, sign(t, a), baseClient()); err != nil {
-			t.Fatalf("Verify %s: %v", a.claims["iss"], err)
+		if err := verifyAndConsume(ctx, f, sign(t, a), baseClient()); err != nil {
+			t.Fatalf("redeem %s: %v", a.claims["iss"], err)
 		}
 	}
 	for _, key := range []string{
@@ -435,7 +479,8 @@ func TestVerify_ReplayKeyIsIssuerScopedAndSeparateFromClientAssertions(t *testin
 	}
 }
 
-// TestVerify_RejectedAssertionDoesNotConsumeJTI pins that replay runs last.
+// TestVerify_RejectedAssertionDoesNotConsumeJTI pins that a rejected
+// assertion leaves its jti redeemable.
 func TestVerify_RejectedAssertionDoesNotConsumeJTI(t *testing.T) {
 	t.Parallel()
 	f := newFixture(t)
@@ -445,8 +490,8 @@ func TestVerify_RejectedAssertionDoesNotConsumeJTI(t *testing.T) {
 	if _, err := f.verifier.Verify(context.Background(), sign(t, a), client); reasonOf(err) != assertiongrant.ReasonIDJAG {
 		t.Fatalf("mismatched client: err = %v, want idjag", err)
 	}
-	if _, err := f.verifier.Verify(context.Background(), sign(t, a), baseClient()); err != nil {
-		t.Fatalf("Verify after a rejected attempt: %v", err)
+	if err := verifyAndConsume(context.Background(), f, sign(t, a), baseClient()); err != nil {
+		t.Fatalf("redemption after a rejected attempt: %v", err)
 	}
 }
 
