@@ -497,7 +497,8 @@ func checkLoginFlowRuleKinds(flow LoginFlow) error {
 // installed, so the embedder's SPA owns rendering: it reads each prompt
 // as JSON from LoginMount/state/{uid}. The RP-Initiated Logout pages stay
 // server-rendered ([WithLogoutUI] restyles them). Mutually exclusive with
-// [WithConsentUI]; supplying both fails [New].
+// [WithConsentUI]; supplying both fails [New], unless one of the two is
+// wrapped in [WithDefaults], in which case the explicit one wins.
 //
 // The front end is fully replaceable, so the wire contract it has to
 // implement is part of this option's surface rather than a property of
@@ -521,7 +522,7 @@ func WithSPAUI(ui SPAUI) Option {
 		if err := c.claimOnce("WithSPAUI"); err != nil {
 			return err
 		}
-		if err := checkSPAUIPrecondition(c); err != nil {
+		if err := c.claimExclusive("WithSPAUI", "WithConsentUI"); err != nil {
 			return err
 		}
 		if err := validateSPAUIMounts(ui); err != nil {
@@ -569,26 +570,6 @@ func normalizeUICSP(option, policy string) (string, error) {
 	return normalized, nil
 }
 
-// checkSPAUIPrecondition rejects repeated [WithSPAUI] calls and the
-// [WithConsentUI] mutual-exclusion case. Split out so [WithSPAUI]
-// stays under the gocognit ceiling now that mount / StaticDir checks
-// also live in helpers.
-//
-// The chooser↔SPA combination is permitted: mode treats the chooser
-// HTML template as silently shadowed by the SPA's JSON state
-// envelope. [WithSPAUI] / [WithChooserUI] coordinate the
-// `chooserUIShadowedBySPA` flag so [config.applyDefaults] can emit a
-// single structured warning regardless of option order.
-func checkSPAUIPrecondition(c *config) error {
-	if c.spaUISet {
-		return newConfigurationError("WithSPAUI may be called at most once", nil)
-	}
-	if c.consentUISet {
-		return newConfigurationError("WithSPAUI is mutually exclusive with WithConsentUI", nil)
-	}
-	return nil
-}
-
 // validateSPAUIMounts enforces the LoginMount-required and
 // "every mount path begins with /" rules. The error message names the
 // offending field so an embedder fixes the right line in their boot
@@ -632,7 +613,9 @@ func validateSPAUIStaticDir(dir string) error {
 
 // WithConsentUI registers the [ConsentUI] template the HTML driver
 // uses for the consent screen. Mutually exclusive with [WithSPAUI];
-// supplying both fails [New] with a structured configuration error.
+// supplying both fails [New] with a structured configuration error,
+// unless one of the two is wrapped in [WithDefaults], in which case the
+// explicit one wins.
 // Validation:
 //   - Template MUST be non-nil.
 //   - ContentSecurityPolicy, when set, MUST pass
@@ -645,8 +628,8 @@ func WithConsentUI(ui ConsentUI) Option {
 		if err := c.claimOnce("WithConsentUI"); err != nil {
 			return err
 		}
-		if c.spaUISet {
-			return newConfigurationError("WithConsentUI is mutually exclusive with WithSPAUI", nil)
+		if err := c.claimExclusive("WithConsentUI", "WithSPAUI"); err != nil {
+			return err
 		}
 		if ui.Template == nil {
 			return newConfigurationError("WithConsentUI: Template must not be nil", nil)

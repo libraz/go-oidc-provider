@@ -49,6 +49,7 @@ func TestWithMountPrefix_Validates(t *testing.T) {
 		{"duplicate slash", "/oidc//tenant", true},
 		{"serve mux wildcard", "/oidc/{tenant}", true},
 		{"percent encoded alias", "/%6fidc", true},
+		{"space", "/my prefix", true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -91,6 +92,8 @@ func TestWithEndpoints_RejectsMalformedPaths(t *testing.T) {
 		{name: "trailing slash", endpoints: op.Endpoints{Token: "/token/"}, wantField: "Token"},
 		{name: "unclean", endpoints: op.Endpoints{Token: "/token//nested"}, wantField: "Token"}, //nolint:gosec // URL path test input, not a credential.
 		{name: "serve mux wildcard", endpoints: op.Endpoints{Token: "/token/{id}"}, wantField: "Token"},
+		{name: "space", endpoints: op.Endpoints{Token: "/to ken"}, wantField: "Token"},
+		{name: "tab", endpoints: op.Endpoints{Token: "/to\tken"}, wantField: "Token"},
 		{name: "percent encoded alias", endpoints: op.Endpoints{Token: "/%74oken"}, wantField: "Token"},
 	}
 	for _, tc := range cases {
@@ -952,4 +955,13 @@ func fetchDiscoveryRaw(t *testing.T, handler http.Handler) map[string]any {
 		t.Fatalf("decode discovery body: %v (body=%q)", err, rec.Body.String())
 	}
 	return doc
+}
+
+func TestNew_RejectsIssuerPathWithSpace(t *testing.T) {
+	t.Parallel()
+
+	opts := append(validBaseOpts(t), op.WithIssuer("https://op.example.com/a b"))
+	if _, err := op.New(opts...); err == nil {
+		t.Fatal("op.New accepted an issuer whose path contains a space")
+	}
 }

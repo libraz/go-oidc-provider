@@ -907,6 +907,30 @@ func (c *config) claimSlot(slot, option string) error {
 	return newConfigurationError(option+" conflicts with prior "+prior.option, nil)
 }
 
+// claimFlag is [config.claimSlot] for a zero-argument option: repeating the
+// same option is an idempotent no-op, while a different option sharing the
+// slot still conflicts.
+func (c *config) claimFlag(slot, option string) error {
+	if prior, taken := c.claimed[slot]; taken && prior.option == option && c.applyingDefaults == prior.fallback {
+		return nil
+	}
+	return c.claimSlot(slot, option)
+}
+
+// claimExclusive fails when other, a mutually exclusive option, was already
+// applied. A default yields to an explicit other with errShadowedDefault;
+// otherwise the two conflict.
+func (c *config) claimExclusive(option, other string) error {
+	prior, taken := c.claimed[other]
+	if !taken {
+		return nil
+	}
+	if c.applyingDefaults && !prior.fallback {
+		return errShadowedDefault
+	}
+	return newConfigurationError(option+" is mutually exclusive with "+other, nil)
+}
+
 // defaultsOption is the [Option] [WithDefaults] returns.
 type defaultsOption struct{ opts []Option }
 
@@ -1204,8 +1228,8 @@ func WithPrometheus(registry *prometheus.Registry) Option {
 // lifecycle (when to flip from idle to rotating, when to flip back)
 // remains the embedder's responsibility.
 //
-// Repeated calls are last-wins so a supervisor can swap predicates
-// without rebuilding earlier option lists.
+// Single-valued: a second call fails [New]. Wrap the option in
+// [WithDefaults] to let an explicit predicate replace a default one.
 //
 // Stable since v1.0.
 func WithJWKSRotationActive(predicate func() bool) Option {

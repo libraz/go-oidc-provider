@@ -48,6 +48,7 @@ func (c *config) validate() error {
 		c.validateDeviceCodeGrant,
 		c.validateCIBAGrant,
 		c.validateJWTBearerGrant,
+		c.validateSessionDurabilityPosture,
 		c.validateEncryptionKeyset,
 		c.validateStaticClients,
 		c.validateStoreCapabilities,

@@ -32,12 +32,13 @@ func (c *config) BackchannelAllowsPrivateNetwork() bool {
 // deliverer level only; the other fetchers keep their own
 // WithAllowPrivateNetwork* flags ([WithAllowPrivateNetworkJWKS],
 // [WithAllowPrivateNetworkJAR], ...) so private-network access granted
-// to one never widens another.
+// to one never widens another. Repeating the option is a no-op; combining
+// it with [WithBackchannelAllowPrivateNetwork] fails [New].
 //
 // Stable since v1.5.
 func WithAllowPrivateNetworkBackchannel() Option {
 	return optionFunc(func(c *config) error {
-		if err := c.claimSlot(slotBackchannelAllowPrivateNetwork, "WithAllowPrivateNetworkBackchannel"); err != nil {
+		if err := c.claimFlag(slotBackchannelAllowPrivateNetwork, "WithAllowPrivateNetworkBackchannel"); err != nil {
 			return err
 		}
 		c.backchannelAllowPrivateNetwork = true

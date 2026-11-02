@@ -249,6 +249,20 @@ func WithSessionDurabilityPosture(p SessionDurabilityPosture) Option {
 	})
 }
 
+// validateSessionDurabilityPosture rejects a declared posture outside the
+// two defined values.
+func (c *config) validateSessionDurabilityPosture() error {
+	if !c.sessionDurabilityPostureSet {
+		return nil
+	}
+	switch c.sessionDurabilityPosture {
+	case SessionDurabilityVolatile, SessionDurabilityDurable:
+		return nil
+	default:
+		return newConfigurationError("WithSessionDurabilityPosture: posture is not a defined SessionDurabilityPosture", nil)
+	}
+}
+
 // sessionStoreDurable reports the session store's own durability claim;
 // reported is false when the store does not implement the capability.
 func (c *config) sessionStoreDurable() (durable, reported bool) {

@@ -103,7 +103,7 @@ func validateConfiguredRoutePath(name, value string, allowRoot bool) error {
 		return newConfigurationError(description, nil)
 	}
 	for _, r := range value {
-		if r < ' ' || r == 0x7f {
+		if r <= ' ' || r == 0x7f {
 			return newConfigurationError(description, nil)
 		}
 	}

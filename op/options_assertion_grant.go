@@ -6,6 +6,7 @@ import (
 	"strconv"
 
 	"github.com/libraz/go-oidc-provider/internal/nilcheck"
+	"github.com/libraz/go-oidc-provider/internal/rpjwks"
 	"github.com/libraz/go-oidc-provider/op/grant"
 )
 
@@ -145,12 +146,21 @@ func (c *config) validateAssertionIssuer(i int, iss AssertionIssuer) error {
 		return newConfigurationError(prefix+" must set exactly one of JWKSURI and JWKS", nil)
 	case iss.JWKSURI != "" && !isHTTPSURL(iss.JWKSURI):
 		return newConfigurationError(prefix+".JWKSURI must be an absolute https URL", nil)
+	case len(iss.JWKS) > 0 && !inlineJWKSUsable(iss.JWKS):
+		return newConfigurationError(prefix+".JWKS must parse as a JWK Set with at least one supported key", nil)
 	case len(iss.AllowedClients) == 0:
 		return newConfigurationError(prefix+".AllowedClients must name at least one client_id", nil)
 	case slices.Contains(iss.AllowedClients, ""):
 		return newConfigurationError(prefix+".AllowedClients must not contain an empty client_id", nil)
 	}
 	return nil
+}
+
+// inlineJWKSUsable reports whether raw parses as a JWK Set that keeps at
+// least one key this build can verify with.
+func inlineJWKSUsable(raw []byte) bool {
+	keys, err := rpjwks.ParseKeySet(raw)
+	return err == nil && len(keys.Keys) > 0
 }
 
 // isHTTPSURL reports whether raw parses as an absolute https URL with a

@@ -12,13 +12,17 @@ import (
 
 const testAssertionIssuer = "https://partner-idp.example.com"
 
+// testAssertionJWKS is a one-key JWK Set (RFC 7517 appendix A.1 P-256 key).
+const testAssertionJWKS = `{"keys":[{"kty":"EC","crv":"P-256","kid":"k1","use":"sig",` +
+	`"x":"MKBCTNIcKUSDii11ySs3526iDZ8AiTo7Tu6KPAqv7D4","y":"4Etl6SRW2YiLUrN5vfvVHuhp7x8PxltmWWlbbM4IFyM"}]}`
+
 // validJWTBearerGrant returns a trust declaration every rung of
 // validateJWTBearerGrant accepts; the rejection cases each break one field.
 func validJWTBearerGrant() op.JWTBearerGrant {
 	return op.JWTBearerGrant{
 		Issuers: []op.AssertionIssuer{{
 			Issuer:         testAssertionIssuer,
-			JWKS:           []byte(`{"keys":[]}`),
+			JWKS:           []byte(testAssertionJWKS),
 			AllowedClients: []string{"client-a"},
 		}},
 		ResolveSubject: func(context.Context, op.AssertionSubject) (string, error) {
@@ -83,6 +87,8 @@ func TestWithJWTBearerGrant_RejectsInvalidTrustDeclaration(t *testing.T) {
 		{"empty_allowed_client_id", func(g *op.JWTBearerGrant) {
 			g.Issuers[0].AllowedClients = []string{"client-a", ""}
 		}, "AllowedClients must not contain an empty client_id"},
+		{"unparseable_jwks", func(g *op.JWTBearerGrant) { g.Issuers[0].JWKS = []byte("not json") }, "Issuers[0].JWKS must parse"},
+		{"empty_jwks", func(g *op.JWTBearerGrant) { g.Issuers[0].JWKS = []byte(`{"keys":[]}`) }, "Issuers[0].JWKS must parse"},
 		{"undefined_profile", func(g *op.JWTBearerGrant) {
 			g.Issuers[0].Profile = op.AssertionProfile(99)
 		}, "Profile is not a defined AssertionProfile"},

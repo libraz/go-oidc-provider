@@ -48,14 +48,12 @@ func WithSharedSignals() Option {
 // endpoints for SSF receivers, the counterpart of
 // [WithAllowPrivateNetworkBackchannel]. The default refuses them so a
 // receiver cannot aim signed SETs at an internal service. Cloud metadata
-// addresses stay refused whatever the value.
+// addresses stay refused whatever the value. Repeating the option is a
+// no-op.
 //
 // Stable since v1.5.
 func WithAllowPrivateNetworkSharedSignals() Option {
 	return optionFunc(func(c *config) error {
-		if err := c.claimOnce("WithAllowPrivateNetworkSharedSignals"); err != nil {
-			return err
-		}
 		c.sharedSignalsAllowPrivateNetwork = true
 		return nil
 	})
