@@ -152,14 +152,14 @@ func rotateAndUpdate(
 	rawRAT, err := keys.RandomBase64URL(ratBytes)
 	if err != nil {
 		deps.logger().Error("dcr.rat.generate_failed", "err", err, "client_id", existing.ID)
-		endpointsupport.WriteOAuthError(w, http.StatusInternalServerError, endpointsupport.ErrServerError, "")
+		endpointsupport.WriteServerError(w)
 		return rotatedRegistration{}, false
 	}
 	confidential := isConfidentialAuthMethod(m.TokenEndpointAuthMethod)
 	rawSecret, secretHash, err := secretMaterialForUpdate(existing, confidential, deps.HighEntropyClientSecrets)
 	if err != nil {
 		deps.logger().Error("dcr.client_secret.generate_failed", "err", err, "client_id", existing.ID)
-		endpointsupport.WriteOAuthError(w, http.StatusInternalServerError, endpointsupport.ErrServerError, "")
+		endpointsupport.WriteServerError(w)
 		return rotatedRegistration{}, false
 	}
 	updated := applyMetadataToClient(existing, m, secretHash)
@@ -173,7 +173,7 @@ func rotateAndUpdate(
 			return rotatedRegistration{}, false
 		}
 		deps.logger().Error("dcr.client.update_failed", "err", err, "client_id", existing.ID)
-		endpointsupport.WriteOAuthError(w, http.StatusInternalServerError, endpointsupport.ErrServerError, "")
+		endpointsupport.WriteServerError(w)
 		return rotatedRegistration{}, false
 	}
 	now := deps.now().UTC()
@@ -198,7 +198,7 @@ func rotateAndUpdate(
 			deps.logger().Error("dcr.client.update_rollback_failed",
 				"err", rollbackErr, "client_id", existing.ID)
 		}
-		endpointsupport.WriteOAuthError(w, http.StatusInternalServerError, endpointsupport.ErrServerError, "")
+		endpointsupport.WriteServerError(w)
 		return rotatedRegistration{}, false
 	}
 	return rotatedRegistration{client: updated, rawRAT: rawRAT, rawSecret: rawSecret}, true
@@ -388,7 +388,7 @@ func handleDelete(w http.ResponseWriter, r *http.Request, deps Deps, clientID st
 	//                             operator garbage-collects on schedule.
 	if err := deps.Clients.DeleteClient(ctx, clientID); err != nil && !errors.Is(err, store.ErrNotFound) {
 		deps.logger().Error("dcr.client.delete_failed", "err", err, "client_id", clientID)
-		endpointsupport.WriteOAuthError(w, http.StatusInternalServerError, endpointsupport.ErrServerError, "")
+		endpointsupport.WriteServerError(w)
 		return
 	}
 	if err := deps.RegistrationAccessTokens.Delete(ctx, clientID); err != nil && !errors.Is(err, store.ErrNotFound) {

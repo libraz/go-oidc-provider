@@ -157,7 +157,7 @@ func persistRegistration(ctx context.Context, w http.ResponseWriter, deps Deps, 
 	clientID, err := keys.RandomBase64URL(clientIDBytes)
 	if err != nil {
 		deps.logger().Error("dcr.client_id.generate_failed", "err", err)
-		endpointsupport.WriteOAuthError(w, http.StatusInternalServerError, endpointsupport.ErrServerError, "")
+		endpointsupport.WriteServerError(w)
 		return
 	}
 	confidential := isConfidentialAuthMethod(m.TokenEndpointAuthMethod)
@@ -166,14 +166,14 @@ func persistRegistration(ctx context.Context, w http.ResponseWriter, deps Deps, 
 		rawSecret, secretHash, err = newClientSecret(deps.HighEntropyClientSecrets)
 		if err != nil {
 			deps.logger().Error("dcr.client_secret.generate_failed", "err", err)
-			endpointsupport.WriteOAuthError(w, http.StatusInternalServerError, endpointsupport.ErrServerError, "")
+			endpointsupport.WriteServerError(w)
 			return
 		}
 	}
 	rat, err := keys.RandomBase64URL(ratBytes)
 	if err != nil {
 		deps.logger().Error("dcr.rat.generate_failed", "err", err)
-		endpointsupport.WriteOAuthError(w, http.StatusInternalServerError, endpointsupport.ErrServerError, "")
+		endpointsupport.WriteServerError(w)
 		return
 	}
 	now := deps.now().UTC()
@@ -182,7 +182,7 @@ func persistRegistration(ctx context.Context, w http.ResponseWriter, deps Deps, 
 	client.Source = store.ClientSourceDynamic
 	if err := deps.Clients.RegisterClient(ctx, client); err != nil {
 		deps.logger().Error("dcr.client.register_failed", "err", err, "client_id", clientID)
-		endpointsupport.WriteOAuthError(w, http.StatusInternalServerError, endpointsupport.ErrServerError, "")
+		endpointsupport.WriteServerError(w)
 		return
 	}
 	ratRec := &store.RegistrationAccessToken{
@@ -200,7 +200,7 @@ func persistRegistration(ctx context.Context, w http.ResponseWriter, deps Deps, 
 		if delErr := deps.Clients.DeleteClient(ctx, clientID); delErr != nil {
 			deps.logger().Error("dcr.client.rollback_failed", "err", delErr, "client_id", clientID)
 		}
-		endpointsupport.WriteOAuthError(w, http.StatusInternalServerError, endpointsupport.ErrServerError, "")
+		endpointsupport.WriteServerError(w)
 		return
 	}
 	// IAT consumption fires last, after the client and RAT have

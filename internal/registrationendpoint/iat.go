@@ -69,7 +69,7 @@ func verifyIAT(
 			return iatVerification{}, false
 		}
 		deps.logger().Error("dcr.iat.lookup_failed", "err", err)
-		endpointsupport.WriteOAuthError(w, http.StatusInternalServerError, endpointsupport.ErrServerError, "")
+		endpointsupport.WriteServerError(w)
 		return iatVerification{}, false
 	}
 	if expired := rec.ExpiresAt.Before(deps.now()); expired {
@@ -117,7 +117,7 @@ func consumeIAT(ctx context.Context, w http.ResponseWriter, deps Deps, ver iatVe
 		return true
 	}
 	if ver.Token == nil {
-		endpointsupport.WriteOAuthError(w, http.StatusInternalServerError, endpointsupport.ErrServerError, "")
+		endpointsupport.WriteServerError(w)
 		return false
 	}
 	if _, err := deps.InitialAccessTokens.IncrementUses(ctx, ver.Token.ID); err != nil {
@@ -135,7 +135,7 @@ func consumeIAT(ctx context.Context, w http.ResponseWriter, deps Deps, ver iatVe
 			writeInvalidToken(w, deps.Issuer, "Initial Access Token revoked")
 		default:
 			deps.logger().Error("dcr.iat.increment_failed", "err", err)
-			endpointsupport.WriteOAuthError(w, http.StatusInternalServerError, endpointsupport.ErrServerError, "")
+			endpointsupport.WriteServerError(w)
 		}
 		return false
 	}

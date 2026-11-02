@@ -47,7 +47,7 @@ func verifyRAT(
 			return nil, nil, false
 		}
 		deps.logger().Error("dcr.client.lookup_failed", "err", err, "client_id", clientID)
-		endpointsupport.WriteOAuthError(w, http.StatusInternalServerError, endpointsupport.ErrServerError, "")
+		endpointsupport.WriteServerError(w)
 		return nil, nil, false
 	}
 	if !sourceIsDynamic(client.Source) {
@@ -61,7 +61,7 @@ func verifyRAT(
 			return nil, nil, false
 		}
 		deps.logger().Error("dcr.rat.lookup_failed", "err", err, "client_id", clientID)
-		endpointsupport.WriteOAuthError(w, http.StatusInternalServerError, endpointsupport.ErrServerError, "")
+		endpointsupport.WriteServerError(w)
 		return nil, nil, false
 	}
 	if !patterns.ConstantTimeKeyMatch(stored.HashedValue, patterns.Digest(bearer)) {
