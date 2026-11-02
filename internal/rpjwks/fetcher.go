@@ -252,15 +252,6 @@ func New(cfg Config) *Fetcher {
 	if cfg.MaxBodyBytes <= 0 {
 		cfg.MaxBodyBytes = DefaultMaxBodyBytes
 	}
-	if cfg.MaxInflight <= 0 {
-		cfg.MaxInflight = DefaultMaxInflight
-	} else if cfg.MaxInflight > DefaultMaxInflight {
-		// Keep the per-policy channel bounded too. The process-wide hard
-		// gate already prevents extra network loads, but accepting an
-		// arbitrarily large caller value here would allocate an avoidable
-		// attacker-sized channel during construction.
-		cfg.MaxInflight = DefaultMaxInflight
-	}
 	return &Fetcher{fetchErr: cfg.FetchError, shared: &shared{
 		cache: remotecache.New[*entry](remotecache.Config{
 			Clock:       cfg.Clock,

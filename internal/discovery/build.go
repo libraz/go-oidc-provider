@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"github.com/libraz/go-oidc-provider/internal/dpop"
+	"github.com/libraz/go-oidc-provider/internal/jose"
 )
 
 // ErrIssuerInvalid is returned by [Validate] when the issuer URL fails
@@ -880,8 +881,9 @@ func applyEndpointAuthMirrors(in Input, doc *Document) {
 		doc.IntrospectionSigningAlgValuesSupported = []string{issuingAlg(in)}
 	}
 	if in.Features.Revoke {
-		doc.RevocationEndpointAuthMethodsSupported = append([]string(nil),
-			doc.TokenEndpointAuthMethodsSupported...)
+		doc.RevocationEndpointAuthMethodsSupported = slices.Clone(
+			doc.TokenEndpointAuthMethodsSupported,
+		)
 		if containsAssertionBearingMethod(doc.RevocationEndpointAuthMethodsSupported) {
 			doc.RevocationEndpointAuthSigningAlgValuesSupported = clientSigningAlgs(in)
 		}
@@ -896,9 +898,9 @@ func applyEndpointAuthMirrors(in Input, doc *Document) {
 // project-wide allow-list otherwise.
 func clientSigningAlgs(in Input) []string {
 	if len(in.ClientSigningAlgs) > 0 {
-		return append([]string(nil), in.ClientSigningAlgs...)
+		return slices.Clone(in.ClientSigningAlgs)
 	}
-	return []string{"RS256", "PS256", "ES256", "EdDSA"}
+	return jose.AllowedAlgorithmNames()
 }
 
 func confidentialAuthMethods(methods []string) []string {
@@ -1064,9 +1066,7 @@ func defaultAuthMethods(in []string) []string {
 	if len(in) == 0 {
 		return []string{"client_secret_basic", "client_secret_post", "private_key_jwt", "none"}
 	}
-	out := make([]string, len(in))
-	copy(out, in)
-	return out
+	return slices.Clone(in)
 }
 
 // intersect returns the elements of base that also appear in keep,

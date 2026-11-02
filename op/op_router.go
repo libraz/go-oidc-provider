@@ -134,7 +134,6 @@ func buildRouter(cfg *config, keySet *keys.Set, encSet *keys.EncryptionSet, scop
 			Grants:            cfg.store.Grants(),
 			SubjectProjector:  subjectProjector,
 			Clock:             cfg.clock,
-			Leeway:            defaultUserInfoLeeway,
 			CustomScopeClaims: customScopeClaims(cfg.scopes),
 			// Gates the §5.5 projection on the response side; the
 			// authorize / par parsers read the same accessor.

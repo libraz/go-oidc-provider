@@ -35,13 +35,6 @@ type systemClock struct{}
 //nolint:forbidigo // SystemClock is the single permitted time.Now() caller.
 func (systemClock) Now() time.Time { return time.Now() }
 
-// Now is a convenience wrapper around [SystemClock]. Library code SHOULD
-// depend on a [Clock] passed in via configuration rather than calling this
-// helper, so that tests can substitute a fake clock; the helper exists for
-// rare top-level code paths (e.g. server start-up logging) where injection
-// would be overkill.
-func Now() time.Time { return SystemClock.Now() }
-
 // OrSystem returns c, or [SystemClock] when c is nil. Packages whose
 // configuration carries an optional [Clock] resolve it through this helper
 // so the nil fallback is written once.

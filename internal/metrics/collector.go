@@ -5,6 +5,8 @@ import (
 	"sync"
 
 	"github.com/prometheus/client_golang/prometheus"
+
+	"github.com/libraz/go-oidc-provider/internal/auditevent"
 )
 
 // issuerLabel is the constant label every metric carries. It is the
@@ -81,175 +83,83 @@ func New(reg *prometheus.Registry, opts Options) (*Collector, error) {
 		return nil, errors.New("metrics: registry is required")
 	}
 	constLabels := prometheus.Labels{issuerLabel: opts.Issuer}
-	c := &Collector{
-		opts:     opts,
-		registry: reg,
-		tokenIssued: prometheus.NewCounterVec(
-			prometheus.CounterOpts{
-				Name:        "oidc_token_issued_total",
-				Help:        "Number of refresh tokens initially issued (not rotated), partitioned by the grant that created the chain and by (static-seed) client_id.",
-				ConstLabels: constLabels,
-			},
-			[]string{"grant_type", "client_id"},
-		),
-		tokensRefreshed: prometheus.NewCounterVec(
-			prometheus.CounterOpts{
-				Name:        "oidc_tokens_refreshed_total",
-				Help:        "Number of refresh-token rotations completed by the token endpoint, partitioned by (static-seed) client_id.",
-				ConstLabels: constLabels,
-			},
-			[]string{"client_id"},
-		),
-		loginAttempts: prometheus.NewCounterVec(
-			prometheus.CounterOpts{
-				Name:        "oidc_login_attempts_total",
-				Help:        "Number of login and MFA attempts processed by the authentication flow, partitioned by result and factor.",
-				ConstLabels: constLabels,
-			},
-			[]string{"factor", "result"},
-		),
-		refreshReplay: prometheus.NewCounter(
-			prometheus.CounterOpts{
-				Name:        "oidc_refresh_replay_detected_total",
-				Help:        "Number of refresh-token replay events detected by the rotation chain.",
-				ConstLabels: constLabels,
-			},
-		),
-		codeReplay: prometheus.NewCounter(
-			prometheus.CounterOpts{
-				Name:        "oidc_code_replay_detected_total",
-				Help:        "Number of authorization-code replay events detected at the token endpoint.",
-				ConstLabels: constLabels,
-			},
-		),
-		clientAuthnFailures: prometheus.NewCounterVec(
-			prometheus.CounterOpts{
-				Name:        "oidc_client_authn_failures_total",
-				Help:        "Number of pre-issuance client-authentication failures, partitioned by auth_method and short reason code.",
-				ConstLabels: constLabels,
-			},
-			[]string{"auth_method", "reason"},
-		),
-		dcrEvents: prometheus.NewCounterVec(
-			prometheus.CounterOpts{
-				Name:        "oidc_dcr_events_total",
-				Help:        "Dynamic Client Registration events, partitioned by the event sub-name (the audit name with the dcr. prefix stripped).",
-				ConstLabels: constLabels,
-			},
-			[]string{"event"},
-		),
-		deviceAuthorizationEvents: prometheus.NewCounterVec(
-			prometheus.CounterOpts{
-				Name:        "oidc_device_authorization_events_total",
-				Help:        "Device-authorization endpoint outcomes, partitioned by the event sub-name (the audit name with the device_authorization. prefix stripped).",
-				ConstLabels: constLabels,
-			},
-			[]string{"event"},
-		),
-		deviceCodeEvents: prometheus.NewCounterVec(
-			prometheus.CounterOpts{
-				Name:        "oidc_device_code_events_total",
-				Help:        "Device-code lifecycle events (verification, token exchange, revocation), partitioned by the event sub-name (the audit name with the device_code. prefix stripped).",
-				ConstLabels: constLabels,
-			},
-			[]string{"event"},
-		),
-		cibaEvents: prometheus.NewCounterVec(
-			prometheus.CounterOpts{
-				Name:        "oidc_ciba_events_total",
-				Help:        "CIBA flow events, partitioned by the event sub-name (the audit name with the ciba. prefix stripped).",
-				ConstLabels: constLabels,
-			},
-			[]string{"event"},
-		),
-		tokenExchangeEvents: prometheus.NewCounterVec(
-			prometheus.CounterOpts{
-				Name:        "oidc_token_exchange_events_total",
-				Help:        "Token-exchange (RFC 8693) outcomes, partitioned by the event sub-name (the audit name with the token_exchange. prefix stripped).",
-				ConstLabels: constLabels,
-			},
-			[]string{"event"},
-		),
-		customGrantEvents: prometheus.NewCounterVec(
-			prometheus.CounterOpts{
-				Name:        "oidc_custom_grant_events_total",
-				Help:        "Custom-grant dispatcher outcomes, partitioned by the event sub-name.",
-				ConstLabels: constLabels,
-			},
-			[]string{"event"},
-		),
-		backChannelLogout: prometheus.NewCounterVec(
-			prometheus.CounterOpts{
-				Name:        "oidc_back_channel_logout_total",
-				Help:        "Back-channel logout delivery and target-resolution outcomes, partitioned by result.",
-				ConstLabels: constLabels,
-			},
-			[]string{"result"},
-		),
-		logoutFailures: prometheus.NewCounterVec(
-			prometheus.CounterOpts{
-				Name:        "oidc_logout_failures_total",
-				Help:        "Logout persistence failures, partitioned by failed side effect.",
-				ConstLabels: constLabels,
-			},
-			[]string{"kind"},
-		),
-		introspectionErrors: prometheus.NewCounter(
-			prometheus.CounterOpts{
-				Name:        "oidc_introspection_errors_total",
-				Help:        "Number of pre-authentication failures observed at the /introspect endpoint.",
-				ConstLabels: constLabels,
-			},
-		),
-		tokenRevokeFailures: prometheus.NewCounterVec(
-			prometheus.CounterOpts{
-				Name:        "oidc_token_revoke_failures_total",
-				Help:        "Token-revocation side-effect failures, partitioned by failed stage (token, refresh chain, refresh grant, or prior access token).",
-				ConstLabels: constLabels,
-			},
-			[]string{"kind"},
-		),
-		dpopLooseMethodCase: prometheus.NewCounter(
-			prometheus.CounterOpts{
-				Name:        "oidc_dpop_loose_method_case_admitted_total",
-				Help:        "Number of DPoP proofs admitted under the opt-in case-folded htm bridge.",
-				ConstLabels: constLabels,
-			},
-		),
-		keyRetiredKidPresented: prometheus.NewCounter(
-			prometheus.CounterOpts{
-				Name:        "oidc_key_retired_kid_presented_total",
-				Help:        "Number of verifications that named a kid past its retirement deadline (rotation-after-leak forge attempt signal).",
-				ConstLabels: constLabels,
-			},
-		),
-	}
-	collectors := []prometheus.Collector{
-		c.tokenIssued,
-		c.tokensRefreshed,
-		c.loginAttempts,
-		c.refreshReplay,
-		c.codeReplay,
-		c.clientAuthnFailures,
-		c.dcrEvents,
-		c.deviceAuthorizationEvents,
-		c.deviceCodeEvents,
-		c.cibaEvents,
-		c.tokenExchangeEvents,
-		c.customGrantEvents,
-		c.backChannelLogout,
-		c.logoutFailures,
-		c.introspectionErrors,
-		c.tokenRevokeFailures,
-		c.dpopLooseMethodCase,
-		c.keyRetiredKidPresented,
-	}
-	c.collectors = collectors
-	if err := registerAll(reg, collectors); err != nil {
+	c := &Collector{opts: opts, registry: reg}
+	c.tokenIssued = c.counterVec(constLabels, auditevent.MetricTokenIssued,
+		"Number of refresh tokens initially issued (not rotated), partitioned by the grant that created the chain and by (static-seed) client_id.",
+		"grant_type", "client_id")
+	c.tokensRefreshed = c.counterVec(constLabels, auditevent.MetricTokensRefreshed,
+		"Number of refresh-token rotations completed by the token endpoint, partitioned by (static-seed) client_id.",
+		"client_id")
+	c.loginAttempts = c.counterVec(constLabels, auditevent.MetricLoginAttempts,
+		"Number of login and MFA attempts processed by the authentication flow, partitioned by result and factor.",
+		"factor", "result")
+	c.refreshReplay = c.counter(constLabels, auditevent.MetricRefreshReplay,
+		"Number of refresh-token replay events detected by the rotation chain.")
+	c.codeReplay = c.counter(constLabels, auditevent.MetricCodeReplay,
+		"Number of authorization-code replay events detected at the token endpoint.")
+	c.clientAuthnFailures = c.counterVec(constLabels, auditevent.MetricClientAuthnFailures,
+		"Number of pre-issuance client-authentication failures, partitioned by auth_method and short reason code.",
+		"auth_method", "reason")
+	c.dcrEvents = c.counterVec(constLabels, auditevent.MetricDCR,
+		"Dynamic Client Registration events, partitioned by the event sub-name (the audit name with the dcr. prefix stripped).",
+		"event")
+	c.deviceAuthorizationEvents = c.counterVec(constLabels, auditevent.MetricDeviceAuthorization,
+		"Device-authorization endpoint outcomes, partitioned by the event sub-name (the audit name with the device_authorization. prefix stripped).",
+		"event")
+	c.deviceCodeEvents = c.counterVec(constLabels, auditevent.MetricDeviceCode,
+		"Device-code lifecycle events (verification, token exchange, revocation), partitioned by the event sub-name (the audit name with the device_code. prefix stripped).",
+		"event")
+	c.cibaEvents = c.counterVec(constLabels, auditevent.MetricCIBA,
+		"CIBA flow events, partitioned by the event sub-name (the audit name with the ciba. prefix stripped).",
+		"event")
+	c.tokenExchangeEvents = c.counterVec(constLabels, auditevent.MetricTokenExchange,
+		"Token-exchange (RFC 8693) outcomes, partitioned by the event sub-name (the audit name with the token_exchange. prefix stripped).",
+		"event")
+	c.customGrantEvents = c.counterVec(constLabels, auditevent.MetricCustomGrant,
+		"Custom-grant dispatcher outcomes, partitioned by the event sub-name.",
+		"event")
+	c.backChannelLogout = c.counterVec(constLabels, auditevent.MetricBackChannelLogout,
+		"Back-channel logout delivery and target-resolution outcomes, partitioned by result.",
+		"result")
+	c.logoutFailures = c.counterVec(constLabels, auditevent.MetricLogoutFailures,
+		"Logout persistence failures, partitioned by failed side effect.",
+		"kind")
+	c.introspectionErrors = c.counter(constLabels, auditevent.MetricIntrospectionErrors,
+		"Number of pre-authentication failures observed at the /introspect endpoint.")
+	c.tokenRevokeFailures = c.counterVec(constLabels, auditevent.MetricTokenRevokeFailures,
+		"Token-revocation side-effect failures, partitioned by failed stage (token, refresh chain, refresh grant, or prior access token).",
+		"kind")
+	c.dpopLooseMethodCase = c.counter(constLabels, auditevent.MetricDPoPLooseMethodCase,
+		"Number of DPoP proofs admitted under the opt-in case-folded htm bridge.")
+	c.keyRetiredKidPresented = c.counter(constLabels, auditevent.MetricKeyRetiredKidPresented,
+		"Number of verifications that named a kid past its retirement deadline (rotation-after-leak forge attempt signal).")
+	if err := registerAll(reg, c.collectors); err != nil {
 		return nil, err
 	}
 	c.registered = true
 	return c, nil
+}
+
+// counter creates a plain counter for metric and records it for registration.
+func (c *Collector) counter(constLabels prometheus.Labels, metric auditevent.Metric, help string) prometheus.Counter { //nolint:ireturn // prometheus.NewCounter returns the interface.
+	col := prometheus.NewCounter(prometheus.CounterOpts{
+		Name:        auditevent.MetricName(metric),
+		Help:        help,
+		ConstLabels: constLabels,
+	})
+	c.collectors = append(c.collectors, col)
+	return col
+}
+
+// counterVec creates a labelled counter for metric and records it for registration.
+func (c *Collector) counterVec(constLabels prometheus.Labels, metric auditevent.Metric, help string, labels ...string) *prometheus.CounterVec {
+	col := prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name:        auditevent.MetricName(metric),
+		Help:        help,
+		ConstLabels: constLabels,
+	}, labels)
+	c.collectors = append(c.collectors, col)
+	return col
 }
 
 // registerAll registers every collector on reg, all-or-nothing: on the

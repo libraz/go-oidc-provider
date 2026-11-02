@@ -242,7 +242,8 @@ func serve(w http.ResponseWriter, r *http.Request, deps Deps) {
 	if !parseAndValidateForm(w, r) {
 		return
 	}
-	dpopJKT, client, ok := authenticateWithDPoP(w, r, deps)
+	gate := deps.initiationGate()
+	dpopJKT, client, ok := gate.Authenticate(w, r)
 	if !ok {
 		return
 	}
@@ -250,10 +251,10 @@ func serve(w http.ResponseWriter, r *http.Request, deps Deps) {
 	if !ok {
 		return
 	}
-	if !enforceSenderConstraint(r.Context(), w, deps, dpopJKT, mtlsThumbprint, client.ID) {
+	if !gate.EnforceSenderConstraint(r.Context(), w, dpopJKT, mtlsThumbprint, client.ID) {
 		return
 	}
-	if !verifyClientGrantTypeAllowed(r.Context(), w, deps, client) {
+	if !gate.VerifyClientGrantType(r.Context(), w, client) {
 		return
 	}
 	merged, ok := consumeJARRequestObject(r.Context(), w, deps, client, r.PostForm)

@@ -70,26 +70,6 @@ func PostFormWithAccept(tb testing.TB, client *http.Client, endpoint string, for
 	return resp
 }
 
-// GetWithBearer issues a GET request against endpoint with the given
-// bearer access token. An empty token elides the Authorization header
-// so the handler observes the "no credentials" case (the userinfo
-// suite uses this to drive the WWW-Authenticate path).
-func GetWithBearer(tb testing.TB, client *http.Client, endpoint, token string) *http.Response {
-	tb.Helper()
-	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, endpoint, http.NoBody)
-	if err != nil {
-		tb.Fatalf("NewRequest: %v", err)
-	}
-	if token != "" {
-		req.Header.Set("Authorization", "Bearer "+token)
-	}
-	resp, err := client.Do(req)
-	if err != nil {
-		tb.Fatalf("Do: %v", err)
-	}
-	return resp
-}
-
 // DecodeJSON parses resp.Body as a JSON object. The response body is
 // fully drained so callers may close it without losing diagnostics.
 // Empty bodies produce an empty map rather than an error so 204 / no

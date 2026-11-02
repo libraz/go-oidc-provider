@@ -89,7 +89,7 @@ func EnforceSenderConstraint(
 	if dpopJKT != "" || mtlsThumbprint != "" {
 		return true
 	}
-	emitter.Emit(ctx, audit.Event{
+	audit.OrDiscard(emitter).Emit(ctx, audit.Event{
 		Name:     rej.Event,
 		Level:    audit.LevelWarn,
 		Message:  rej.AuditMessage,
@@ -129,7 +129,7 @@ func VerifyClientGrantType(
 	if slices.Contains(client.GrantTypes, grantURN) {
 		return true
 	}
-	emitter.Emit(ctx, audit.Event{
+	audit.OrDiscard(emitter).Emit(ctx, audit.Event{
 		Name:     rej.Event,
 		Level:    audit.LevelWarn,
 		Message:  rej.AuditMessage,
@@ -140,6 +140,47 @@ func VerifyClientGrantType(
 	})
 	WriteOAuthError(w, http.StatusBadRequest, ErrUnauthorizedClient, rej.Description)
 	return false
+}
+
+// InitiationGate bundles the per-endpoint inputs of the grant-initiation
+// gates (client authentication, sender-constraint requirement, grant
+// registration) so a device-style endpoint builds it once per request.
+type InitiationGate struct {
+	// DPoP is the proof gate run alongside client authentication.
+	DPoP dpop.Gate
+	// Auth configures client authentication; Auth.Audit also receives
+	// the rejection events.
+	Auth AuthenticateOpts
+	// AuthFailureMessage is the audit message for a failed authentication.
+	AuthFailureMessage string
+	// RequireSenderConstraint rejects requests bound to neither DPoP nor mTLS.
+	RequireSenderConstraint bool
+	// Unbound words the sender-constraint rejection.
+	Unbound SenderConstraintRejection
+	// GrantURN is the grant type the client must be registered for.
+	GrantURN string
+	// GrantMissing words the grant-registration rejection.
+	GrantMissing GrantRejection
+}
+
+// Authenticate runs [AuthenticateWithDPoP] with the gate's inputs.
+func (g InitiationGate) Authenticate(w http.ResponseWriter, r *http.Request) (string, *store.Client, bool) {
+	return AuthenticateWithDPoP(w, r, g.DPoP, g.Auth, g.AuthFailureMessage)
+}
+
+// EnforceSenderConstraint runs [EnforceSenderConstraint] with the gate's inputs.
+func (g InitiationGate) EnforceSenderConstraint(
+	ctx context.Context,
+	w http.ResponseWriter,
+	dpopJKT, mtlsThumbprint, clientID string,
+) bool {
+	return EnforceSenderConstraint(ctx, w, g.Auth.Audit, g.RequireSenderConstraint, g.Unbound,
+		dpopJKT, mtlsThumbprint, clientID)
+}
+
+// VerifyClientGrantType runs [VerifyClientGrantType] with the gate's inputs.
+func (g InitiationGate) VerifyClientGrantType(ctx context.Context, w http.ResponseWriter, client *store.Client) bool {
+	return VerifyClientGrantType(ctx, w, g.Auth.Audit, client, g.GrantURN, g.GrantMissing)
 }
 
 // BindingLabel returns the audit-extras label naming which sender

@@ -330,7 +330,7 @@ func TestHandler_ExpiredToken_DescribesExpiry(t *testing.T) {
 	f := newUserInfoFixture(t)
 	f.putUser(t, "user-1", map[string]any{"email": "alice@example.com"})
 	// Issue a token whose exp is well behind the OP clock even after the
-	// 30-second leeway in op.defaultUserInfoLeeway.
+	// default 30-second leeway.
 	token := f.signAccessToken(t, func(c *tokens.AccessTokenClaims) {
 		c.IssuedAt = f.clock.now.Add(-2 * time.Hour).Unix()
 		c.ExpiresAt = f.clock.now.Add(-time.Hour).Unix()

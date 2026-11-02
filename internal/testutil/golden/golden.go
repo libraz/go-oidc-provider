@@ -50,15 +50,6 @@ func JSON(t *testing.T, got any, path string) {
 	matchOrUpdate(t, encoded, path)
 }
 
-// Bytes compares the literal contents of got against path. Use [JSON] for
-// structures whose canonical form is JSON; reach for Bytes when the fixture
-// is already a byte slice (e.g. binary, hex-encoded, or a tooling-rendered
-// string).
-func Bytes(t *testing.T, got []byte, path string) {
-	t.Helper()
-	matchOrUpdate(t, got, path)
-}
-
 func matchOrUpdate(t *testing.T, got []byte, path string) {
 	t.Helper()
 	if *updateFlag {

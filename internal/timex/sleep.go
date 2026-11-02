@@ -35,10 +35,7 @@ func PadUntil(ctx context.Context, clock Clock, start time.Time, target time.Dur
 	if target <= 0 {
 		return nil
 	}
-	if clock == nil {
-		clock = SystemClock
-	}
-	now := clock.Now()
+	now := OrSystem(clock).Now()
 	elapsed := now.Sub(start)
 	remaining := target - elapsed
 	if remaining <= 0 {

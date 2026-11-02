@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"slices"
 	"strings"
 	"time"
 
@@ -401,10 +402,8 @@ func checkBearerAudience(issuer string, audience []string) error {
 	if issuer == "" || len(audience) == 0 {
 		return nil
 	}
-	for _, a := range audience {
-		if a == issuer {
-			return nil
-		}
+	if slices.Contains(audience, issuer) {
+		return nil
 	}
 	return invalidBearer(bearerDescInvalid)
 }

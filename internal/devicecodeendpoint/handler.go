@@ -245,7 +245,8 @@ func serve(w http.ResponseWriter, r *http.Request, deps Deps) {
 	if !endpointsupport.ParseFormRequest(w, r, deviceAuthSingleValuedParams) {
 		return
 	}
-	dpopJKT, client, ok := authenticateWithDPoP(w, r, deps)
+	gate := deps.initiationGate()
+	dpopJKT, client, ok := gate.Authenticate(w, r)
 	if !ok {
 		return
 	}
@@ -253,10 +254,10 @@ func serve(w http.ResponseWriter, r *http.Request, deps Deps) {
 	if !ok {
 		return
 	}
-	if !enforceSenderConstraint(r.Context(), w, deps, dpopJKT, mtlsThumbprint, client.ID) {
+	if !gate.EnforceSenderConstraint(r.Context(), w, dpopJKT, mtlsThumbprint, client.ID) {
 		return
 	}
-	if !verifyClientGrantTypeAllowed(r.Context(), w, deps, client) {
+	if !gate.VerifyClientGrantType(r.Context(), w, client) {
 		return
 	}
 	scope, ok := parseScope(w, r.PostForm, client, deps.Scopes)
@@ -276,54 +277,34 @@ func serve(w http.ResponseWriter, r *http.Request, deps Deps) {
 	})
 }
 
-// authenticateWithDPoP runs DPoP proof verification and client
-// authentication through [endpointsupport.AuthenticateWithDPoP] and
-// returns the proof's RFC 7638 thumbprint ("" when no proof was
-// presented) alongside the authenticated client. It writes the
-// response on every failure path; the caller only checks the bool.
-func authenticateWithDPoP(w http.ResponseWriter, r *http.Request, deps Deps) (string, *store.Client, bool) {
-	return endpointsupport.AuthenticateWithDPoP(w, r,
-		dpop.Gate{Verifier: deps.DPoP, Nonces: deps.DPoPNonces},
-		endpointsupport.AuthenticateOpts{
-			Clients:           deps.Clients,
-			SecretVerifier:    deps.SecretVerifier,
-			AssertionVerifier: deps.AssertionVerifier,
-			AllowedMethods:    deps.AllowedClientAuthMethods,
-			Now:               deps.now(),
-			Audit:             deps.auditEmitter(),
+// initiationGate builds the client-authentication, sender-constraint
+// (FAPI 2.0 baseline) and grant-registration gates for the
+// device-authorization endpoint.
+func (d *Deps) initiationGate() endpointsupport.InitiationGate {
+	return endpointsupport.InitiationGate{
+		DPoP: dpop.Gate{Verifier: d.DPoP, Nonces: d.DPoPNonces},
+		Auth: endpointsupport.AuthenticateOpts{
+			Clients:           d.Clients,
+			SecretVerifier:    d.SecretVerifier,
+			AssertionVerifier: d.AssertionVerifier,
+			AllowedMethods:    d.AllowedClientAuthMethods,
+			Now:               d.now(),
+			Audit:             d.auditEmitter(),
 		},
-		"client authentication failed at device-authorization endpoint",
-	)
-}
-
-// enforceSenderConstraint applies the FAPI 2.0 baseline rule that
-// no device-authorization request MAY produce a bearer token when
-// [Deps.RequireSenderConstraint] is true.
-func enforceSenderConstraint(
-	ctx context.Context,
-	w http.ResponseWriter,
-	deps Deps,
-	dpopJKT, mtlsThumbprint, clientID string,
-) bool {
-	return endpointsupport.EnforceSenderConstraint(ctx, w, deps.auditEmitter(),
-		deps.RequireSenderConstraint,
-		endpointsupport.SenderConstraintRejection{
+		AuthFailureMessage:      "client authentication failed at device-authorization endpoint",
+		RequireSenderConstraint: d.RequireSenderConstraint,
+		Unbound: endpointsupport.SenderConstraintRejection{
 			Event:        devicecode.AuditAuthorizationUnboundRejected,
 			AuditMessage: "device-authorization rejected: unbound request under sender-constraint profile",
 			Description:  "device authorization requires DPoP or mTLS under the active profile",
 		},
-		dpopJKT, mtlsThumbprint, clientID)
-}
-
-// verifyClientGrantTypeAllowed rejects clients whose registered
-// GrantTypes do not include the device_code URN.
-func verifyClientGrantTypeAllowed(ctx context.Context, w http.ResponseWriter, deps Deps, client *store.Client) bool {
-	return endpointsupport.VerifyClientGrantType(ctx, w, deps.auditEmitter(), client, grant.DeviceCode.String(),
-		endpointsupport.GrantRejection{
+		GrantURN: grant.DeviceCode.String(),
+		GrantMissing: endpointsupport.GrantRejection{
 			Event:        devicecode.AuditAuthorizationRejected,
 			AuditMessage: "device-authorization rejected: client not registered for grant",
 			Description:  "client is not authorized for the device_code grant",
-		})
+		},
+	}
 }
 
 // parseScope extracts the requested scope from the form, validates

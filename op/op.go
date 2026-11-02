@@ -15,20 +15,10 @@ import (
 	"github.com/libraz/go-oidc-provider/internal/keys"
 	"github.com/libraz/go-oidc-provider/internal/proxy"
 	"github.com/libraz/go-oidc-provider/internal/scoperegistry"
-	"github.com/libraz/go-oidc-provider/internal/tokens"
 	"github.com/libraz/go-oidc-provider/op/feature"
 	"github.com/libraz/go-oidc-provider/op/grant"
 	"github.com/libraz/go-oidc-provider/op/profile"
 )
-
-// defaultUserInfoLeeway is the symmetric tolerance the /userinfo
-// handler applies to the access-token "exp" / "iat" comparisons. It is
-// an alias for [tokens.DefaultLeeway], which is the one value every
-// access-token verification surface resolves to: /userinfo answers the
-// same "is this token valid?" question as /introspect, /revoke and the
-// token-exchange subject-token lookup, and a deployment with clock skew
-// gets contradictory answers the moment those tolerances differ.
-const defaultUserInfoLeeway = tokens.DefaultLeeway
 
 // Provider is the assembled OpenID Connect Provider. It implements
 // [http.Handler] and is the result of a successful [New] call.

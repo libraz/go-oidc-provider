@@ -98,19 +98,12 @@ type ChallengeParam struct {
 	Value string
 }
 
-// challengeNames is the closed catalogue of auth-param names the
-// library composes. The constants are exported so endpoint packages
-// can reference them by name rather than passing string literals.
+// Auth-param names the library composes, exported so endpoint packages
+// reference them by name rather than passing string literals. The
+// builder does not enforce the set; names never flow from untrusted input.
 const (
 	ChallengeRealm            = "realm"
 	ChallengeError            = "error"
 	ChallengeErrorDescription = "error_description"
 	ChallengeScope            = "scope"
-	ChallengeAlgs             = "algs"
 )
-
-// challengeBuilderHasOnlySafeNames is documented separately so
-// callers can audit the closed name set in one place. Note: the
-// helper does not enforce the name set; supplying an unrecognised
-// name passes through verbatim, which is fine because the names
-// themselves do not flow from untrusted input.

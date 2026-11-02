@@ -39,6 +39,6 @@ func WriteMTLSError(w http.ResponseWriter, err error) {
 	case errors.Is(err, mtls.ErrCertUntrusted):
 		WriteInvalidClient(w, false, "client certificate is not trusted")
 	default:
-		WriteOAuthError(w, http.StatusInternalServerError, ErrServerError, "")
+		WriteServerError(w)
 	}
 }

@@ -187,8 +187,7 @@ func Handler(deps HandlerDeps) http.Handler {
 // [endpointsupport.AcceptBearerToken], shared with every endpoint that
 // takes the OP's own access tokens.
 func serveUserInfo(w http.ResponseWriter, r *http.Request, deps HandlerDeps) {
-	if !methodAllowed(r.Method) {
-		httpx.MethodNotAllowed(w, "GET, HEAD, POST")
+	if !httpx.EnforceMethod(w, r, http.MethodGet, http.MethodPost) {
 		return
 	}
 	raw, err := extractBearer(w, r)
@@ -297,12 +296,6 @@ func dispatchUserInfoResponse(
 	writeUserInfoJWT(r.Context(), w, deps, clientID, client, body)
 }
 
-// methodAllowed reports whether method is one of the two verbs the
-// /userinfo endpoint accepts (OIDC Core 1.0 §5.3).
-func methodAllowed(method string) bool {
-	return method == http.MethodGet || method == http.MethodHead || method == http.MethodPost
-}
-
 // bearerError discriminates the three RFC 6750 §3 failure shapes the
 // handler emits before signature verification: "no credentials" (which
 // produces a bare WWW-Authenticate challenge), "invalid request"
@@ -402,7 +395,10 @@ func respondBearerExtractError(w http.ResponseWriter, err error) {
 	if errors.As(err, &be) {
 		switch {
 		case be.missing:
-			w.Header().Set("WWW-Authenticate", `Bearer realm="userinfo"`)
+			w.Header().Set("WWW-Authenticate", endpointsupport.BuildBearerChallenge(
+				endpointsupport.BearerSchemeBearer,
+				endpointsupport.ChallengeParam{Name: endpointsupport.ChallengeRealm, Value: "userinfo"},
+			))
 			w.WriteHeader(http.StatusUnauthorized)
 			return
 		case be.tooLarge:

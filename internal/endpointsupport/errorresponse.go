@@ -100,6 +100,6 @@ func WriteAuthnError(w http.ResponseWriter, err error, usedBasic bool) {
 		WriteOAuthError(w, http.StatusServiceUnavailable, ErrServerError,
 			"client keys are temporarily unavailable")
 	default:
-		WriteOAuthError(w, http.StatusInternalServerError, ErrServerError, "")
+		WriteServerError(w)
 	}
 }

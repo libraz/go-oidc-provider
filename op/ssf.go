@@ -129,7 +129,6 @@ func mountSharedSignals(
 			Keys:               keySet,
 			Issuer:             cfg.issuer,
 			Clock:              cfg.clock,
-			Leeway:             defaultUserInfoLeeway,
 			Clients:            cfg.clientStore(),
 			Grants:             cfg.store.Grants(),
 			SubjectProjector:   subjectProjector,
