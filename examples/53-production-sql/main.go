@@ -239,8 +239,8 @@ func buildOptions(cfg config, storage *oidcsql.Store, users *userTable) ([]op.Op
 	}
 	return []op.Option{
 		op.WithIssuer(cfg.issuer),
-		// Without a logger the OP's start-up and claim diagnostics are
-		// discarded; route them, and the audit events, to your pipeline.
+		// Without a logger the OP's request-time logs and audit events are
+		// discarded; route them to your pipeline.
 		op.WithLogger(slog.Default()),
 		op.WithStore(storage),
 		op.WithKeyset(keyset),

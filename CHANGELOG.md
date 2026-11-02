@@ -245,14 +245,16 @@ must implement `AuthnLockouts()` or be paired with
   `op.WithSPAUI` alone, or a driver that returns JSON.
 
 - `op.New` logs one warning per static client that names a grant the OP has
-  not enabled, naming the option that enables it, and one when neither
+  not enabled, naming the option that enables it (a seed that leaves
+  `GrantTypes` empty is warned about the defaults it received), and one when neither
   `op.WithLogger` nor `op.WithAuditLogger` is set, because request-time logs
   and audit records are then discarded.
 
 - The six `op.WithAllowPrivateNetwork*` options are documented as network
-  reach for relying parties on a private network. Each logs INFO at startup,
-  and WARN (SSRF exposure) when combined with open dynamic registration or
-  Client ID Metadata Documents.
+  reach for relying parties on a private network. Each logs one line at
+  startup: INFO, or WARN (SSRF exposure) when the destination is
+  caller-chosen through open dynamic registration or Client ID Metadata
+  Documents, which includes a registered `backchannel_logout_uri`.
 
 - The keyset error for an RSA key under ES256 suggests
   `op.WithSigningAlgorithm(op.AlgRS256)`, and the cookie-key length error
@@ -263,7 +265,13 @@ must implement `AuthnLockouts()` or be paired with
   looked (the `search_path` schemas, or the MySQL database). Index names
   produced by `WithTablePrefix` or `WithNaming` are length-checked at `New`,
   and a missing-index hint points at `Store.Schema()` when names are
-  customised.
+  customised. Name collisions are detected regardless of case, and a
+  column-level `UNIQUE` counts as an index the schema check requires.
+
+- `oidcsql.Store.Migrate` refuses, before executing any statement, when a
+  table it would create already exists without the adapter's columns, such
+  as an application table reached through an empty `WithTablePrefix`; it
+  previously added indexes to that table before the schema check failed.
 
 - `MIGRATIONS.md` covers keeping the OP's migration history separate from
   the application's, and `store.UserPasswordHashUpdater` documents that
