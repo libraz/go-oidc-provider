@@ -456,11 +456,13 @@ type jsonPrompt struct {
 	} `json:"inputs"`
 	Data struct {
 		Accounts []struct {
-			Subject     string
-			DisplayName string
-		}
-		AddAccountURL string
-		Scopes        []struct{ Name string }
+			Subject     string `json:"subject"`
+			DisplayName string `json:"display_name"`
+		} `json:"accounts"`
+		AddAccountURL string `json:"add_account_url"`
+		Scopes        []struct {
+			Name string `json:"name"`
+		} `json:"scopes"`
 	} `json:"data"`
 }
 
