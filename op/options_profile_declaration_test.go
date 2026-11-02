@@ -68,7 +68,7 @@ func TestWithProfile_FAPICIBAAcceptsWiredGrant(t *testing.T) {
 func TestWithProfile_NonCIBAProfilesConstrainNoGrant(t *testing.T) {
 	t.Parallel()
 
-	for _, p := range []profile.Profile{profile.Baseline, profile.FAPI2Baseline, profile.FAPI2MessageSigning} {
+	for _, p := range []profile.Profile{profile.OAuth21, profile.FAPI2Baseline, profile.FAPI2MessageSigning} {
 		t.Run(p.String(), func(t *testing.T) {
 			t.Parallel()
 			opts := append(validBaseOptsWithInmem(t),
@@ -90,13 +90,13 @@ func TestWithProfile_NonCIBAProfilesConstrainNoGrant(t *testing.T) {
 func TestWithProfile_BaselineAddsNoFeatureRequirement(t *testing.T) {
 	t.Parallel()
 
-	if got := profile.RequiredFeatures(profile.Baseline); got != nil {
+	if got := profile.RequiredFeatures(profile.OAuth21); got != nil {
 		t.Errorf("RequiredFeatures(Baseline) = %v, want nil", got)
 	}
-	if got := profile.RequiredGrants(profile.Baseline); got != nil {
+	if got := profile.RequiredGrants(profile.OAuth21); got != nil {
 		t.Errorf("RequiredGrants(Baseline) = %v, want nil", got)
 	}
-	if _, err := op.New(append(validBaseOptsWithInmem(t), op.WithProfile(profile.Baseline))...); err != nil {
+	if _, err := op.New(append(validBaseOptsWithInmem(t), op.WithProfile(profile.OAuth21))...); err != nil {
 		t.Fatalf("WithProfile(Baseline) alone failed: %v", err)
 	}
 }
@@ -205,7 +205,7 @@ func TestAuditStartupProfile_PolicyValuesSurviveRedaction(t *testing.T) {
 func TestAuditStartupProfile_BaselineDeployment(t *testing.T) {
 	t.Parallel()
 
-	rec := captureStartupProfile(t, op.WithProfile(profile.Baseline))
+	rec := captureStartupProfile(t, op.WithProfile(profile.OAuth21))
 	assertStrings(t, rec, "profiles", []string{"baseline"})
 	assertBool(t, rec, "pkce_required", true)
 	assertBool(t, rec, "par_required", false)
@@ -352,7 +352,7 @@ func TestNew_WarnsWhenNoProfileRequiresPKCE(t *testing.T) {
 		want bool
 	}{
 		{"no profile", nil, true},
-		{"baseline", []op.Option{op.WithProfile(profile.Baseline)}, false},
+		{"baseline", []op.Option{op.WithProfile(profile.OAuth21)}, false},
 		{"client_credentials only", []op.Option{op.WithGrants(grant.ClientCredentials)}, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

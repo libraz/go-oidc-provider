@@ -1,9 +1,9 @@
 //go:build example
 
-// misc.go — the three small substores outside the transactional
-// cluster: store.InteractionStore (vault_flow_scratch),
-// store.ConsumedJTIStore (vault_seen_tickets), and store.MetadataStore
-// (vault_op_notes).
+// misc.go — the small substores outside the transactional cluster:
+// store.InteractionStore (vault_flow_scratch), store.ConsumedJTIStore
+// (vault_seen_tickets), store.MetadataStore (vault_op_notes) and
+// store.AuthnLockoutStore (vault_signin_strikes).
 
 package main
 
@@ -12,6 +12,7 @@ import (
 	databasesql "database/sql"
 	"errors"
 	"fmt"
+	"math"
 	"time"
 
 	"github.com/libraz/go-oidc-provider/op/store"
@@ -266,4 +267,78 @@ func (s *metadataStore) Set(ctx context.Context, key, value string) error {
 		return fmt.Errorf("metadata.Set: %w", err)
 	}
 	return nil
+}
+
+// --- authn lockouts ------------------------------------------------------
+
+type lockoutStore struct{ q querier }
+
+var _ store.AuthnLockoutStore = (*lockoutStore)(nil)
+
+const (
+	lockoutSelect = `
+SELECT principal, strike_count, first_strike_epoch, barred_until_epoch, row_version
+FROM vault_signin_strikes WHERE principal = ?`
+
+	lockoutInsert = `
+INSERT INTO vault_signin_strikes
+  (principal, strike_count, first_strike_epoch, barred_until_epoch, row_version)
+VALUES (?, ?, ?, ?, 1)
+ON CONFLICT(principal) DO NOTHING`
+
+	lockoutCompareAndSwap = `
+UPDATE vault_signin_strikes
+SET strike_count = ?, first_strike_epoch = ?, barred_until_epoch = ?, row_version = row_version + 1
+WHERE principal = ? AND row_version = ?`
+)
+
+func (s *lockoutStore) Get(ctx context.Context, subject string) (*store.AuthnLockoutRecord, error) {
+	var (
+		r       store.AuthnLockoutRecord
+		first   int64
+		barred  int64
+		version int64
+	)
+	err := s.q.QueryRowContext(ctx, lockoutSelect, subject).Scan(&r.Subject, &r.FailedCount, &first, &barred, &version)
+	if errors.Is(err, databasesql.ErrNoRows) {
+		return nil, store.ErrNotFound
+	}
+	if err != nil {
+		return nil, fmt.Errorf("lockouts.Get: %w", err)
+	}
+	r.FirstFailureAt = timeOf(first)
+	r.LockedUntil = timeOf(barred)
+	r.Version = uint64(version)
+	return &r, nil
+}
+
+// CompareAndSwap inserts when expectedVersion is zero and otherwise updates
+// only the row still at expectedVersion; the database bumps the version.
+func (s *lockoutStore) CompareAndSwap(ctx context.Context, expectedVersion uint64, next *store.AuthnLockoutRecord) (bool, error) {
+	if next == nil || next.Subject == "" {
+		return false, errors.New("lockouts.CompareAndSwap: nil record or empty subject")
+	}
+	if expectedVersion >= math.MaxInt64 {
+		return false, errors.New("lockouts.CompareAndSwap: version overflow")
+	}
+	var (
+		res databasesql.Result
+		err error
+	)
+	if expectedVersion == 0 {
+		res, err = s.q.ExecContext(ctx, lockoutInsert,
+			next.Subject, next.FailedCount, epochOf(next.FirstFailureAt), epochOf(next.LockedUntil))
+	} else {
+		res, err = s.q.ExecContext(ctx, lockoutCompareAndSwap,
+			next.FailedCount, epochOf(next.FirstFailureAt), epochOf(next.LockedUntil),
+			next.Subject, int64(expectedVersion))
+	}
+	if err != nil {
+		return false, fmt.Errorf("lockouts.CompareAndSwap: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return false, fmt.Errorf("lockouts.CompareAndSwap: %w", err)
+	}
+	return n == 1, nil
 }

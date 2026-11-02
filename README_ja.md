@@ -42,7 +42,7 @@ handler, err := op.New(
     op.WithLoginFlow(op.LoginFlow{
         Primary: op.PrimaryPassword{Store: users},
     }),
-    op.WithProfile(profile.Baseline), // 認可コード要求すべてに PKCE を必須にする
+    op.WithProfile(profile.OAuth21), // 認可コード要求すべてに PKCE を必須にする
 )
 if err != nil {
     log.Fatal(err)
@@ -50,7 +50,7 @@ if err != nil {
 log.Fatal(http.ListenAndServe(":8080", handler))
 ```
 
-`st` は OP 自身のレコード（クライアント、コード、トークン、セッション）を保存します。`op.New` は、構成が使う SQL アダプタのテーブルを構築時に検査し、足りないテーブルがあれば名前を挙げて止まります。どのテーブルが対象になるかは [`TABLES.md`](op/storeadapter/sql/schema/TABLES.md) にまとめてあります。`users` は既存のユーザテーブルを `store.UserPasswordStore` として渡したもので、実装するのは読み取りメソッド 3 つです。再割り当てされない識別子の列がすでにあれば、列を足す必要はありません。詳しくは [Bring your own user store](https://go-oidc-provider.libraz.net/ja/use-cases/byo-userstore) を参照してください。
+`st` は OP 自身のレコード（クライアント、コード、トークン、セッション）を保存します。`op.New` は、構成が使う SQL アダプタのテーブルを構築時に検査し、足りないテーブルがあれば名前を挙げて止まります。どのテーブルが対象になるかは [`TABLES.md`](op/storeadapter/sql/schema/TABLES.md) にまとめてあります。`users` は既存のユーザテーブルを `store.UserPasswordStore` として渡したもので、実装するのは読み取りメソッド 3 つで、レガシーハッシュ（bcrypt など）を `PrimaryPassword.LegacySchemes` で再ハッシュする場合に限り、ハッシュの書き戻しメソッドも任意で実装できます。再割り当てされない識別子の列がすでにあれば、列を足す必要はありません。詳しくは [Bring your own user store](https://go-oidc-provider.libraz.net/ja/use-cases/byo-userstore) を参照してください。
 
 `Issuer` / `Store` / `Keyset` は常に必須です。認可コード（`authorization_code`）による認可は既定で有効になっており、これを使う場合は `CookieKeys` と `LoginFlow` も必須です。`op.New` は安全でない構成のままでは起動せずにエラーを返すので、不完全な設定は構築時に弾かれます。
 
@@ -59,9 +59,11 @@ log.Fatal(http.ListenAndServe(":8080", handler))
 セキュリティプロファイルはオプション 1 つで宣言できます。宣言したプロファイルと他の設定が食い違う場合、コンストラクタは起動を拒否します。プロファイルを宣言しないと OpenID Connect Core の形のままになり、confidential client は PKCE なしでコードを交換できます。その場合 `op.New` は警告をログに出します（`WithLogger` 未設定なら `slog.Default()` へ）。
 
 ```go
-op.WithProfile(profile.Baseline)      // OAuth 2.1: code 要求すべてに PKCE 必須
+op.WithProfile(profile.OAuth21)      // OAuth 2.1: code 要求すべてに PKCE 必須
 op.WithProfile(profile.FAPI2Baseline) // PAR + JAR + DPoP, ES256 署名, alg ロック
 ```
+
+`profile.OAuth21` は OAuth 2.1 の構えであり、FAPI 2.0 Baseline ではありません。FAPI のプロファイルは `profile.FAPI2Baseline` と `profile.FAPI2MessageSigning` です。
 
 次に読むもの: [クイックスタート](https://go-oidc-provider.libraz.net/ja/getting-started/install)・[必須オプション](https://go-oidc-provider.libraz.net/ja/getting-started/required-options)・[ハンドラのマウント](https://go-oidc-provider.libraz.net/ja/getting-started/mount)・[セキュリティプロファイル](https://go-oidc-provider.libraz.net/ja/use-cases/security-profile)。[`examples/01-minimal`](examples/01-minimal/main.go) は同じ構成を、鍵生成・ストア接続・グレースフルシャットダウンまで含めた形で示しています。
 

@@ -50,7 +50,7 @@ func TestEffectiveRefreshGrace_FAPI2KeepsTheDefaultWindow(t *testing.T) {
 		},
 		{
 			name:     "Baseline, which places no constraint here",
-			profiles: []profile.Profile{profile.Baseline},
+			profiles: []profile.Profile{profile.OAuth21},
 			want:     0,
 		},
 	}

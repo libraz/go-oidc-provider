@@ -269,7 +269,7 @@ func TestWithSigningAlgorithm(t *testing.T) {
 				return []op.Option{
 					op.WithSigningAlgorithm(op.AlgRS256),
 					op.WithKeyset(op.Keyset{rs("rsa")}),
-					op.WithProfile(profile.Baseline),
+					op.WithProfile(profile.OAuth21),
 				}
 			},
 		},

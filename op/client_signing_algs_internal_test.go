@@ -40,7 +40,7 @@ func TestClientSigningAlgs_ReachEveryVerifier(t *testing.T) {
 		{"fapi2-baseline", []profile.Profile{profile.FAPI2Baseline}, fapi, fapi},
 		{"fapi2-message-signing", []profile.Profile{profile.FAPI2MessageSigning}, fapi, fapi},
 		{"fapi-ciba", []profile.Profile{profile.FAPICIBA}, fapi, fapi},
-		{"baseline", []profile.Profile{profile.Baseline}, []jose.Algorithm{jose.AlgRS256, jose.AlgPS256, jose.AlgES256, jose.AlgEdDSA}, nil},
+		{"baseline", []profile.Profile{profile.OAuth21}, []jose.Algorithm{jose.AlgRS256, jose.AlgPS256, jose.AlgES256, jose.AlgEdDSA}, nil},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

@@ -23,6 +23,7 @@ import (
 
 	"github.com/libraz/go-oidc-provider/examples/internal/devkeys"
 	"github.com/libraz/go-oidc-provider/op"
+	"github.com/libraz/go-oidc-provider/op/profile"
 	"github.com/libraz/go-oidc-provider/op/store"
 )
 
@@ -45,6 +46,7 @@ func buildProvider(storage *scratchStore) (*op.Provider, error) {
 		op.WithStore(storage),
 		op.WithKeyset(keys.Keyset()),
 		op.WithCookieKeys(keys.CookieKey),
+		op.WithProfile(profile.OAuth21),
 		op.WithLoginFlow(flow),
 		// GrantRevocations() is nil, so the OP cannot persist JWT
 		// revocation tombstones. Disable server-side JWT revocation so

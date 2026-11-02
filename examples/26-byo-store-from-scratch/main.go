@@ -31,6 +31,8 @@
 //   - AccessTokens (store.AccessTokenRegistry)
 //   - Metadata (store.MetadataStore — so op.New does not emit the
 //     pairwise-immutability startup warning)
+//   - AuthnLockouts (store.AuthnLockoutStore — op.New refuses a password
+//     login flow without the cross-factor brute-force counter)
 //
 // Substores the demo does not exercise return nil and the matching
 // option is pinned so the library never requires them:
@@ -132,8 +134,8 @@ func main() {
 
 func run() error {
 	dbPath := filepath.Join(os.TempDir(), "oidc-example-26.db")
-	// Pre-v1 schemas can evolve between checkouts; remove any prior file
-	// so a re-run never collides with a stale DDL. Production embedders
+	// The demo deletes its throwaway SQLite file on each run, so it always
+	// starts from the current schema. Production embedders
 	// track schema versions through their own migration tooling instead
 	// of throwing the database away.
 	_ = os.Remove(dbPath)

@@ -306,6 +306,22 @@ func (c *config) emitPartialWiringWarnings() {
 			"option", "WithAllowInsecureSharedSignalsPushForDev",
 		)
 	}
+	if c.allowLocalhostLoopback {
+		log.Warn(
+			"WithAllowLocalhostLoopback is a development option: it admits the "+
+				"textual \"localhost\" host in redirect_uri and in the issuer, "+
+				"whose resolution can be hijacked; never enable this in production",
+			"option", "WithAllowLocalhostLoopback",
+		)
+	}
+	if featureEnabled(c.features, feature.PKCE) {
+		log.Warn(
+			"WithFeature(feature.PKCE) has no effect: PKCE with S256 is always "+
+				"available, and PKCE for confidential clients is required only "+
+				"through WithProfile(profile.OAuth21) or a FAPI profile",
+			"option", "WithFeature",
+		)
+	}
 	c.warnUserStoreMismatch()
 	c.infoMissingStoreCapabilities()
 	c.warnSessionDurabilityMismatch()
@@ -325,7 +341,7 @@ func (c *config) warnPKCENotRequired() {
 	c.startupLog().Warn(
 		"no security profile requires PKCE, so a confidential client may "+
 			"redeem an authorization code without one; declare "+
-			"op.WithProfile(profile.Baseline) unless legacy clients need this",
+			"op.WithProfile(profile.OAuth21) unless legacy clients need this",
 		"option", "WithProfile",
 	)
 }

@@ -36,7 +36,7 @@ func TestCIMD_Validate_AcceptsBaselineAndNoProfile(t *testing.T) {
 
 	for _, c := range []*config{
 		{cimd: &ClientIDMetadataDocuments{}},
-		{cimd: &ClientIDMetadataDocuments{}, profiles: []profile.Profile{profile.Baseline}},
+		{cimd: &ClientIDMetadataDocuments{}, profiles: []profile.Profile{profile.OAuth21}},
 		{profiles: []profile.Profile{profile.FAPI2Baseline}},
 	} {
 		if err := c.validateClientIDMetadataDocuments(); err != nil {
@@ -57,15 +57,15 @@ func TestCIMD_ProfileWithoutNoneAuth(t *testing.T) {
 			return []string{"private_key_jwt"}
 		case profile.FAPI2MessageSigning:
 			return []string{"none", "private_key_jwt"}
-		case profile.Baseline, profile.FAPICIBA:
+		case profile.OAuth21, profile.FAPICIBA:
 			return nil
 		}
 		return nil
 	}
-	if p, ok := profileWithoutNoneAuth([]profile.Profile{profile.Baseline, profile.FAPI2MessageSigning}, allowed); ok {
+	if p, ok := profileWithoutNoneAuth([]profile.Profile{profile.OAuth21, profile.FAPI2MessageSigning}, allowed); ok {
 		t.Errorf("profiles keeping none reported %s", p)
 	}
-	p, ok := profileWithoutNoneAuth([]profile.Profile{profile.Baseline, profile.FAPI2Baseline}, allowed)
+	p, ok := profileWithoutNoneAuth([]profile.Profile{profile.OAuth21, profile.FAPI2Baseline}, allowed)
 	if !ok || p != profile.FAPI2Baseline {
 		t.Errorf("got (%s, %v), want (%s, true)", p, ok, profile.FAPI2Baseline)
 	}

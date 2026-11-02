@@ -43,6 +43,7 @@ import (
 //nolint:gochecknoglobals // registry of interface types; declared once and read-only.
 var allStoreInterfaces = []reflect.Type{
 	typeOf[store.AccessTokenRegistry](),
+	typeOf[store.AuthnLockoutProvider](),
 	typeOf[store.AuthnLockoutStore](),
 	typeOf[store.AuthorizationCodeStore](),
 	typeOf[store.CIBARequestStore](),

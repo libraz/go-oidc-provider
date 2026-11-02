@@ -597,7 +597,7 @@ func TestScenario_PKCE_016_VerifierInvalidCharsetRejected(t *testing.T) {
 
 // TestScenario_PKCE_018_BaselineProfileRequiresPKCE checks the
 // PKCE mandate the OAuth 2.1 baseline profile carries: with
-// profile.Baseline declared, a confidential client that omits
+// profile.OAuth21 declared, a confidential client that omits
 // code_challenge is refused at /authorize with a redirect-safe
 // invalid_request, and the identical request succeeds when no
 // profile is declared. The pair is what makes the profile worth
@@ -635,7 +635,7 @@ func TestScenario_PKCE_018_BaselineProfileRequiresPKCE(t *testing.T) {
 
 	t.Run("baseline-profile-rejects-missing-challenge", func(t *testing.T) {
 		t.Parallel()
-		tk := newProvider(t, testkit.WithOptions(op.WithProfile(profile.Baseline)))
+		tk := newProvider(t, testkit.WithOptions(op.WithProfile(profile.OAuth21)))
 		errCode, errDesc, gotState, _ := runAuthorizeRedirectError(
 			t, tk, clientID, callback, "state-pkce-018", url.Values{},
 		)

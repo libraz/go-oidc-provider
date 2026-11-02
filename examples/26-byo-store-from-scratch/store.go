@@ -100,6 +100,9 @@ func (s *scratchStore) AccessTokens() store.AccessTokenRegistry {
 
 func (s *scratchStore) Metadata() store.MetadataStore { return &metadataStore{q: s.q()} }
 
+// AuthnLockouts makes scratchStore a store.AuthnLockoutProvider.
+func (s *scratchStore) AuthnLockouts() store.AuthnLockoutStore { return &lockoutStore{q: s.q()} }
+
 // --- substores the demo does not exercise return nil --------------------
 //
 // The library detects each nil at op.New and either skips the feature

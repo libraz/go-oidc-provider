@@ -4,8 +4,6 @@ import (
 	"bytes"
 	"context"
 	"errors"
-	"log/slog"
-	"strings"
 	"testing"
 	"time"
 
@@ -345,10 +343,10 @@ func TestResolveAuthnLockoutStore(t *testing.T) {
 	}
 }
 
-// TestCompile_WarnsWithoutLockoutStore pins that compiling a login flow
-// with a counter-consuming step logs exactly one warning when no lockout
-// store resolves, and stays quiet when one does.
-func TestCompile_WarnsWithoutLockoutStore(t *testing.T) {
+// TestCompile_RequiresLockoutStore pins that compiling a login flow with a
+// counter-consuming step fails with ErrAuthnLockoutStoreRequired when no
+// lockout store resolves, and succeeds when one does.
+func TestCompile_RequiresLockoutStore(t *testing.T) {
 	t.Parallel()
 
 	inner := inmem.New()
@@ -362,29 +360,31 @@ func TestCompile_WarnsWithoutLockoutStore(t *testing.T) {
 		name     string
 		store    store.Store
 		explicit store.AuthnLockoutStore
-		wantWarn int
+		wantErr  bool
 	}{
-		{name: "no accessor", store: noLockoutsStore{Store: inner}, wantWarn: 1},
-		{name: "accessor returns nil", store: nilLockoutsStore{Store: inner}, wantWarn: 1},
-		{name: "auto-wired", store: inner, wantWarn: 0},
-		{name: "explicit", store: noLockoutsStore{Store: inner}, explicit: inner.AuthnLockouts(), wantWarn: 0},
+		{name: "no accessor", store: noLockoutsStore{Store: inner}, wantErr: true},
+		{name: "accessor returns nil", store: nilLockoutsStore{Store: inner}, wantErr: true},
+		{name: "auto-wired", store: inner},
+		{name: "explicit", store: noLockoutsStore{Store: inner}, explicit: inner.AuthnLockouts()},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			var buf bytes.Buffer
 			cfg := &config{
 				store:             tc.store,
 				authnLockoutStore: tc.explicit,
-				logger:            slog.New(slog.NewTextHandler(&buf, nil)),
 				loginFlow:         flow,
 				loginFlowSet:      true,
 			}
-			if _, err := compileLoginFlow(flow, cfg); err != nil {
-				t.Fatalf("compileLoginFlow: %v", err)
+			_, err := compileLoginFlow(flow, cfg)
+			if tc.wantErr {
+				if !errors.Is(err, ErrAuthnLockoutStoreRequired) {
+					t.Fatalf("compileLoginFlow err = %v, want ErrAuthnLockoutStoreRequired", err)
+				}
+				return
 			}
-			if got := strings.Count(buf.String(), "level=WARN"); got != tc.wantWarn {
-				t.Fatalf("lockout warnings = %d, want %d; log:\n%s", got, tc.wantWarn, buf.String())
+			if err != nil {
+				t.Fatalf("compileLoginFlow: %v", err)
 			}
 		})
 	}

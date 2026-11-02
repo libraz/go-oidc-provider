@@ -25,7 +25,7 @@ import (
 //     sender-constrained-token requirement is inherited from the
 //     FAPI 2.0 family and lives on [RequiredAnyOf] like FAPI 2.0
 //     Baseline / Message Signing.
-//   - [Baseline]: none. Its PKCE mandate is a policy predicate
+//   - [OAuth21]: none. Its PKCE mandate is a policy predicate
 //     ([RequiresPKCE]), not a routable extension — [feature.PKCE]
 //     only affects discovery metadata and per-client policy.
 func RequiredFeatures(p Profile) []feature.Flag {
@@ -36,7 +36,7 @@ func RequiredFeatures(p Profile) []feature.Flag {
 		return []feature.Flag{feature.PAR, feature.JAR, feature.JARM}
 	case FAPICIBA:
 		return []feature.Flag{feature.JAR}
-	case Baseline, profileUnspecified:
+	case OAuth21, profileUnspecified:
 		return nil
 	default:
 		return nil
@@ -54,7 +54,7 @@ func RequiredFeatures(p Profile) []feature.Flag {
 // for it, and still answer 404 to every backchannel-authentication
 // request. Every other profile returns nil — FAPI 2.0 Baseline and
 // Message Signing constrain how the authorization-code grant behaves
-// rather than which grants exist, and [Baseline] adds no grant of its
+// rather than which grants exist, and [OAuth21] adds no grant of its
 // own.
 //
 // Unlike [RequiredFeatures], the option layer does NOT auto-enable a
@@ -69,7 +69,7 @@ func RequiredGrants(p Profile) []grant.Type {
 	switch p {
 	case FAPICIBA:
 		return []grant.Type{grant.CIBA}
-	case Baseline, FAPI2Baseline, FAPI2MessageSigning, profileUnspecified:
+	case OAuth21, FAPI2Baseline, FAPI2MessageSigning, profileUnspecified:
 		return nil
 	default:
 		return nil
@@ -167,7 +167,7 @@ func PARLifetimeCeiling(p Profile) time.Duration {
 // PKCE path, while every FAPI 2.0 deployment keeps the stronger MUST
 // the profile mandates (FAPI 2.0 §2.1.1, citing RFC 7636).
 //
-// [Baseline] returns true: mandatory PKCE is the one requirement that
+// [OAuth21] returns true: mandatory PKCE is the one requirement that
 // profile carries, and it is what separates an explicit OAuth 2.1
 // declaration from the permissive default.
 //
@@ -178,7 +178,7 @@ func PARLifetimeCeiling(p Profile) time.Duration {
 // added here rather than relied on as the default.
 func RequiresPKCE(p Profile) bool {
 	switch p {
-	case Baseline, FAPI2Baseline, FAPI2MessageSigning:
+	case OAuth21, FAPI2Baseline, FAPI2MessageSigning:
 		return true
 	case FAPICIBA, profileUnspecified:
 		return false
@@ -213,7 +213,7 @@ func RequiresPKCE(p Profile) bool {
 // redirect — there is no nonce parameter on the wire.
 func RequiresNonce(p Profile) bool {
 	switch p {
-	case Baseline, FAPICIBA, profileUnspecified, FAPI2Baseline, FAPI2MessageSigning:
+	case OAuth21, FAPICIBA, profileUnspecified, FAPI2Baseline, FAPI2MessageSigning:
 		return false
 	default:
 		return false
@@ -226,7 +226,7 @@ func RequiresNonce(p Profile) bool {
 // nonce parameter") is the canonical source. Vanilla OIDC Core
 // leaves this false because state is RECOMMENDED but not REQUIRED.
 //
-// [Baseline] also returns false. OAuth 2.1 keeps state RECOMMENDED,
+// [OAuth21] also returns false. OAuth 2.1 keeps state RECOMMENDED,
 // and the CSRF property state supplies is already covered once
 // [RequiresPKCE] holds — elevating it here would reject conformant
 // OAuth 2.1 clients for no security gain.
@@ -237,7 +237,7 @@ func RequiresStateOrNonce(p Profile) bool {
 	switch p {
 	case FAPI2Baseline, FAPI2MessageSigning:
 		return true
-	case Baseline, FAPICIBA, profileUnspecified:
+	case OAuth21, FAPICIBA, profileUnspecified:
 		return false
 	default:
 		return false
@@ -252,7 +252,7 @@ func RequiresStateOrNonce(p Profile) bool {
 //
 // FAPI 2.0 Baseline §5.3.1 and Message Signing both require PAR;
 // the profile elevates RFC 9126's optional opt-in to a MUST. Vanilla
-// OIDC Core deployments — and [Baseline], which takes the OAuth 2.1
+// OIDC Core deployments — and [OAuth21], which takes the OAuth 2.1
 // posture without the financial-grade requirements — leave this false
 // so the direct-form /authorize path stays functional.
 //
@@ -262,7 +262,7 @@ func RequiresPAR(p Profile) bool {
 	switch p {
 	case FAPI2Baseline, FAPI2MessageSigning:
 		return true
-	case Baseline, FAPICIBA, profileUnspecified:
+	case OAuth21, FAPICIBA, profileUnspecified:
 		return false
 	default:
 		return false
@@ -294,7 +294,7 @@ func RequiresPAR(p Profile) bool {
 // concern response signing rather than client auth, and FAPI-CIBA
 // inherits the FAPI 2.0 §3.1.3 set.
 //
-// [Baseline] returns nil: OAuth 2.1 keeps every registered client
+// [OAuth21] returns nil: OAuth 2.1 keeps every registered client
 // authentication method available, including public clients, and
 // narrowing the set would make the profile unusable for the native
 // and single-page applications it is meant to cover.
@@ -316,7 +316,7 @@ func AllowedClientAuthMethods(p Profile) []string {
 // token_endpoint_auth_signing_alg and request_object_signing_alg.
 //
 // The FAPI family returns PS256, ES256 and EdDSA (FAPI 2.0 Security
-// Profile §5.4.1); FAPI-CIBA inherits the set. [Baseline] returns nil,
+// Profile §5.4.1); FAPI-CIBA inherits the set. [OAuth21] returns nil,
 // leaving the library-wide allow-list in force.
 //
 // The slice is freshly allocated on each call; callers may mutate

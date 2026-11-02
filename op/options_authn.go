@@ -160,10 +160,11 @@ const mfaEncryptionKeyLen = 32
 // the wrong shape for anything but a single-process demo. An embedder
 // on another backend supplies its own implementation.
 //
-// Without a resolved store only the per-factor counters the TOTP and
-// email-OTP authenticators keep on their own apply, each budgeting its
-// own factor and the password not at all; route the store to a backend
-// every replica shares.
+// When this option is unset the store is taken from the [WithStore] value
+// if it implements [store.AuthnLockoutProvider]. A [LoginFlow] with a
+// password or second-factor step and no resolved store makes [New] fail
+// with [ErrAuthnLockoutStoreRequired]; route the store to a backend every
+// replica shares.
 //
 // At most one store may be registered; a second [WithAuthnLockoutStore]
 // call fails [New] with a structured configuration error.

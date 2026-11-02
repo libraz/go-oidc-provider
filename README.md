@@ -63,7 +63,7 @@ handler, err := op.New(
     op.WithLoginFlow(op.LoginFlow{
         Primary: op.PrimaryPassword{Store: users},
     }),
-    op.WithProfile(profile.Baseline), // PKCE on every authorization-code request
+    op.WithProfile(profile.OAuth21), // PKCE on every authorization-code request
 )
 if err != nil {
     log.Fatal(err)
@@ -75,8 +75,10 @@ log.Fatal(http.ListenAndServe(":8080", handler))
 checks the SQL adapter's tables your configuration uses and names any that are
 missing; [`TABLES.md`](op/storeadapter/sql/schema/TABLES.md) lists which
 those are. `users` is your existing users table behind
-`store.UserPasswordStore`: three read methods, and no new column when the
-table already has an identifier that is never reassigned. See
+`store.UserPasswordStore`: three read methods, plus an optional hash
+write-back when legacy hashes (such as bcrypt) are rehashed through
+`PrimaryPassword.LegacySchemes`, and no new column when the table already has
+an identifier that is never reassigned. See
 [Bring your own user store](https://go-oidc-provider.libraz.net/use-cases/byo-userstore).
 
 `Issuer`, `Store` and `Keyset` are always required. `CookieKeys` and
@@ -95,9 +97,12 @@ Without one the OP keeps the OpenID Connect Core shape, where a confidential
 client may redeem a code without PKCE, and `op.New` logs a warning saying so (to `slog.Default()` when no `WithLogger` is set):
 
 ```go
-op.WithProfile(profile.Baseline)      // OAuth 2.1: PKCE on every code request
+op.WithProfile(profile.OAuth21)      // OAuth 2.1: PKCE on every code request
 op.WithProfile(profile.FAPI2Baseline) // PAR + JAR + DPoP, ES256 signing, alg lock
 ```
+
+`profile.OAuth21` is the OAuth 2.1 posture, not FAPI 2.0 Baseline; the FAPI
+profiles are `profile.FAPI2Baseline` and `profile.FAPI2MessageSigning`.
 
 Next steps: [Quick Start](https://go-oidc-provider.libraz.net/getting-started/install)
 · [Required options](https://go-oidc-provider.libraz.net/getting-started/required-options)

@@ -115,7 +115,10 @@ start. `op.WithAllowInsecureBackchannelLogoutForDev` requires a development
 issuer. A DynamoDB deployment must create the new `cascade_links` table (from
 `Store.TableDefinitions`) before upgrading; `ValidateSchema` requires it. A
 SQL database missing an index of the reference DDL, typically MySQL upgraded
-through `Store.Migrate`, must create it first; `op.New` names each one.
+through `Store.Migrate`, must create it first; `op.New` names each one. A
+bring-your-own store behind a login flow with a password or second-factor step
+must implement `AuthnLockouts()` or be paired with
+`op.WithAuthnLockoutStore`, or `op.New` refuses to start.
 
 ### Security
 
@@ -166,8 +169,12 @@ through `Store.Migrate`, must create it first; `op.New` names each one.
   store exposes `AuthnLockouts()`: the in-memory, SQL and DynamoDB
   adapters and `composite.Store` (which forwards its Users backend's). It
   was previously off unless `op.WithAuthnLockoutStore` was set. `op.New`
-  logs a warning when a password or second-factor step is configured and
-  no lockout store resolves.
+  refuses to construct, with `op.ErrAuthnLockoutStoreRequired`, when a
+  password or second-factor step is configured and no lockout store
+  resolves, instead of running with per-subject brute-force limiting off. A
+  bring-your-own store implements the new `store.AuthnLockoutProvider`
+  (`AuthnLockouts() store.AuthnLockoutStore`), or the embedder passes
+  `op.WithAuthnLockoutStore`.
 
 - A TOTP, recovery-code or email-OTP step required of a user with no
   enrolment (or an unconfirmed TOTP enrolment) ends the attempt with a 4xx
@@ -213,6 +220,15 @@ through `Store.Migrate`, must create it first; `op.New` names each one.
   `store.StandardClaims` builds the map with the right types.
 
 ### Changed
+
+- `op.New` now warns at construction when `feature.PKCE` is passed to
+  `op.WithFeature`, which has no effect (PKCE for confidential clients is
+  required by `op.WithProfile(profile.OAuth21)` or a FAPI profile), and when
+  `op.WithAllowLocalhostLoopback` is set.
+
+- The sentinel errors for missing required options now carry a remedy in
+  their messages, and the missing-`LoginFlow` construction error wraps the
+  new `op.ErrLoginFlowRequired`, so a caller can match it with `errors.Is`.
 
 - Without `op.WithLogger`, the diagnostics `op.New` emits once at construction
   now go to `slog.Default()` instead of being discarded: the warning that no
@@ -475,6 +491,17 @@ through `Store.Migrate`, must create it first; `op.New` names each one.
   subject mapping to `op.WithJWTBearerGrant`.
 
 ### Added
+
+- `profile.OAuth21` names the OAuth 2.1 profile: PKCE on every
+  authorization-code request. It has the value `profile.Baseline` had, and
+  its wire string is unchanged.
+
+- `store.AuthnLockoutProvider`, the optional interface a store implements to
+  expose its lockout store (`AuthnLockouts() store.AuthnLockoutStore`), and the
+  sentinels `op.ErrAuthnLockoutStoreRequired` and `op.ErrLoginFlowRequired`.
+
+- The `op` package documentation has an "Option groups" section that sorts the
+  options by purpose.
 
 - `op.WithSigningAlgorithm` selects the one algorithm the OP signs every token
   with: `op.AlgES256` (the default) or `op.AlgRS256`. With RS256 the active
@@ -1009,6 +1036,8 @@ covered by the SemVer promise.
 
 ### Deprecated
 
+- `profile.Baseline`. Use `profile.OAuth21`, the same value; the old name read
+  as FAPI 2.0 Baseline, which is `profile.FAPI2Baseline`.
 - `op.RiskPreFactor` and `op.RiskPostFactor`. No consult point passes
   either phase any more; a login flow consults its `Risk` assessor at
   `op.RiskAuthorizeEntry` only.

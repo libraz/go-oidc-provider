@@ -20,7 +20,7 @@ func isFAPI2Profile(p profile.Profile) bool {
 	switch p {
 	case profile.FAPI2Baseline, profile.FAPI2MessageSigning:
 		return true
-	case profile.Baseline, profile.FAPICIBA:
+	case profile.OAuth21, profile.FAPICIBA:
 		return false
 	}
 	return false
@@ -245,7 +245,7 @@ func profileForcesDPoPNonce(p profile.Profile) bool {
 	switch p {
 	case profile.FAPI2MessageSigning, profile.FAPICIBA:
 		return true
-	case profile.Baseline, profile.FAPI2Baseline:
+	case profile.OAuth21, profile.FAPI2Baseline:
 		return false
 	}
 	return false

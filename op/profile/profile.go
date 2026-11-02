@@ -36,37 +36,47 @@ const (
 	//     (FAPI 2.0 §5.3.2.2).
 	FAPICIBA
 
-	// Baseline selects the OAuth 2.1 / RFC 9700 posture on top of
+	// OAuth21 selects the OAuth 2.1 / RFC 9700 posture on top of
 	// OpenID Connect Core 1.0. Its single MUST beyond the library
 	// default is PKCE on every authorization-code request
-	// (see [RequiresPKCE]).
+	// (see [RequiresPKCE]). It is unrelated to FAPI 2.0 Baseline, which
+	// is [FAPI2Baseline].
 	//
-	// Baseline deliberately imposes nothing else: no access-token TTL
+	// OAuth21 deliberately imposes nothing else: no access-token TTL
 	// cap, no client-authentication restriction, no PAR mandate, no
 	// sender-constrained tokens. Those are FAPI requirements, and
 	// folding them in here would leave a profile no deployment could
 	// adopt without also being financial-grade.
 	//
-	// The distinction Baseline draws is against the *unspecified*
+	// The distinction OAuth21 draws is against the *unspecified*
 	// configuration, not against FAPI. With no profile configured the
 	// OP accepts an authorization-code request without a
 	// code_challenge — the spec-compliant OIDC Core 1.0 shape the
 	// OpenID Connect Basic certification suite drives. That default
 	// cannot tell "we admit legacy relying parties on purpose" apart
-	// from "we never considered it"; Baseline is how a deployment
+	// from "we never considered it"; OAuth21 is how a deployment
 	// says the former in the type system.
 	//
 	// Declared last so the numeric values of the FAPI constants stay
-	// put; the wire form is [Profile.String], never the ordinal.
-	Baseline
+	// put; the wire form is [Profile.String], never the ordinal, and
+	// stays "baseline".
+	//
+	// Stable since v1.5.
+	OAuth21
 )
+
+// Baseline is the earlier name of [OAuth21] and is the same value.
+//
+// Deprecated: use [OAuth21]. The name read as FAPI 2.0 Baseline, which
+// is [FAPI2Baseline].
+const Baseline = OAuth21
 
 // String returns the canonical lower-case identifier used in discovery
 // metadata and audit events. The values match the conformance suite test
 // plan slugs.
 func (p Profile) String() string {
 	switch p {
-	case Baseline:
+	case OAuth21:
 		return "baseline"
 	case FAPI2Baseline:
 		return "fapi2-baseline"
@@ -84,7 +94,7 @@ func (p Profile) String() string {
 // IsValid reports whether p is one of the recognised exported constants.
 func (p Profile) IsValid() bool {
 	switch p {
-	case Baseline, FAPI2Baseline, FAPI2MessageSigning, FAPICIBA:
+	case OAuth21, FAPI2Baseline, FAPI2MessageSigning, FAPICIBA:
 		return true
 	case profileUnspecified:
 		return false
@@ -98,7 +108,7 @@ func (p Profile) IsValid() bool {
 // §5.3.2.2 imposes the requirement on the FAPI 2.0 family
 // ([FAPI2Baseline], [FAPI2MessageSigning]); FAPI-CIBA inherits the
 // same posture by reference (FAPI-CIBA-ID1 §5). Non-FAPI profiles —
-// including [Baseline] — return false so embedders deploying plain
+// including [OAuth21] — return false so embedders deploying plain
 // OAuth 2.0 / OIDC can opt into [op.RevocationStrategyNone] without
 // tripping the gate.
 //
@@ -111,13 +121,13 @@ func RequiresAccessTokenRevocation(p Profile) bool {
 }
 
 // IsFAPI reports whether p belongs to the FAPI family: [FAPI2Baseline],
-// [FAPI2MessageSigning] or [FAPICIBA]. [Baseline] and an unrecognised
+// [FAPI2MessageSigning] or [FAPICIBA]. [OAuth21] and an unrecognised
 // value return false.
 func IsFAPI(p Profile) bool {
 	switch p {
 	case FAPI2Baseline, FAPI2MessageSigning, FAPICIBA:
 		return true
-	case Baseline, profileUnspecified:
+	case OAuth21, profileUnspecified:
 		return false
 	}
 	return false
@@ -125,7 +135,7 @@ func IsFAPI(p Profile) bool {
 
 // RequiresSenderConstrainedTokens reports whether p forbids bearer access
 // tokens. FAPI 2.0 §3.1.4 imposes the mandate on the FAPI 2.0 family and
-// FAPI-CIBA inherits it (FAPI-CIBA-ID1 §5); [Baseline] keeps bearer tokens
+// FAPI-CIBA inherits it (FAPI-CIBA-ID1 §5); [OAuth21] keeps bearer tokens
 // legal.
 func RequiresSenderConstrainedTokens(p Profile) bool {
 	return IsFAPI(p)

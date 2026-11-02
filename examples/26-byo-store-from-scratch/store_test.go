@@ -61,6 +61,16 @@ func TestStoreContract(t *testing.T) {
 	})
 }
 
+func TestAuthnLockoutContract(t *testing.T) {
+	t.Parallel()
+
+	contract.RunAuthnLockouts(t, func(t *testing.T) store.AuthnLockoutStore {
+		t.Helper()
+		s, _ := newTestStore(t)
+		return s.AuthnLockouts()
+	})
+}
+
 func TestAuthorizationCodes(t *testing.T) {
 	t.Parallel()
 	s, _ := newTestStore(t)

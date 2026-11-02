@@ -18,7 +18,7 @@
 //
 // Selecting no profile at all is a distinct, supported configuration: it is
 // the OpenID Connect Core 1.0 shape, which predates RFC 7636 and therefore
-// admits an authorization-code request with no code_challenge. [Baseline]
+// admits an authorization-code request with no code_challenge. [OAuth21]
 // exists so a deployment can state the OAuth 2.1 posture explicitly rather
 // than inheriting the permissive default by omission.
 package profile

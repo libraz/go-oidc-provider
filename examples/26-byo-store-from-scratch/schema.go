@@ -190,6 +190,14 @@ CREATE TABLE IF NOT EXISTS vault_op_notes (
     note_key    TEXT PRIMARY KEY,
     note_value  TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS vault_signin_strikes (
+    principal           TEXT PRIMARY KEY,
+    strike_count        INTEGER NOT NULL,
+    first_strike_epoch  INTEGER NOT NULL,
+    barred_until_epoch  INTEGER NOT NULL,
+    row_version         INTEGER NOT NULL
+);
 `
 
 // querier is the minimal surface a substore needs from the database.

@@ -10,14 +10,14 @@
 //   - :8080 — no profile declared. This is the OpenID Connect Core
 //     1.0 shape. OIDC Core predates RFC 7636, so a confidential
 //     client MAY omit code_challenge and the OP admits the request.
-//   - :8081 — op.WithProfile(profile.Baseline). The OAuth 2.1 /
+//   - :8081 — op.WithProfile(profile.OAuth21). The OAuth 2.1 /
 //     RFC 9700 posture: PKCE is mandatory on every authorization-code
 //     request, and the same request is refused.
 //
 // Both answers are spec-correct. That is the problem the profile
 // solves: without a declaration, "we admit legacy relying parties on
 // purpose" and "nobody ever thought about it" produce byte-identical
-// configurations. profile.Baseline is how a deployment says the
+// configurations. profile.OAuth21 is how a deployment says the
 // former in the type system, and op.New then holds it to that.
 //
 // Run with the example build tag:
@@ -69,7 +69,7 @@
 //
 // # Choosing
 //
-// Declare profile.Baseline unless PKCE-incapable relying parties are
+// Declare profile.OAuth21 unless PKCE-incapable relying parties are
 // still connected. It costs nothing else: it caps no token lifetime,
 // restricts no client-authentication method, and requires neither PAR
 // nor sender-constrained tokens. Those belong to the FAPI profiles —
@@ -124,13 +124,13 @@ func main() {
 		log.Fatalf("unprofiled OP: %v", err)
 	}
 	// The single line that separates the two OPs.
-	baseline, err := buildProvider("http://127.0.0.1"+baselineAddr, auditLogger, op.WithProfile(profile.Baseline))
+	baseline, err := buildProvider("http://127.0.0.1"+baselineAddr, auditLogger, op.WithProfile(profile.OAuth21))
 	if err != nil {
 		log.Fatalf("baseline OP: %v", err)
 	}
 
 	log.Printf("no profile declared  → http://127.0.0.1%s (admits a confidential client without PKCE)", unprofiledAddr)
-	log.Printf("profile.Baseline     → http://127.0.0.1%s (refuses the same request)", baselineAddr)
+	log.Printf("profile.OAuth21     → http://127.0.0.1%s (refuses the same request)", baselineAddr)
 	log.Printf("demo user: username=%q password=%q", demoUsername, demoPassword)
 
 	errCh := make(chan error, 2)

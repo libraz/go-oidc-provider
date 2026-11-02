@@ -554,9 +554,7 @@ func resolveAuthnLockoutStore(c *config) store.AuthnLockoutStore { //nolint:iret
 	if !nilcheck.IsNil(c.authnLockoutStore) {
 		return c.authnLockoutStore
 	}
-	if p, ok := c.store.(interface {
-		AuthnLockouts() store.AuthnLockoutStore
-	}); ok {
+	if p, ok := c.store.(store.AuthnLockoutProvider); ok {
 		if s := p.AuthnLockouts(); !nilcheck.IsNil(s) {
 			return s
 		}
@@ -564,27 +562,18 @@ func resolveAuthnLockoutStore(c *config) store.AuthnLockoutStore { //nolint:iret
 	return nil
 }
 
-// warnWithoutLockoutStore logs once that brute-force limiting is off
-// when the login flow schedules a counter-consuming step but no
-// lockout store resolves.
-func (c *config) warnWithoutLockoutStore() {
-	log := c.startupLog()
-	if log == nil || resolveAuthnLockoutStore(c) != nil {
-		return
+// validateLockoutStore refuses construction when the login flow schedules
+// a counter-consuming step but no lockout store resolves.
+func (c *config) validateLockoutStore() error {
+	if resolveAuthnLockoutStore(c) != nil {
+		return nil
 	}
 	for _, step := range c.loginFlowSteps() {
-		if !countsFailures(step) {
-			continue
+		if countsFailures(step) {
+			return ErrAuthnLockoutStoreRequired
 		}
-		log.Warn(
-			"the login flow has a password or second-factor step but no "+
-				"authn lockout store is available, so per-subject brute-force "+
-				"limiting is disabled; use a WithStore value that exposes "+
-				"AuthnLockouts() or configure WithAuthnLockoutStore",
-			"option", "WithAuthnLockoutStore",
-		)
-		return
 	}
+	return nil
 }
 
 // countsFailures reports whether step feeds the cross-factor lockout

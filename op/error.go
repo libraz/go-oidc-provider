@@ -190,7 +190,7 @@ const (
 // ErrIssuerRequired is returned by [New] when [WithIssuer] is not supplied.
 var ErrIssuerRequired = &Error{
 	Code:        codeConfiguration,
-	Description: "WithIssuer is required",
+	Description: "WithIssuer is required; pass the OP's absolute https issuer URL",
 }
 
 // ErrStoreRequired is returned by [New] when [WithStore] is not supplied.
@@ -198,7 +198,7 @@ var ErrIssuerRequired = &Error{
 // run without a caller-provided storage backend.
 var ErrStoreRequired = &Error{
 	Code:        codeConfiguration,
-	Description: "WithStore is required",
+	Description: "WithStore is required; pass a store.Store such as the inmem, sql, dynamodb or composite adapter",
 }
 
 // ErrUserStoreRequired is returned by [New] when [WithUserStore] receives a
@@ -234,7 +234,7 @@ var ErrIssuerInvalid = &Error{
 // least one signing key.
 var ErrKeysetRequired = &Error{
 	Code:        codeConfiguration,
-	Description: "WithKeyset is required",
+	Description: "WithKeyset is required; pass at least one signing key",
 }
 
 // ErrCookieKeysRequired is returned by [New] when [WithCookieKeys] was
@@ -244,7 +244,27 @@ var ErrKeysetRequired = &Error{
 // least one cookie key.
 var ErrCookieKeysRequired = &Error{
 	Code:        codeConfiguration,
-	Description: "WithCookieKeys is required when the authorization_code grant is enabled",
+	Description: "WithCookieKeys is required when the authorization_code grant is enabled; pass at least one 32-byte random key, or drop the grant with WithGrants",
+}
+
+// ErrLoginFlowRequired is returned by [New] when the authorization_code
+// grant is enabled but no [LoginFlow] is registered. Without a flow the OP
+// cannot authenticate anyone.
+//
+// Stable since v1.5.
+var ErrLoginFlowRequired = &Error{
+	Code:        codeConfiguration,
+	Description: "the authorization_code grant is enabled but no LoginFlow is registered; supply WithLoginFlow, or drop the grant with WithGrants",
+}
+
+// ErrAuthnLockoutStoreRequired is returned by [New] when the [LoginFlow]
+// has a password or second-factor step but no cross-factor lockout store
+// resolves. Match it with [errors.Is].
+//
+// Stable since v1.5.
+var ErrAuthnLockoutStoreRequired = &Error{
+	Code:        codeConfiguration,
+	Description: "the login flow has a password or second-factor step but no authn lockout store resolves; pass a WithStore value implementing store.AuthnLockoutProvider or configure WithAuthnLockoutStore",
 }
 
 // ErrDynamicRegistrationDisabled is returned by

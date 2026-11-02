@@ -56,6 +56,20 @@ type AuthnLockoutRecord struct {
 	Version uint64
 }
 
+// AuthnLockoutProvider is the extension of the aggregate [Store] that
+// exposes the cross-factor brute-force counter substore. op.New resolves
+// the lockout store from it when op.WithAuthnLockoutStore is not set. The
+// shipped inmem, sql, dynamodb and composite stores implement it; an
+// accessor returning nil counts as unresolved.
+//
+// Stable since v1.5.
+type AuthnLockoutProvider interface {
+	Store
+
+	// AuthnLockouts returns the cross-factor lockout substore.
+	AuthnLockouts() AuthnLockoutStore
+}
+
 // AuthnLockoutStore is the substore for the cross-factor brute-force
 // counter. Get and CompareAndSwap form a versioned state machine shared by
 // failure increments, window rollover, lock stamping, and success reset.

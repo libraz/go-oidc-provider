@@ -662,7 +662,7 @@ func profileOptions(ctx context.Context, cfg runConfig, logger *slog.Logger) ([]
 		// The OAuth 2.1 posture needs no supporting wiring: its only
 		// mandate is PKCE on every authorization-code request, which
 		// the common base already satisfies for the demo clients.
-		return []op.Option{op.WithProfile(profile.Baseline)}, nil
+		return []op.Option{op.WithProfile(profile.OAuth21)}, nil
 	case profileNameFAPI2Baseline:
 		return fapi2BaselineOptions(), nil
 	case profileNameFAPI2MessageSigning:

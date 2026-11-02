@@ -35,7 +35,7 @@
 //	    op.WithLoginFlow(op.LoginFlow{
 //	        Primary: op.PrimaryPassword{Store: myUserPasswordStore},
 //	    }),
-//	    op.WithProfile(profile.Baseline),
+//	    op.WithProfile(profile.OAuth21),
 //	)
 //	if err != nil {
 //	    log.Fatal(err)
@@ -86,6 +86,56 @@
 // [WithUserStore] is needed only when claims come from records other than
 // the ones [PrimaryPassword] authenticates against. [NewReloadable] replaces
 // [New] when keys or options change without a restart.
+//
+// # Option groups
+//
+// Every top-level option, grouped by purpose:
+//
+//   - Required: [WithIssuer], [WithStore], [WithKeyset]. [WithCookieKeys] and
+//     [WithLoginFlow] join them while the authorization_code grant is enabled.
+//   - Login and UI: [WithCookieKeys], [WithLoginFlow], [WithMFAEncryptionKeys],
+//     [WithAuthnLockoutStore], [WithLoginAttemptObserver], [WithUserStore],
+//     [WithInteractionDriver], [WithInteractions], [WithSPAUI], [WithConsentUI],
+//     [WithChooserUI], [WithLogoutUI], [WithDefaultLocale], [WithLocale],
+//     [WithPreferredLocaleStore].
+//   - Clients: [WithStaticClients], [WithHighEntropyClientSecrets],
+//     [WithFirstPartyClients], [WithDynamicRegistration],
+//     [WithClientIDMetadataDocuments], [WithProtectedResources], [WithScope],
+//     [WithSubjectGenerator], [WithPairwiseSubject].
+//   - Grants and flows: [WithGrants], [WithFeature], [WithCIBA],
+//     [WithDeviceCodeGrant], [WithJWTBearerGrant], [WithIDJAGIssuance],
+//     [WithCustomGrant], [WithAuthorizationDetailTypes], [WithGrantManagement],
+//     [WithPARLifetime].
+//   - Tokens and hardening: [WithProfile], [WithSigningAlgorithm],
+//     [WithAccessTokenTTL], [WithRefreshTokenTTL], [WithRefreshTokenOfflineTTL],
+//     [WithRefreshGracePeriod], [WithStrictOfflineAccess],
+//     [WithAccessTokenFormat], [WithAccessTokenFormatPerAudience],
+//     [WithAccessTokenRevocationStrategy], [WithIDTokenScopeClaims],
+//     [WithOpenIDScopeOptional], [WithDPoPNonceSource], [WithMTLSProxy],
+//     [WithMTLSRootCAs], [WithEncryptionKeyset], [WithSupportedEncryptionAlgs],
+//     [WithJWKSHTTPTransport], [WithAllowPrivateNetworkJWKS],
+//     [WithAllowPrivateNetworkJAR], [WithAllowPrivateNetworkSector],
+//     [WithAllowPrivateNetworkClientIDMetadata].
+//   - Logout and sessions: [WithSessionDurabilityPosture],
+//     [WithBackchannelLogoutHTTPClient], [WithBackchannelLogoutTimeout],
+//     [WithBackchannelFanOutBudget], [WithAllowPrivateNetworkBackchannel],
+//     [WithSharedSignals], [WithAllowPrivateNetworkSharedSignals].
+//   - Development only: [WithAllowLocalhostLoopback],
+//     [WithAllowInsecureBackchannelLogoutForDev],
+//     [WithAllowInsecureSharedSignalsPushForDev].
+//   - Operations and observability: [WithLogger], [WithAuditLogger],
+//     [WithPrometheus], [WithClock], [WithMountPrefix], [WithEndpoints],
+//     [WithTrustedProxies], [WithTrustedProxyHosts], [WithCORSOrigins],
+//     [WithJWKSRotationActive], [WithDiscoveryMetadata], [WithClaimsSupported],
+//     [WithACRValuesSupported], [WithClaimsParameterSupported],
+//     [WithACRPolicy], [WithDefaults].
+//
+// Grant types are enabled three ways. [WithGrants] selects the core set
+// (authorization_code, refresh_token, client_credentials). Grants that carry
+// configuration have a dedicated option instead: [WithCIBA],
+// [WithDeviceCodeGrant], [WithJWTBearerGrant] and [WithCustomGrant]. Protocol
+// features that extend the core grants, such as PAR, DPoP and JAR, are switched
+// on with [WithFeature].
 //
 // # Local development
 //

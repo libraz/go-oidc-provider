@@ -13,7 +13,7 @@ import (
 // 00's deliverable is the contrast between two OPs that differ by one
 // option. The same authorization request — a confidential client, no
 // code_challenge — is admitted by the OP that declares no profile and
-// refused by the one that declares profile.Baseline. Asserting both
+// refused by the one that declares profile.OAuth21. Asserting both
 // halves is the point: a smoke that only checked the refusal would
 // still pass if the profile stopped being conditional and every OP
 // started demanding PKCE.
@@ -46,7 +46,7 @@ func TestExample00SecurityProfile(t *testing.T) {
 		t.Fatalf("unprofiled OP Location=%s, want the login prompt", admitted)
 	}
 
-	// profile.Baseline: the same request is refused redirect-safely,
+	// profile.OAuth21: the same request is refused redirect-safely,
 	// with the state echoed back per RFC 6749 §4.1.2.1.
 	refused := authorizeLocation(t, baseline+"/oidc/auth?"+authz)
 	if !strings.Contains(refused, "error=invalid_request") {

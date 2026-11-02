@@ -18,7 +18,7 @@ const (
 	// [op.WithFeature] neither adds nor removes anything. In particular
 	// it does NOT make code_challenge mandatory: public and native
 	// clients always require it, and confidential clients are held to it
-	// only under [op.WithProfile] with profile.Baseline or either FAPI
+	// only under [op.WithProfile] with profile.OAuth21 or either FAPI
 	// 2.0 profile. Use [op.WithProfile] to harden a deployment.
 	//
 	// The constant is retained because it is part of the v1.0 stable

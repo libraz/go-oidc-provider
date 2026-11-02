@@ -403,8 +403,7 @@ func (c *config) validateLoginFlowRequired() error {
 		if g != grant.AuthorizationCode {
 			continue
 		}
-		return newConfigurationError("the authorization_code grant is enabled but no LoginFlow is registered; "+
-			"supply WithLoginFlow, or drop the grant", nil)
+		return ErrLoginFlowRequired
 	}
 	return nil
 }
