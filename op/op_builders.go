@@ -64,6 +64,7 @@ func buildClientStore(cfg *config, scopes *scoperegistry.Registry) {
 		AllowedClientAuthMethods: cfg.allowedClientAuthMethods(),
 		AllowedClientSigningAlgs: cfg.clientSigningJOSEAlgs(),
 		PairwiseEnabled:          cfg.pairwiseEnabled(),
+		SigningAlg:               string(cfg.issuingAlg()),
 		JWEPolicy:                cfg.jwePolicy(),
 		SectorResolver:           buildSectorResolver(cfg),
 		Logger:                   cfg.logger,
@@ -782,9 +783,9 @@ func absoluteEndpointURL(cfg *config, endpoint string) string {
 // path on purpose.
 //
 // The signer reuses the OP's active id_token / access_token signing
-// key. The OP signs with ES256 only and the JARM spec accepts that
-// algorithm without negotiation, so a separate keyset would only
-// duplicate state without adding security.
+// key. The OP signs with one algorithm and the JARM spec accepts it
+// without negotiation, so a separate keyset would only duplicate state
+// without adding security.
 //
 //nolint:nilnil // (nil, nil) is the documented "JARM not enabled" signal.
 func buildJARMSigner(cfg *config, keySet *keys.Set) (*jarm.Signer, error) {
@@ -865,7 +866,7 @@ func buildBackchannelCoordinator(cfg *config, keySet *keys.Set) (*backchannel.Co
 	deliverer.AllowPrivateNetwork = cfg.BackchannelAllowsPrivateNetwork()
 	coord, err := backchannel.NewCoordinator(backchannel.Config{
 		Issuer:                   cfg.issuer,
-		Signing:                  backchannel.SigningKey{KeyID: active.KeyID, Signer: active.Signer},
+		Signing:                  tokens.FromInternalEntry(active),
 		Clients:                  cfg.clientStore(),
 		Grants:                   grants,
 		SubjectProjector:         subjectProjectorFor(cfg),
@@ -1025,6 +1026,7 @@ func buildDiscoveryInput(cfg *config, scopes *scoperegistry.Registry, locales *i
 	return discovery.Input{
 		Issuer:      cfg.issuer,
 		MountPrefix: cfg.mountPrefix,
+		SigningAlg:  string(cfg.issuingAlg()),
 		Endpoints: discovery.EndpointPaths{
 			JWKS:                cfg.endpoints.JWKS,
 			Authorize:           cfg.endpoints.Authorize,
