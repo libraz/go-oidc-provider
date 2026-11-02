@@ -6,6 +6,7 @@ import (
 	"crypto/elliptic"
 	"crypto/rand"
 	"encoding/json"
+	"net/http"
 	"os"
 	"slices"
 	"testing"
@@ -270,4 +271,48 @@ func TestValidateClientMetadataDocument_SoftwareStatementRejected(t *testing.T) 
 	t.Parallel()
 	raw := documentJSON(t, map[string]any{"software_statement": "eyJhbGciOiJub25lIn0.e30."})
 	requireDocumentRejected(t, raw, MetadataDocumentOptions{}, codeInvalidSoftwareStmt)
+}
+
+func TestValidateClientMetadataDocument_SectorIdentifierURI(t *testing.T) {
+	t.Parallel()
+	pairwiseDoc := func(t *testing.T, sectorURL string) []byte {
+		return documentJSON(t, map[string]any{
+			"subject_type":          "pairwise",
+			"sector_identifier_uri": sectorURL,
+		})
+	}
+
+	t.Run("listing the redirect_uri is accepted", func(t *testing.T) {
+		t.Parallel()
+		srv := newTLSSectorServer(t, http.StatusOK, `["http://127.0.0.1:3000/callback"]`)
+		opts := MetadataDocumentOptions{PairwiseEnabled: true, SectorResolver: newSectorTestResolver(srv)}
+		c, err := ValidateClientMetadataDocument(pairwiseDoc(t, srv.URL), testDocumentURL, opts)
+		if err != nil {
+			t.Fatalf("ValidateClientMetadataDocument: %v", err)
+		}
+		if c.SectorIdentifierURI != srv.URL {
+			t.Fatalf("SectorIdentifierURI = %q, want %q", c.SectorIdentifierURI, srv.URL)
+		}
+	})
+
+	t.Run("sector document omitting the redirect_uri is rejected", func(t *testing.T) {
+		t.Parallel()
+		srv := newTLSSectorServer(t, http.StatusOK, `["https://victim.example.com/cb"]`)
+		opts := MetadataDocumentOptions{PairwiseEnabled: true, SectorResolver: newSectorTestResolver(srv)}
+		requireDocumentRejected(t, pairwiseDoc(t, srv.URL), opts, codeInvalidClientMetadata)
+	})
+
+	t.Run("unserved sector document is rejected", func(t *testing.T) {
+		t.Parallel()
+		srv := newTLSSectorServer(t, http.StatusNotFound, ``)
+		opts := MetadataDocumentOptions{PairwiseEnabled: true, SectorResolver: newSectorTestResolver(srv)}
+		requireDocumentRejected(t, pairwiseDoc(t, srv.URL), opts, codeInvalidClientMetadata)
+	})
+
+	t.Run("nil resolver still applies the private-network gate", func(t *testing.T) {
+		t.Parallel()
+		srv := newTLSSectorServer(t, http.StatusOK, `["http://127.0.0.1:3000/callback"]`)
+		opts := MetadataDocumentOptions{PairwiseEnabled: true}
+		requireDocumentRejected(t, pairwiseDoc(t, srv.URL), opts, codeInvalidClientMetadata)
+	})
 }

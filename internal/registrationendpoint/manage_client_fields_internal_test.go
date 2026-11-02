@@ -156,7 +156,7 @@ var minimalUpdateValues = map[string]any{
 	"ResponseTypes":            []string{"code"},
 	"TokenEndpointAuthMethod":  defaultAuthMethod,
 	"SubjectType":              defaultSubjectType,
-	"IDTokenSignedResponseAlg": defaultIDTokenAlg,
+	"IDTokenSignedResponseAlg": defaultOPSigningAlg,
 	"ApplicationType":          defaultApplicationType,
 }
 

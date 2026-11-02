@@ -84,7 +84,7 @@ func handleUpdate(w http.ResponseWriter, r *http.Request, deps Deps, clientID st
 		endpointsupport.WriteOAuthError(w, http.StatusBadRequest, endpointsupport.ErrInvalidRequest, err.Error())
 		return
 	}
-	if err := validateUnpersistedMetadata(metadata, extras); err != nil {
+	if err := validateUnpersistedMetadata(metadata, extras, deps.profilePolicy().opAlg()); err != nil {
 		writeMetadataValidationError(ctx, w, deps, err, clientID)
 		return
 	}

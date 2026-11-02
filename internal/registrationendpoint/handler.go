@@ -179,6 +179,11 @@ type Deps struct {
 	// invalid_client_metadata. Nil leaves the library allow-list in force.
 	AllowedClientSigningAlgs []internaljose.Algorithm
 
+	// SigningAlg is the OP's issuing JWS algorithm. It is the default for
+	// id_token_signed_response_alg and the only algorithm a
+	// *_signed_response_alg member may name. Empty means "ES256".
+	SigningAlg string
+
 	// SectorResolver is the SSRF-defended sector_identifier_uri fetcher
 	// the validator drives at registration time (OIDC Core 1.0 §5 /
 	// §8.1). A nil value falls back to a zero-config [sector.Resolver]
@@ -336,7 +341,7 @@ func (d *Deps) audit() audit.Emitter {
 // profilePolicy bundles the profile-level client-authentication
 // narrowing the metadata validator applies.
 func (d *Deps) profilePolicy() profilePolicy {
-	return profilePolicy{authMethods: d.AllowedClientAuthMethods, signingAlgs: d.AllowedClientSigningAlgs}
+	return profilePolicy{authMethods: d.AllowedClientAuthMethods, signingAlgs: d.AllowedClientSigningAlgs, signingAlg: d.SigningAlg}
 }
 
 // serve routes the request to the matching method+path handler. The

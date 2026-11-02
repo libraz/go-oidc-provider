@@ -20,6 +20,16 @@ import (
 type profilePolicy struct {
 	authMethods []clientauth.Method
 	signingAlgs []internaljose.Algorithm
+	// signingAlg is the OP's issuing algorithm; empty means ES256.
+	signingAlg string
+}
+
+// opAlg returns the OP's issuing algorithm, ES256 when unset.
+func (p profilePolicy) opAlg() string {
+	if p.signingAlg == "" {
+		return defaultOPSigningAlg
+	}
+	return p.signingAlg
 }
 
 // validatePolicy enforces the OP's structural rules on client metadata:
@@ -57,8 +67,9 @@ func validatePolicy(
 	if len(m.RedirectURIs) == 0 {
 		return ClientMetadata{}, errInvalidRedirectURI("redirect_uris is required")
 	}
-	canonical := applyMetadataDefaults(m, allowedResponseTypes)
-	if err := validateSignedResponseAlg(introspectionSignedResponseSurface(), canonical.IntrospectionSignedResponseAlg); err != nil {
+	opAlg := profile.opAlg()
+	canonical := applyMetadataDefaults(m, allowedResponseTypes, opAlg)
+	if err := validateSignedResponseAlg(introspectionSignedResponseSurface(), opAlg, canonical.IntrospectionSignedResponseAlg); err != nil {
 		return ClientMetadata{}, err
 	}
 	canonical.IntrospectionSignedResponseAlg = normalizeIntrospectionSignedResponseAlg(canonical.IntrospectionSignedResponseAlg)
@@ -77,7 +88,7 @@ func validatePolicy(
 		},
 		func() error { return validateSubjectType(canonical.SubjectType, pairwiseEnabled) },
 		func() error {
-			return validateSignedResponseAlg(idTokenSignedResponseSurface(), canonical.IDTokenSignedResponseAlg)
+			return validateSignedResponseAlg(idTokenSignedResponseSurface(), opAlg, canonical.IDTokenSignedResponseAlg)
 		},
 		func() error { return validateRequestedScopes(canonical.Scope, iatScopes, scopes) },
 		func() error { return validateMetadataURIs(canonical, allowInsecureBackchannelLogoutForDev) },
@@ -137,12 +148,12 @@ func validatePolicy(
 //     enforcing it would leave the client believing a protection is in
 //     place, so the request is refused instead. A false value is the
 //     protocol default and is accepted as the no-op it is.
-func validateUnpersistedMetadata(m ClientMetadata, extras metadataExtras) error {
+func validateUnpersistedMetadata(m ClientMetadata, extras metadataExtras, opAlg string) error {
 	userInfo := userInfoSignedResponseSurface(m.UserInfoEncryptedResponseAlg != "")
-	if err := validateSignedResponseAlg(userInfo, extras.UserInfoSignedResponseAlg); err != nil {
+	if err := validateSignedResponseAlg(userInfo, opAlg, extras.UserInfoSignedResponseAlg); err != nil {
 		return err
 	}
-	if err := validateSignedResponseAlg(authorizationSignedResponseSurface(), extras.AuthorizationSignedResponseAlg); err != nil {
+	if err := validateSignedResponseAlg(authorizationSignedResponseSurface(), opAlg, extras.AuthorizationSignedResponseAlg); err != nil {
 		return err
 	}
 	if extras.DPoPBoundAccessTokens {
@@ -169,7 +180,8 @@ func validateUnpersistedMetadata(m ClientMetadata, extras metadataExtras) error 
 
 // signedResponseAlgSurface describes what one *_signed_response_alg
 // member may name. The OP holds a single signing algorithm, so "ES256"
-// is the only algorithm any surface can ever produce; whether a surface
+// is the only algorithm any surface can ever produce (ES256 unless the
+// embedder selected another); whether a surface
 // can also produce an unsigned body differs per surface, and a member
 // naming a shape its surface never emits is refused rather than
 // recorded. See [validateSignedResponseAlg] for the rule.
@@ -258,22 +270,23 @@ func userInfoSignedResponseSurface(encryptionRegistered bool) signedResponseAlgS
 // refused because accepting it would answer 201/200 to a request the OP
 // does not act on. Omitting the member names no shape and is always
 // accepted; the surface keeps its default.
-func validateSignedResponseAlg(surface signedResponseAlgSurface, alg string) error {
+func validateSignedResponseAlg(surface signedResponseAlgSurface, opAlg, alg string) error {
 	switch alg {
 	case "":
 		return nil
-	case "ES256":
-		if surface.signed {
-			return nil
-		}
 	case "none":
 		if surface.unsigned {
 			return nil
 		}
+		return errInvalidClientMetadata(surface.field + " " + alg + " is not supported: " + surface.refusal)
+	case opAlg:
+		if surface.signed {
+			return nil
+		}
+		return errInvalidClientMetadata(surface.field + " " + alg + " is not supported: " + surface.refusal)
 	default:
-		return errInvalidClientMetadata(surface.field + " " + alg + " is not supported (ES256 only)")
+		return errInvalidClientMetadata(surface.field + " " + alg + " is not supported (the OP signs with " + opAlg + ")")
 	}
-	return errInvalidClientMetadata(surface.field + " " + alg + " is not supported: " + surface.refusal)
 }
 
 func normalizeIntrospectionSignedResponseAlg(alg string) string {
@@ -361,7 +374,7 @@ func registrationDefaultScopeNames(scopes *scoperegistry.Registry) []string {
 // the library defaults (grant_types defaults to authorization_code per
 // RFC 7591 §2, never to the allow-list), returning the canonical metadata the policy
 // validator and persistence layer consume.
-func applyMetadataDefaults(m ClientMetadata, allowedResponseTypes []string) ClientMetadata {
+func applyMetadataDefaults(m ClientMetadata, allowedResponseTypes []string, opAlg string) ClientMetadata {
 	out := m
 	if len(out.GrantTypes) == 0 {
 		out.GrantTypes = []string{"authorization_code"}
@@ -376,7 +389,7 @@ func applyMetadataDefaults(m ClientMetadata, allowedResponseTypes []string) Clie
 		out.SubjectType = defaultSubjectType
 	}
 	if out.IDTokenSignedResponseAlg == "" {
-		out.IDTokenSignedResponseAlg = defaultIDTokenAlg
+		out.IDTokenSignedResponseAlg = opAlg
 	}
 	if out.ApplicationType == "" {
 		out.ApplicationType = defaultApplicationType

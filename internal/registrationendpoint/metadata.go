@@ -285,12 +285,12 @@ func cloneStrings(in []string) []string {
 // Library defaults for the OIDC profile fields when the caller leaves
 // them blank. client_secret_basic and web are the OpenID Connect
 // Dynamic Client Registration 1.0 §2 defaults; a dynamic client gets
-// the public subject type unless pairwise subjects are enabled, and
-// ES256 is the only algorithm this OP signs ID Tokens with.
+// the public subject type unless pairwise subjects are enabled.
+// defaultOPSigningAlg applies when the embedder selected no algorithm.
 const (
 	defaultAuthMethod      = string(clientauth.MethodSecretBasic)
 	defaultSubjectType     = store.SubjectModePublic
-	defaultIDTokenAlg      = "ES256"
+	defaultOPSigningAlg    = "ES256"
 	defaultApplicationType = "web"
 	applicationTypeNative  = "native"
 )

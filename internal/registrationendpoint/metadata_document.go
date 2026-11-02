@@ -2,11 +2,14 @@ package registrationendpoint
 
 import (
 	"bytes"
+	"context"
+	"log/slog"
 	"net/url"
 	"slices"
 
 	"github.com/libraz/go-oidc-provider/internal/clientauth"
 	internaljose "github.com/libraz/go-oidc-provider/internal/jose"
+	"github.com/libraz/go-oidc-provider/internal/sector"
 	"github.com/libraz/go-oidc-provider/op/store"
 )
 
@@ -31,11 +34,22 @@ type MetadataDocumentOptions struct {
 	// AllowedClientSigningAlgs is the profile's client signing alg list.
 	AllowedClientSigningAlgs []internaljose.Algorithm
 
+	// SigningAlg is the OP's issuing JWS algorithm, the only algorithm a
+	// *_signed_response_alg member may name. Empty means "ES256".
+	SigningAlg string
+
 	// PairwiseEnabled admits "subject_type": "pairwise".
 	PairwiseEnabled bool
 
 	// JWEPolicy narrows the JWE alg / enc values below the allow-list.
 	JWEPolicy internaljose.JWEPolicy
+
+	// SectorResolver fetches sector_identifier_uri documents under the
+	// SSRF envelope DCR uses. Nil falls back to a zero-config resolver.
+	SectorResolver *sector.Resolver
+
+	// Logger receives sector-fetch failure diagnostics. Nil installs slog.Default().
+	Logger *slog.Logger
 }
 
 // metadataDocumentGrant and metadataDocumentAuthMethod bound what a
@@ -63,7 +77,8 @@ func metadataDocumentAuthMethod(m clientauth.Method) bool {
 // the returned Scopes are the document's own request. Failures are
 // [validationError] values whose code callers record.
 func ValidateClientMetadataDocument(raw []byte, documentURL string, opts MetadataDocumentOptions) (*store.Client, error) {
-	m, err := parseMetadataDocument(raw, documentURL)
+	profile := profilePolicy{authMethods: opts.AllowedClientAuthMethods, signingAlgs: opts.AllowedClientSigningAlgs, signingAlg: opts.SigningAlg}
+	m, err := parseMetadataDocument(raw, documentURL, profile.opAlg())
 	if err != nil {
 		return nil, err
 	}
@@ -80,9 +95,14 @@ func ValidateClientMetadataDocument(raw []byte, documentURL string, opts Metadat
 		true,  // allowLocalhostLoopback: MCP clients register localhost alongside 127.0.0.1.
 		false, // allowInsecureBackchannelLogoutForDev
 		opts.JWEPolicy,
-		profilePolicy{authMethods: opts.AllowedClientAuthMethods, signingAlgs: opts.AllowedClientSigningAlgs},
+		profile,
 	)
 	if err != nil {
+		return nil, err
+	}
+	// The fetch is bounded by the resolver's own timeout.
+	deps := Deps{SectorResolver: opts.SectorResolver, Logger: opts.Logger}
+	if err := validateSectorIdentifierURI(context.Background(), deps, canonical); err != nil {
 		return nil, err
 	}
 	return clientFromMetadata(canonical, documentURL, ""), nil
@@ -91,7 +111,7 @@ func ValidateClientMetadataDocument(raw []byte, documentURL string, opts Metadat
 // parseMetadataDocument applies the DCR parser to raw and the
 // document-level checks that need the wire extras: JSON object root,
 // software_statement, the client_id match, and the secret members.
-func parseMetadataDocument(raw []byte, documentURL string) (ClientMetadata, error) {
+func parseMetadataDocument(raw []byte, documentURL, opAlg string) (ClientMetadata, error) {
 	if !bytes.HasPrefix(bytes.TrimLeft(raw, " \t\r\n"), []byte("{")) {
 		return ClientMetadata{}, errInvalidClientMetadata("client metadata document must be a JSON object")
 	}
@@ -108,7 +128,7 @@ func parseMetadataDocument(raw []byte, documentURL string) (ClientMetadata, erro
 	if len(extras.ClientSecret) != 0 || len(extras.ClientSecretExp) != 0 {
 		return ClientMetadata{}, errInvalidClientMetadata("client metadata document must not carry client_secret members")
 	}
-	if err := validateUnpersistedMetadata(m, extras); err != nil {
+	if err := validateUnpersistedMetadata(m, extras, opAlg); err != nil {
 		return ClientMetadata{}, err
 	}
 	return m, nil

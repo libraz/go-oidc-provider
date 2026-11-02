@@ -37,6 +37,9 @@ type StaticClientValidationOptions struct {
 	// AllowedClientSigningAlgs mirrors [Deps.AllowedClientSigningAlgs].
 	AllowedClientSigningAlgs []internaljose.Algorithm
 
+	// SigningAlg mirrors [Deps.SigningAlg]. Empty means "ES256".
+	SigningAlg string
+
 	// PairwiseEnabled mirrors [Deps.PairwiseEnabled]. When false,
 	// "subject_type": "pairwise" is rejected.
 	PairwiseEnabled bool
@@ -147,7 +150,7 @@ func ValidateStaticClient(c store.Client, opts StaticClientValidationOptions) er
 		opts.AllowLocalhostLoopback,
 		opts.AllowInsecureBackchannelLogoutForDev,
 		opts.JWEPolicy,
-		profilePolicy{authMethods: opts.AllowedClientAuthMethods, signingAlgs: opts.AllowedClientSigningAlgs},
+		profilePolicy{authMethods: opts.AllowedClientAuthMethods, signingAlgs: opts.AllowedClientSigningAlgs, signingAlg: opts.SigningAlg},
 	)
 	if err == nil {
 		return nil

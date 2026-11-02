@@ -100,7 +100,7 @@ func handleRegister(w http.ResponseWriter, r *http.Request, deps Deps) {
 			"software_statement is not supported in v1.0")
 		return
 	}
-	if err := validateUnpersistedMetadata(metadata, extras); err != nil {
+	if err := validateUnpersistedMetadata(metadata, extras, deps.profilePolicy().opAlg()); err != nil {
 		writeMetadataValidationError(ctx, w, deps, err, "")
 		return
 	}

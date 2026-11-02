@@ -2,6 +2,7 @@ package registrationendpoint
 
 import (
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/libraz/go-oidc-provider/internal/discovery"
@@ -66,7 +67,7 @@ func TestSignedResponseAlgSurfacesAgreeWithDiscovery(t *testing.T) {
 			continue
 		}
 		for _, alg := range tc.advertised {
-			if err := validateSignedResponseAlg(tc.surface, alg); err != nil {
+			if err := validateSignedResponseAlg(tc.surface, "ES256", alg); err != nil {
 				t.Errorf("%s advertises %q but registration refuses it: %v", tc.member, alg, err)
 			}
 		}
@@ -74,8 +75,74 @@ func TestSignedResponseAlgSurfacesAgreeWithDiscovery(t *testing.T) {
 			if slices.Contains(tc.advertised, alg) {
 				continue
 			}
-			if err := validateSignedResponseAlg(tc.surface, alg); err == nil {
+			if err := validateSignedResponseAlg(tc.surface, "ES256", alg); err == nil {
 				t.Errorf("%s does not advertise %q but registration accepts it", tc.member, alg)
+			}
+		}
+	}
+}
+
+// TestValidateSignedResponseAlg_FollowsOPAlg holds every combination of
+// OP algorithm, requested value and surface against the accepted set:
+// exactly the OP algorithm where the surface signs, "none" where it
+// emits an unsigned body, and an empty value on the ID Token surface
+// defaulting to the OP algorithm.
+func TestValidateSignedResponseAlg_FollowsOPAlg(t *testing.T) {
+	t.Parallel()
+
+	surfaces := []struct {
+		name     string
+		surface  signedResponseAlgSurface
+		accepts  func(opAlg, req string) bool
+		defaults bool
+	}{
+		{
+			name:     "id_token",
+			surface:  idTokenSignedResponseSurface(),
+			accepts:  func(opAlg, req string) bool { return req == "" || req == opAlg },
+			defaults: true,
+		},
+		{
+			name:    "userinfo",
+			surface: userInfoSignedResponseSurface(false),
+			accepts: func(_, req string) bool { return req == "" || req == "none" },
+		},
+		{
+			name:    "authorization",
+			surface: authorizationSignedResponseSurface(),
+			accepts: func(opAlg, req string) bool { return req == "" || req == opAlg },
+		},
+		{
+			name:    "introspection",
+			surface: introspectionSignedResponseSurface(),
+			accepts: func(opAlg, req string) bool { return req == "" || req == opAlg || req == "none" },
+		},
+	}
+
+	for _, opAlg := range []string{"ES256", "RS256"} {
+		for _, req := range []string{"", "ES256", "RS256", "rs256", "PS256", "none"} {
+			for _, s := range surfaces {
+				t.Run(opAlg+"/"+req+"/"+s.name, func(t *testing.T) {
+					t.Parallel()
+
+					err := validateSignedResponseAlg(s.surface, opAlg, req)
+					if want := s.accepts(opAlg, req); want != (err == nil) {
+						t.Fatalf("validateSignedResponseAlg(%s, op=%s, %q) err = %v, want accept=%v", s.name, opAlg, req, err, want)
+					}
+					if err != nil && req != "none" && req != opAlg && !strings.Contains(err.Error(), "the OP signs with "+opAlg) {
+						t.Errorf("err = %v, want the OP-algorithm text", err)
+					}
+					if s.defaults {
+						m := applyMetadataDefaults(ClientMetadata{IDTokenSignedResponseAlg: req}, nil, opAlg)
+						wantDefault := req
+						if req == "" {
+							wantDefault = opAlg
+						}
+						if m.IDTokenSignedResponseAlg != wantDefault {
+							t.Errorf("defaulted id_token_signed_response_alg = %q, want %q", m.IDTokenSignedResponseAlg, wantDefault)
+						}
+					}
+				})
 			}
 		}
 	}
