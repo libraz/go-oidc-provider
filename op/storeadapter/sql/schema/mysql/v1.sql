@@ -2,6 +2,8 @@
 -- when configured with oidcsql.MySQL(). Targets MySQL 8.0.20+ (so the
 -- INSERT ... AS new ON DUPLICATE KEY UPDATE alias is available) and
 -- MariaDB 10.5+.
+-- Complete current schema for a fresh database; existing databases apply
+-- schema/migrations/mysql instead.
 --
 -- Conventions:
 --   * VARCHAR(255) is used for opaque identifiers; fits in a UTF8MB4

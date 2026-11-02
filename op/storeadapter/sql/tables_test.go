@@ -202,9 +202,12 @@ func renderTablesDoc(t *testing.T) []byte {
 	b.WriteString("`op.New` checks, at construction, the tables the configuration uses (the\n")
 	b.WriteString("\"Checked when\" column) and names any that are missing. Run against an empty\n")
 	b.WriteString("database, its error lists every table your configuration needs in one pass.\n")
-	b.WriteString("`Store.ValidateSchema` checks every table, for a deploy gate. A table whose\n")
-	b.WriteString("condition your configuration does not meet need not exist. A table checked\n")
-	b.WriteString("always must exist even while it stays empty; its row says what reaches it.\n")
+	b.WriteString("A table whose condition your configuration does not meet does not stop\n")
+	b.WriteString("startup, but create every table from `schema/<dialect>/v1.sql` anyway and\n")
+	b.WriteString("leave the unused ones empty: the release files under `migrations/<dialect>`\n")
+	b.WriteString("alter optional tables too, and `Store.ValidateSchema`, the deploy gate,\n")
+	b.WriteString("checks every table. A table checked always must exist even while it stays\n")
+	b.WriteString("empty; its row says what reaches it.\n")
 	b.WriteString("`WithNaming` renames a table through its key; the columns are fixed. Your own\n")
 	b.WriteString("users table needs no new column when it already has an opaque identifier that\n")
 	b.WriteString("is assigned once and never reused: the OP only needs that subject from it,\n")
@@ -226,7 +229,9 @@ func renderTablesDoc(t *testing.T) []byte {
 		"grants, password login against your own user store, every other option at its\n"+
 		"default) needs these %d tables: %s.\n\n", len(defaults), strings.Join(defaults, ", "))
 	fmt.Fprintf(&b, "Of these, the following %d are checked in every configuration, even while the\n"+
-		"feature that writes them is unused, so they must exist empty: %s.\n\n", len(always), strings.Join(always, ", "))
+		"feature that writes them is unused, so they must exist empty: %s. The access-token\n"+
+		"tables are among them because revocation and introspection look every presented\n"+
+		"token up, although rows appear only under the configuration their row names.\n\n", len(always), strings.Join(always, ", "))
 	b.WriteString("Column types differ by dialect; `schema/<dialect>/v1.sql` is authoritative.\n")
 	b.WriteString("A column marked with a release was added to an existing table in that release;\n")
 	b.WriteString("an existing database applies the matching file under `migrations/<dialect>`.\n")

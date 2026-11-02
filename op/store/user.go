@@ -16,9 +16,10 @@ import (
 var ErrPasswordHashUpdateUnsupported = errors.New("store: password hash update unsupported")
 
 // User is the persistent representation of an end-user owned by the
-// embedding application. The OP only reads it: registration, password
-// resets, and profile edits all happen outside the library through the
-// embedding application's own UI and management plane.
+// embedding application. The OP only reads it, apart from the optional
+// rehash write-back of a legacy password hash ([UserPasswordHashUpdater]):
+// registration, password resets, and profile edits all happen outside the
+// library through the embedding application's own UI and management plane.
 //
 // The struct carries the small subset of profile data the library
 // actually consumes (subject, claim source, last-update timestamp).
@@ -56,8 +57,9 @@ type User struct {
 }
 
 // UserStore is the substore for end-user records. It is read-only from
-// the library's perspective: write paths live in the embedding
-// application. The OP queries it at:
+// the library's perspective, except for the optional rehash write-back of
+// a legacy password hash ([UserPasswordHashUpdater]): all other write
+// paths live in the embedding application. The OP queries it at:
 //
 //   - /userinfo, to assemble the response after bearer validation;
 //   - the token endpoint, to embed claims in id_token bodies;
@@ -71,6 +73,12 @@ type UserStore interface {
 	// FindBySubject returns the user record identified by sub. It MUST
 	// return [ErrNotFound] when no such user exists; any other non-nil
 	// error indicates a backend fault.
+	//
+	// Returning [ErrNotFound] for a soft-deleted or disabled user is the
+	// supported way to stop it: the token endpoint then refuses a refresh
+	// with invalid_grant and tears down the grant, and [UserPasswordStore]'s
+	// FindByUsername must likewise return [ErrNotFound] so login fails. To
+	// revoke tokens already issued at once, call op.Provider.RevokeSubject.
 	FindBySubject(ctx context.Context, sub string) (*User, error)
 }
 
@@ -92,14 +100,16 @@ type UserStore interface {
 //   - Return the encoded hash bytes verbatim from [ReadPasswordHash];
 //     the library treats the slice as a UTF-8 PHC string
 //     ($argon2id$...) and verifies it with constant-time comparison.
+//     Other encodings (e.g. bcrypt) are accepted only through
+//     PrimaryPassword.LegacySchemes (see op.BcryptHashScheme).
 //     Returning a hash for a subject that has no password set is a
 //     [ErrNotFound] case.
 //
-// The interface is intentionally read-only: enrolment and password
-// resets live outside the OP because they touch operational concerns
-// (email delivery, audit hooks, MFA re-prompting) the library does not
-// model. The one write the OP performs is the optional
-// [UserPasswordHashUpdater] rehash of a legacy hash.
+// The interface reads only: enrolment and password resets live outside
+// the OP because they touch operational concerns (email delivery, audit
+// hooks, MFA re-prompting) the library does not model. The one write the
+// OP performs is the optional [UserPasswordHashUpdater] rehash of a
+// legacy hash.
 type UserPasswordStore interface {
 	UserStore
 

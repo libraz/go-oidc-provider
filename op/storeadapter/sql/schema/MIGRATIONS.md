@@ -10,7 +10,9 @@ when the names differ from the defaults. `TABLES.md` lists what each table
 holds and when the OP uses it.
 
 - **A new database** applies every file in order, or runs `Store.Schema()`
-  (`schema/<dialect>/v1.sql`) instead; both reach the same schema.
+  (`schema/<dialect>/v1.sql`) instead; both reach the same schema. `v1.sql` is
+  the complete current schema for a fresh database: the `v1` names the schema
+  generation, not release v1.0.0.
 - **An existing database** is first recorded at the last release it applied,
   then takes only the later files. With golang-migrate that is
   `migrate force <N>`: a database created by v1.2.0 runs `migrate force 3`,
@@ -45,6 +47,20 @@ index on <column>`; on MySQL, where `Store.Migrate` cannot add it to an existing
 table, apply the migration files. When everything missing was added by a later
 release, the error ends with the `migrate force <N>` number that records the
 schema's current release.
+
+## Other migration tools
+
+The files are plain SQL named `NNNNNN_vX.Y.Z.up.sql` in golang-migrate layout;
+there are no down files.
+
+- **goose**: copy each file and add `-- +goose Up` at the top.
+- **Flyway**: rename to `V<N>__vX_Y_Z.sql`.
+- **Atlas and others**: apply the files in numeric order.
+
+On PostgreSQL in a schema other than `public`, the adapter resolves tables
+through the connection's `search_path` (the schema check uses
+`current_schema()`), so set `search_path` on the DSN or connection. Table names
+passed to `WithNaming` are plain identifiers, never schema-qualified.
 
 The sections below explain what each release changes.
 

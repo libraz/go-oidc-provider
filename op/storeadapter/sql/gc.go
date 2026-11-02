@@ -200,8 +200,9 @@ func (s *Store) GC(ctx context.Context, cutoff time.Time) (GCStats, error) {
 //		}
 //	}()
 //
-// In a multi-replica deployment run it on one replica, or accept that
-// concurrent sweeps repeat the same idempotent DELETEs.
+// Running it on one replica is sufficient. Sweeps running concurrently on
+// several replicas are safe, because the DELETEs are idempotent; they only
+// repeat each other's work.
 //
 // Stable since v1.5.
 func (s *Store) RunGC(ctx context.Context, interval time.Duration, report func(GCStats, error)) error {

@@ -46,8 +46,10 @@
 // release. schema/TABLES.md lists what each table holds, when op.New checks
 // it, and why a few tables must exist even while they stay empty. Run
 // against an empty database, op.New names every table the configuration
-// needs in one error. The reference DDL creates every table, including
-// those a configuration never reaches; such a table stays empty.
+// needs in one error. Create every table from the reference DDL, including
+// those a configuration never reaches; such a table stays empty. The
+// release migrations alter tables of optional features, so a database that
+// omitted them cannot apply later migrations.
 //
 // # Users
 //
@@ -62,7 +64,9 @@
 // [WithNaming] accepts a map of logical → physical identifier
 // rewrites so embedders that already own a "clients" table can graft
 // the OP onto a different name without forking the schema. Identifiers
-// are validated against the SQL standard regular identifier grammar
+// are plain identifiers, never schema-qualified (on PostgreSQL, select a
+// non-public schema through the connection's search_path), and are
+// validated against the SQL standard regular identifier grammar
 // by [validateIdentifier] (a byte-walking ASCII validator — no regex)
 // before any query is built; values that fail validation cause [New]
 // to return an error. The validator is one of six defence layers
@@ -108,6 +112,19 @@
 //
 // Passing an earlier cutoff keeps a grace window; rows whose expires_at
 // is zero opt out of the sweep entirely.
+//
+// [Store.RunGC] schedules it: it sweeps once at once and then every
+// interval until its context is done, blocking the calling goroutine.
+//
+//	go func() {
+//		if err := store.RunGC(ctx, time.Hour, report); err != nil {
+//			log.Print(err)
+//		}
+//	}()
+//
+// Running GC on one replica is sufficient. Sweeps running concurrently on
+// several replicas are safe, because the DELETEs are idempotent; they only
+// repeat each other's work.
 //
 // The nine sweeps do not cost the same. Eight are range scans on
 // expires_at; the refresh-token one is a per-grant anti-join, because a

@@ -1,5 +1,7 @@
 -- v1 schema for github.com/libraz/go-oidc-provider/op/storeadapter/sql
 -- when configured with oidcsql.Postgres(). Targets PostgreSQL 14+.
+-- Complete current schema for a fresh database; existing databases apply
+-- schema/migrations/postgres instead.
 --
 -- Conventions:
 --   * TEXT is used for opaque identifiers (no length cap; PostgreSQL

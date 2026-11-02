@@ -1,5 +1,7 @@
 -- v1 schema for github.com/libraz/go-oidc-provider/op/storeadapter/sql
 -- when configured with oidcsql.SQLite().
+-- Complete current schema for a fresh database; existing databases apply
+-- schema/migrations/sqlite instead.
 --
 -- Conventions:
 --   * Identifiers are 7-bit ASCII so the rewrite path does not need

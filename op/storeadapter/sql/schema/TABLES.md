@@ -5,9 +5,12 @@
 `op.New` checks, at construction, the tables the configuration uses (the
 "Checked when" column) and names any that are missing. Run against an empty
 database, its error lists every table your configuration needs in one pass.
-`Store.ValidateSchema` checks every table, for a deploy gate. A table whose
-condition your configuration does not meet need not exist. A table checked
-always must exist even while it stays empty; its row says what reaches it.
+A table whose condition your configuration does not meet does not stop
+startup, but create every table from `schema/<dialect>/v1.sql` anyway and
+leave the unused ones empty: the release files under `migrations/<dialect>`
+alter optional tables too, and `Store.ValidateSchema`, the deploy gate,
+checks every table. A table checked always must exist even while it stays
+empty; its row says what reaches it.
 `WithNaming` renames a table through its key; the columns are fixed. Your own
 users table needs no new column when it already has an opaque identifier that
 is assigned once and never reused: the OP only needs that subject from it,
@@ -19,7 +22,9 @@ grants, password login against your own user store, every other option at its
 default) needs these 13 tables: `oidc_clients`, `oidc_op_metadata`, `oidc_consumed_jtis`, `oidc_access_tokens`, `oidc_opaque_access_tokens`, `oidc_grant_revocations`, `oidc_revoked_jtis`, `oidc_grants`, `oidc_authorization_codes`, `oidc_refresh_tokens`, `oidc_sessions`, `oidc_interactions`, `oidc_authn_lockouts`.
 
 Of these, the following 9 are checked in every configuration, even while the
-feature that writes them is unused, so they must exist empty: `oidc_clients`, `oidc_op_metadata`, `oidc_consumed_jtis`, `oidc_access_tokens`, `oidc_opaque_access_tokens`, `oidc_grant_revocations`, `oidc_revoked_jtis`, `oidc_grants`, `oidc_refresh_tokens`.
+feature that writes them is unused, so they must exist empty: `oidc_clients`, `oidc_op_metadata`, `oidc_consumed_jtis`, `oidc_access_tokens`, `oidc_opaque_access_tokens`, `oidc_grant_revocations`, `oidc_revoked_jtis`, `oidc_grants`, `oidc_refresh_tokens`. The access-token
+tables are among them because revocation and introspection look every presented
+token up, although rows appear only under the configuration their row names.
 
 Column types differ by dialect; `schema/<dialect>/v1.sql` is authoritative.
 A column marked with a release was added to an existing table in that release;
