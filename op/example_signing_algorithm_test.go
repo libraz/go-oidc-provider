@@ -21,7 +21,7 @@ func ExampleWithSigningAlgorithm() {
 		log.Fatal(err)
 	}
 	previous := exampleKeyset()[0]
-	previous.NotAfter = time.Date(2027, 1, 1, 0, 0, 0, 0, time.UTC)
+	previous.NotAfter = time.Date(2099, 1, 1, 0, 0, 0, 0, time.UTC)
 
 	provider, err := op.New(
 		op.WithIssuer("https://idp.example.com"),
