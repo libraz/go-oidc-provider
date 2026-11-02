@@ -36,6 +36,7 @@ import (
 	"github.com/libraz/go-oidc-provider/op/feature"
 	"github.com/libraz/go-oidc-provider/op/interaction"
 	"github.com/libraz/go-oidc-provider/op/store"
+	"github.com/libraz/go-oidc-provider/op/storeadapter/inmem"
 	"github.com/libraz/go-oidc-provider/op/testkit"
 	"github.com/libraz/go-oidc-provider/test/scenarios/internal/scenariokit"
 )
@@ -129,7 +130,7 @@ type pcrRegister struct {
 	beginSubject atomic.Pointer[string]
 }
 
-func (*pcrRegister) Type() op.FactorType { return op.FactorEmailOTP }
+func (*pcrRegister) Type() op.FactorType { return "test.register" }
 func (*pcrRegister) AAL() op.AAL         { return op.AAL1 }
 func (*pcrRegister) AMR() string         { return "otp" }
 func (*pcrRegister) Prompts() []string   { return []string{pcrRegisterPrompt} }
@@ -961,27 +962,33 @@ func TestScenario_PCR_009_RegistrationShapeRefused(t *testing.T) {
 		return op.ExternalStep{Authenticator: reg, KindLabel: pcrKindRegister}
 	}
 
+	// want names the rule each refused shape trips, so a row fails when its
+	// own rule is removed rather than passing on an unrelated refusal.
 	cases := []struct {
 		name   string
 		mutate func(*op.LoginFlow)
-		accept bool
+		want   string
 	}{
-		{"valid", func(*op.LoginFlow) {}, true},
-		{"built_in_step", func(f *op.LoginFlow) { f.Registration = op.PrimaryPassword{Store: nil} }, false},
-		{"one_of", func(f *op.LoginFlow) { f.Registration = op.StepOneOf{Steps: []op.Step{registerStep()}} }, false},
+		{"valid", func(*op.LoginFlow) {}, ""},
+		{"built_in_step", func(f *op.LoginFlow) {
+			f.Registration = op.PrimaryPassword{Store: inmem.New().UserPasswords()}
+		}, "Registration must be an ExternalStep"},
+		{"one_of", func(f *op.LoginFlow) {
+			f.Registration = op.StepOneOf{Steps: []op.Step{registerStep()}}
+		}, "Registration must be an ExternalStep"},
 		{"count_failures", func(f *op.LoginFlow) {
 			s := registerStep()
 			s.CountFailures = true
 			f.Registration = s
-		}, false},
+		}, "ExternalStep.CountFailures"},
 		{"kind_reuses_primary", func(f *op.LoginFlow) {
 			s := registerStep()
 			s.KindLabel = op.StepKind("test.primary")
 			f.Registration = s
-		}, false},
+		}, "is already used by Primary"},
 		{"rule_names_registration", func(f *op.LoginFlow) {
 			f.Rules = []op.Rule{op.RuleAlways(registerStep())}
-		}, false},
+		}, "must not name the Registration StepKind"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -989,7 +996,7 @@ func TestScenario_PCR_009_RegistrationShapeRefused(t *testing.T) {
 			flow := valid()
 			tc.mutate(&flow)
 			_, err := op.New(testkit.MinimalOptions(t, op.WithLoginFlow(flow))...)
-			if tc.accept {
+			if tc.want == "" {
 				if err != nil {
 					t.Fatalf("op.New refused the valid shape: %v", err)
 				}
@@ -1001,6 +1008,9 @@ func TestScenario_PCR_009_RegistrationShapeRefused(t *testing.T) {
 			var typed *op.Error
 			if !errors.As(err, &typed) {
 				t.Errorf("err=%v want *op.Error", err)
+			}
+			if !strings.Contains(err.Error(), tc.want) {
+				t.Errorf("err=%v, want the rule naming %q", err, tc.want)
 			}
 		})
 	}
