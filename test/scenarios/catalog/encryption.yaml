@@ -24,8 +24,8 @@ description: |
 
   v0.9.1 ships an asymmetric-only, closed-allow-list profile: the OP
   rejects symmetric (alg=A*KW, dir) JWE at registration and decryption
-  time, only signs with ES256, and only emits userinfo signed with
-  ES256. Symmetric / HS256 / dir paths remain out-of-scope; revisit
+  time, signs with one asymmetric algorithm (ES256 or RS256), and
+  emits userinfo signed with that same algorithm. Symmetric / HS256 / dir paths remain out-of-scope; revisit
   if an embedder needs them.
 
 rows:
@@ -99,7 +99,7 @@ rows:
       A nested JWE-of-signed-JWT MUST be a 5-part compact serialization
       (header.cek.iv.ct.tag); the protected header MUST carry
       cty=JWT (RFC 7519 §5.2); decrypting the JWE yields a valid
-      compact JWS whose ES256 signature verifies under the OP's
+      compact JWS whose signature (the OP's issuing alg) verifies under the OP's
       published signing JWKS.
     status: active
 
@@ -141,7 +141,7 @@ rows:
     status: out-of-scope
     out_of_scope_reason: |
       HS256-signed userinfo (symmetric signing) is not in the v0.9.1
-      profile; the OP signs all userinfo with ES256. The
+      profile; the OP signs all userinfo with its asymmetric issuing alg. The
       client_secret-derived branch never activates.
 
   - id: ENC-024

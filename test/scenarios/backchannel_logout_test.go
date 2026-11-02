@@ -75,12 +75,13 @@ func (r *bclStubRP) received() []string {
 // http://127.0.0.1 backchannel_logout_uri — at registration and at the
 // SSRF gate alike — which is what makes the fan-out observable on the
 // wire at all.
-func newBCLProvider(t *testing.T, capture *scenariokit.AuditCapture) *testkit.Provider {
+func newBCLProvider(t *testing.T, capture *scenariokit.AuditCapture, tk ...testkit.Option) *testkit.Provider {
 	t.Helper()
-	return testkit.NewProvider(t, testkit.WithOptions(
+	opts := append([]testkit.Option{testkit.WithOptions(
 		op.WithAllowInsecureBackchannelLogoutForDev(),
 		op.WithAuditLogger(capture.Logger()),
-	))
+	)}, tk...)
+	return testkit.NewProvider(t, opts...)
 }
 
 // newBCLBrowser returns a cookie-jarred client that stands in for one

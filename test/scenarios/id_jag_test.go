@@ -119,7 +119,7 @@ type ijgIDP struct {
 	idClaims map[string]any
 }
 
-func newIJGIdP(t *testing.T, cfg ijgIDPConfig) *ijgIDP {
+func newIJGIdP(t *testing.T, cfg ijgIDPConfig, tk ...testkit.Option) *ijgIDP {
 	t.Helper()
 	idp := &ijgIDP{audit: &jbgAuditSink{}, policy: &ijgPolicy{}}
 	opts := []op.Option{
@@ -135,11 +135,11 @@ func newIJGIdP(t *testing.T, cfg ijgIDPConfig) *ijgIDP {
 	if cfg.pairwise {
 		opts = append(opts, op.WithPairwiseSubject([]byte("idjag-pairwise-salt-32-bytes-long")))
 	}
-	idp.tk = testkit.NewProvider(t,
+	idp.tk = testkit.NewProvider(t, append([]testkit.Option{
 		testkit.WithIssuer(ijgIDPIssuer),
 		testkit.WithClock(dpopFixedClock{t: jbgNow}),
 		testkit.WithOptions(opts...),
-	)
+	}, tk...)...)
 	hash, err := op.HashClientSecret(ijgIDPSecret)
 	if err != nil {
 		t.Fatalf("HashClientSecret: %v", err)
@@ -362,11 +362,11 @@ type ijgRAS struct {
 	resolved []op.AssertionSubject
 }
 
-func newIJGRAS(t *testing.T, idp *ijgIDP, issuer string, profile op.AssertionProfile) *ijgRAS {
+func newIJGRAS(t *testing.T, idp *ijgIDP, issuer string, profile op.AssertionProfile, tk ...testkit.Option) *ijgRAS {
 	t.Helper()
 	ras := &ijgRAS{audit: &jbgAuditSink{}}
 	jwks := jbgFetchBody(t, idp.tk, "/oidc/jwks")
-	ras.tk = testkit.NewProvider(t,
+	ras.tk = testkit.NewProvider(t, append([]testkit.Option{
 		testkit.WithIssuer(issuer),
 		testkit.WithClock(dpopFixedClock{t: jbgNow}),
 		testkit.WithOptions(
@@ -386,7 +386,7 @@ func newIJGRAS(t *testing.T, idp *ijgIDP, issuer string, profile op.AssertionPro
 				},
 			}),
 		),
-	)
+	}, tk...)...)
 	hash, err := op.HashClientSecret(ijgRASSecret)
 	if err != nil {
 		t.Fatalf("HashClientSecret: %v", err)
@@ -1175,8 +1175,18 @@ func TestScenario_IDJAG_021_CombinationCoverage(t *testing.T) {
 	}
 }
 
-// TestScenario_IDJAG_022_RS256SignedIDJAG is OOS — see catalog out_of_scope_reason.
+// TestScenario_IDJAG_022_RS256SignedIDJAG checks that an OP configured for
+// RS256 issues an RS256 ID-JAG whose kid resolves to an RS256 JWKS entry,
+// and that a resource AS trusting those keys redeems it. The ES256 OP is
+// run alongside as the control.
+//
+// Spec: draft-ietf-oauth-identity-assertion-authz-grant-06 §3.
 func TestScenario_IDJAG_022_RS256SignedIDJAG(t *testing.T) {
 	t.Parallel()
-	t.Skip("out-of-scope: IDJAG-022 (see catalog out_of_scope_reason)")
+	for _, alg := range sigAlgBoth {
+		t.Run(string(alg), func(t *testing.T) {
+			t.Parallel()
+			sigAlgAssertIDJAGRedeemed(t, alg)
+		})
+	}
 }

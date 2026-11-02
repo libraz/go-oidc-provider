@@ -316,7 +316,7 @@ rows:
       both directions — a strictly wider blast radius than
       private_key_jwt, which offers the same capability with an
       asymmetric key the OP never possesses. It is also incompatible
-      with the OP's single-signing-algorithm policy (ES256 only). Only
+      with the OP's single-signing-algorithm policy (one issuing algorithm, ES256 or RS256). Only
       private_key_jwt and the secret-derived client_secret_basic /
       client_secret_post are accepted.
 
@@ -334,7 +334,7 @@ rows:
       both directions — a strictly wider blast radius than
       private_key_jwt, which offers the same capability with an
       asymmetric key the OP never possesses. It is also incompatible
-      with the OP's single-signing-algorithm policy (ES256 only). Only
+      with the OP's single-signing-algorithm policy (one issuing algorithm, ES256 or RS256). Only
       private_key_jwt and the secret-derived client_secret_basic /
       client_secret_post are accepted.
 
@@ -353,7 +353,7 @@ rows:
       both directions — a strictly wider blast radius than
       private_key_jwt, which offers the same capability with an
       asymmetric key the OP never possesses. It is also incompatible
-      with the OP's single-signing-algorithm policy (ES256 only). Only
+      with the OP's single-signing-algorithm policy (one issuing algorithm, ES256 or RS256). Only
       private_key_jwt and the secret-derived client_secret_basic /
       client_secret_post are accepted.
 
@@ -371,7 +371,7 @@ rows:
       both directions — a strictly wider blast radius than
       private_key_jwt, which offers the same capability with an
       asymmetric key the OP never possesses. It is also incompatible
-      with the OP's single-signing-algorithm policy (ES256 only). Only
+      with the OP's single-signing-algorithm policy (one issuing algorithm, ES256 or RS256). Only
       private_key_jwt and the secret-derived client_secret_basic /
       client_secret_post are accepted.
 
@@ -390,7 +390,7 @@ rows:
       both directions — a strictly wider blast radius than
       private_key_jwt, which offers the same capability with an
       asymmetric key the OP never possesses. It is also incompatible
-      with the OP's single-signing-algorithm policy (ES256 only). Only
+      with the OP's single-signing-algorithm policy (one issuing algorithm, ES256 or RS256). Only
       private_key_jwt and the secret-derived client_secret_basic /
       client_secret_post are accepted.
 
@@ -408,7 +408,7 @@ rows:
       both directions — a strictly wider blast radius than
       private_key_jwt, which offers the same capability with an
       asymmetric key the OP never possesses. It is also incompatible
-      with the OP's single-signing-algorithm policy (ES256 only). Only
+      with the OP's single-signing-algorithm policy (one issuing algorithm, ES256 or RS256). Only
       private_key_jwt and the secret-derived client_secret_basic /
       client_secret_post are accepted.
 
@@ -425,7 +425,7 @@ rows:
       both directions — a strictly wider blast radius than
       private_key_jwt, which offers the same capability with an
       asymmetric key the OP never possesses. It is also incompatible
-      with the OP's single-signing-algorithm policy (ES256 only). Only
+      with the OP's single-signing-algorithm policy (one issuing algorithm, ES256 or RS256). Only
       private_key_jwt and the secret-derived client_secret_basic /
       client_secret_post are accepted.
 
@@ -445,7 +445,7 @@ rows:
       both directions — a strictly wider blast radius than
       private_key_jwt, which offers the same capability with an
       asymmetric key the OP never possesses. It is also incompatible
-      with the OP's single-signing-algorithm policy (ES256 only). Only
+      with the OP's single-signing-algorithm policy (one issuing algorithm, ES256 or RS256). Only
       private_key_jwt and the secret-derived client_secret_basic /
       client_secret_post are accepted.
 
@@ -468,7 +468,7 @@ rows:
       both directions — a strictly wider blast radius than
       private_key_jwt, which offers the same capability with an
       asymmetric key the OP never possesses. It is also incompatible
-      with the OP's single-signing-algorithm policy (ES256 only). Only
+      with the OP's single-signing-algorithm policy (one issuing algorithm, ES256 or RS256). Only
       private_key_jwt and the secret-derived client_secret_basic /
       client_secret_post are accepted.
 
@@ -486,7 +486,7 @@ rows:
       both directions — a strictly wider blast radius than
       private_key_jwt, which offers the same capability with an
       asymmetric key the OP never possesses. It is also incompatible
-      with the OP's single-signing-algorithm policy (ES256 only). Only
+      with the OP's single-signing-algorithm policy (one issuing algorithm, ES256 or RS256). Only
       private_key_jwt and the secret-derived client_secret_basic /
       client_secret_post are accepted.
 
@@ -511,7 +511,7 @@ rows:
       both directions — a strictly wider blast radius than
       private_key_jwt, which offers the same capability with an
       asymmetric key the OP never possesses. It is also incompatible
-      with the OP's single-signing-algorithm policy (ES256 only). Only
+      with the OP's single-signing-algorithm policy (one issuing algorithm, ES256 or RS256). Only
       private_key_jwt and the secret-derived client_secret_basic /
       client_secret_post are accepted.
 
@@ -530,7 +530,7 @@ rows:
       both directions — a strictly wider blast radius than
       private_key_jwt, which offers the same capability with an
       asymmetric key the OP never possesses. It is also incompatible
-      with the OP's single-signing-algorithm policy (ES256 only). Only
+      with the OP's single-signing-algorithm policy (one issuing algorithm, ES256 or RS256). Only
       private_key_jwt and the secret-derived client_secret_basic /
       client_secret_post are accepted.
 
@@ -549,7 +549,7 @@ rows:
       both directions — a strictly wider blast radius than
       private_key_jwt, which offers the same capability with an
       asymmetric key the OP never possesses. It is also incompatible
-      with the OP's single-signing-algorithm policy (ES256 only). Only
+      with the OP's single-signing-algorithm policy (one issuing algorithm, ES256 or RS256). Only
       private_key_jwt and the secret-derived client_secret_basic /
       client_secret_post are accepted.
 
@@ -568,7 +568,7 @@ rows:
       both directions — a strictly wider blast radius than
       private_key_jwt, which offers the same capability with an
       asymmetric key the OP never possesses. It is also incompatible
-      with the OP's single-signing-algorithm policy (ES256 only). Only
+      with the OP's single-signing-algorithm policy (one issuing algorithm, ES256 or RS256). Only
       private_key_jwt and the secret-derived client_secret_basic /
       client_secret_post are accepted.
 
@@ -588,7 +588,7 @@ rows:
       both directions — a strictly wider blast radius than
       private_key_jwt, which offers the same capability with an
       asymmetric key the OP never possesses. It is also incompatible
-      with the OP's single-signing-algorithm policy (ES256 only). Only
+      with the OP's single-signing-algorithm policy (one issuing algorithm, ES256 or RS256). Only
       private_key_jwt and the secret-derived client_secret_basic /
       client_secret_post are accepted.
 
@@ -607,7 +607,7 @@ rows:
       both directions — a strictly wider blast radius than
       private_key_jwt, which offers the same capability with an
       asymmetric key the OP never possesses. It is also incompatible
-      with the OP's single-signing-algorithm policy (ES256 only). Only
+      with the OP's single-signing-algorithm policy (one issuing algorithm, ES256 or RS256). Only
       private_key_jwt and the secret-derived client_secret_basic /
       client_secret_post are accepted.
 
@@ -627,7 +627,7 @@ rows:
       both directions — a strictly wider blast radius than
       private_key_jwt, which offers the same capability with an
       asymmetric key the OP never possesses. It is also incompatible
-      with the OP's single-signing-algorithm policy (ES256 only). Only
+      with the OP's single-signing-algorithm policy (one issuing algorithm, ES256 or RS256). Only
       private_key_jwt and the secret-derived client_secret_basic /
       client_secret_post are accepted.
 
@@ -643,9 +643,9 @@ rows:
       client_secret_jwt and HS-signed responses are intentionally not
       supported. Shared-secret JWT auth is excluded because a leaked
       secret forges assertions in both directions, and the OP signs
-      with a single algorithm (ES256), which rules out HS*/RS*/PS*
-      issuance. The OP advertises only
-      id_token_signing_alg_values_supported=["ES256"] and rejects
+      with a single algorithm (ES256 or RS256, chosen at construction),
+      which rules out HS* issuance. The OP advertises only its issuing
+      algorithm in id_token_signing_alg_values_supported and rejects
       clients registering id_token_signed_response_alg=HS* /
       userinfo_signed_response_alg=HS* upstream of this row.
 
@@ -1213,7 +1213,7 @@ rows:
       JWT auth (HS256/384/512) makes the OP and the client hold the
       same signing key, so a leak on either side forges assertions in
       both directions, and it is incompatible with the OP's
-      single-signing-algorithm policy (ES256 only). Only
+      single-signing-algorithm policy (one issuing algorithm, ES256 or RS256). Only
       private_key_jwt and the secret-derived client_secret_basic /
       client_secret_post are accepted, so the HMAC-only alg
       advertisement this row describes never appears on the wire.
@@ -1241,7 +1241,7 @@ rows:
       JWT auth (HS256/384/512) makes the OP and the client hold the
       same signing key, so a leak on either side forges assertions in
       both directions, and it is incompatible with the OP's
-      single-signing-algorithm policy (ES256 only). With
+      single-signing-algorithm policy (one issuing algorithm, ES256 or RS256). With
       client_secret_jwt absent there is no "union of HMAC and
       asymmetric algs" wire shape to assert; the asymmetric-only
       advertisement is covered by CA-DISC-04.

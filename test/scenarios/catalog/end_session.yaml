@@ -117,7 +117,7 @@ rows:
       `invalid_client` ("client secret is expired - cannot validate
       ID Token Hint").
     status: out-of-scope
-    out_of_scope_reason: v1.0 issues only ES256 ID tokens (per-client id_token_signed_response_alg is not implemented; see signatures.yaml SIG-001/002 pending). HMAC-signed id_token_hint at /end_session has no v1.0 path; client_secret_expires_at does not gate id_token_hint validation. Reconsider when HS256 issuance + per-client alg pinning ship.
+    out_of_scope_reason: The OP issues ID tokens only in its single asymmetric issuing alg, ES256 or RS256 (per-client id_token_signed_response_alg is validated at registration but does not select the issuing alg; see signatures.yaml SIG-001/002). HMAC-signed id_token_hint at /end_session has no v1.0 path; client_secret_expires_at does not gate id_token_hint validation. Reconsider when HS256 issuance + per-client alg pinning ship.
 
   - id: ES-010
     severity: P2

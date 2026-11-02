@@ -13,9 +13,10 @@ description: |
   issuer configured with op.AssertionProfileIDJAG (rows 001-009). As an
   identity provider the OP issues an ID-JAG in exchange for one of its own
   ID tokens when op.WithIDJAGIssuance is configured (rows 010-020). The
-  IdP signs with ES256 only, so the draft's RS256 interoperability
-  requirement is not met; that gap is recorded in IDJAG-022. The wire
-  shape follows the pinned draft revision and may change with it.
+  IdP signs with the OP's single issuing algorithm (ES256 by default,
+  RS256 with op.WithSigningAlgorithm); the draft's RS256 interoperability
+  requirement is met only by an RS256 OP, as exercised by IDJAG-022. The
+  wire shape follows the pinned draft revision and may change with it.
 
 rows:
   - id: IDJAG-001
@@ -128,7 +129,7 @@ rows:
     spec: draft-ietf-oauth-identity-assertion-authz-grant-06 §3.1, §4.3
     shape: value
     behaviour: |
-      An issued ID-JAG has the header typ oauth-id-jag+jwt and alg ES256 and
+      An issued ID-JAG has the header typ oauth-id-jag+jwt and the OP's issuing alg (ES256 by default) and
       verifies under the key published at the JWKS endpoint. Its claims are
       iss the OP issuer, sub the ID token's sub, aud the requested audience,
       client_id and scope and email from the policy decision, resource as
@@ -285,5 +286,4 @@ rows:
     behaviour: |
       An ID-JAG signed with RS256 is issued and accepted, as the draft
       requires of identity providers and resource servers.
-    status: out-of-scope
-    out_of_scope_reason: "The OP signs with ES256 only by library policy, so it issues no RS256 ID-JAG. The IdP role is therefore partial against the draft's RS256 interoperability requirement; a resource server that implements only RS256 rejects this OP's ID-JAGs."
+    status: active

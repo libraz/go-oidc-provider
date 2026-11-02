@@ -303,9 +303,18 @@ func TestScenario_DCR_DEF_01_ApplicationTypeDefaultsWeb(t *testing.T) {
 	}
 }
 
+// TestScenario_DCR_DEF_02_IDTokenAlgDefaultsRS256 confirms that an OP
+// issuing RS256 defaults an omitted id_token_signed_response_alg to RS256
+// and refuses ES256. The ES256 OP defaults to ES256 and refuses RS256.
+//
+// Spec: OpenID Connect Dynamic Client Registration 1.0 §2.
 func TestScenario_DCR_DEF_02_IDTokenAlgDefaultsRS256(t *testing.T) {
 	t.Parallel()
-	t.Skip("out-of-scope: DCR-DEF-02 (see catalog out_of_scope_reason)")
+	sigAlgAssertDCRDefault(t, op.AlgRS256, op.AlgES256)
+	t.Run("ES256 OP", func(t *testing.T) {
+		t.Parallel()
+		sigAlgAssertDCRDefault(t, op.AlgES256, op.AlgRS256)
+	})
 }
 
 // TestScenario_DCR_DEF_03_AuthMethodDefaultsBasic confirms that the OP

@@ -44,14 +44,15 @@ const jarmTestSecret = "rp-jarm-scenarios-secret"
 
 // newJARMProvider boots a [testkit.Provider] with [feature.JARM] on and
 // registers the canonical JARM client. Tests share the helper so the
-// fixture stays uniform across the catalog rows.
-func newJARMProvider(t *testing.T) (*testkit.Provider, *store.Client) {
+// fixture stays uniform across the catalog rows. Extra testkit options
+// (for example the signing algorithm) are appended after the defaults.
+func newJARMProvider(t *testing.T, tkOpts ...testkit.Option) (*testkit.Provider, *store.Client) {
 	t.Helper()
 	hash, err := op.HashClientSecret(jarmTestSecret)
 	if err != nil {
 		t.Fatalf("HashClientSecret: %v", err)
 	}
-	tk := testkit.NewProvider(t, testkit.WithOptions(op.WithFeature(feature.JARM)))
+	tk := testkit.NewProvider(t, append([]testkit.Option{testkit.WithOptions(op.WithFeature(feature.JARM))}, tkOpts...)...)
 	rp := tk.RegisterClient(t, testkit.ClientFixture{
 		ID:                      jarmTestClientID,
 		SecretHash:              hash,

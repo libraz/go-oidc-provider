@@ -58,10 +58,21 @@ func TestScenario_SIG_002_HS256IDTokenAcceptedAsHint(t *testing.T) {
 	t.Skip("out-of-scope: SIG-002 (see catalog out_of_scope_reason)")
 }
 
-// TestScenario_SIG_010_AtHashLengthSHA256 is OOS — see catalog out_of_scope_reason.
+// TestScenario_SIG_010_AtHashLengthSHA256 checks that the id_token of an
+// RS256 OP (and of the ES256 control) carries at_hash and c_hash as the
+// left 128 bits of SHA-256, base64url, 22 characters.
+//
+// Spec: OIDC Core 1.0 §3.1.3.6.
 func TestScenario_SIG_010_AtHashLengthSHA256(t *testing.T) {
 	t.Parallel()
-	t.Skip("out-of-scope: SIG-010 (see catalog out_of_scope_reason)")
+	for _, alg := range sigAlgBoth {
+		t.Run(string(alg), func(t *testing.T) {
+			t.Parallel()
+			f := sigAlgRunFlow(t, alg)
+			sigAlgAssertIssued(t, f.tk, f.tok.IDToken, alg)
+			sigAlgAssertHashClaims(t, f)
+		})
+	}
 }
 
 // TestScenario_SIG_011_AtHashLengthSHA384 is OOS — see catalog out_of_scope_reason.

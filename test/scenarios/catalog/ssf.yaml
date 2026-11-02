@@ -5,7 +5,7 @@ title: Shared Signals Framework transmitter (CAEP / RISC)
 specs:
   - OpenID Shared Signals Framework 1.0
   - OpenID CAEP 1.0 (session-revoked, credential-change)
-  - OpenID CAEP Interoperability Profile 1.0 (RS256 signing of §2.6 not supported; ES256 only)
+  - OpenID CAEP Interoperability Profile 1.0 (§2.6 RS256 signing is met when the OP runs RS256)
   - RFC 8417 (Security Event Token)
   - RFC 8935 (SET push delivery)
   - RFC 8936 (SET poll delivery)

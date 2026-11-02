@@ -226,7 +226,7 @@ rows:
       the hash function is selected from the signing alg (signing
       alg is the source of truth).
     status: out-of-scope
-    out_of_scope_reason: "v1.0 only emits ES256 id_tokens (internal/tokens/tokens.go's Hash hard-pins SHA-256 truncated, and internal/keys/generate.go ships GenerateES256 only). With no second signing alg available, the conditional 'alg differs from signing alg -> hash function follows signing' has no observable second branch."
+    out_of_scope_reason: "The OP issues id_tokens in one algorithm, ES256 or RS256, both of which hash with SHA-256 (internal/tokens/tokens.go's Hash). With no signing alg using a different hash, the conditional 'alg differs from signing alg -> hash function follows signing' has no observable second branch."
 
   - id: IDT-27
     severity: P1
@@ -235,7 +235,7 @@ rows:
       When the id_token signing alg is none, hash claims are omitted
       because there is no underlying hash to compute.
     status: out-of-scope
-    out_of_scope_reason: "The 'none' id_token signing alg is intentionally not supported. v1.0's internal/jose alg registry rejects 'none' and the keyset generator only produces ES256; no public option flips the OP into none-signing. The conditional this row exercises never triggers."
+    out_of_scope_reason: "The 'none' id_token signing alg is intentionally not supported. the internal/jose alg registry rejects 'none' and the keyset accepts only ES256 / RS256 keys; no public option flips the OP into none-signing. The conditional this row exercises never triggers."
 
   - id: IDT-30
     severity: P0
@@ -299,10 +299,9 @@ rows:
     spec: OIDC Core §10.1
     behaviour: |
       The id_token is signed with the client's
-      id_token_signed_response_alg. v1.0's keyset generator only
-      emits ES256 keys (internal/keys/generate.go's GenerateES256
-      and the AlgRS256/AlgPS256/AlgES256/AlgEdDSA registry in
-      internal/jose/alg.go), so the OP signs with ES256 by default.
+      id_token_signed_response_alg. The OP signs with its single
+      issuing algorithm (op.WithSigningAlgorithm; ES256 by default,
+      RS256 when selected), which registration pins the client to.
     status: active
 
   - id: IDT-42
@@ -324,7 +323,7 @@ rows:
       Symmetric algorithms such as HS256 sign with a key derived
       from client_secret.
     status: out-of-scope
-    out_of_scope_reason: "v1.0 only supports asymmetric ES256 signing. The internal/jose alg registry exposes RS256/PS256/ES256/EdDSA but the keyset generator (internal/keys/generate.go's GenerateES256) emits ES256 only, and no public option installs HS256 with a client_secret-derived HMAC key."
+    out_of_scope_reason: "The OP signs asymmetrically only (ES256 or RS256). The internal/jose alg registry exposes RS256/PS256/ES256/EdDSA but the keyset accepts only ES256 / RS256 keys, and no public option installs HS256 with a client_secret-derived HMAC key."
 
   - id: IDT-44
     severity: P1
@@ -359,7 +358,7 @@ rows:
       returns a signed JWT with content-type application/jwt instead
       of JSON.
     status: out-of-scope
-    out_of_scope_reason: "The OP does sign UserInfo responses — internal/userinfo/serve_jwt.go returns an ES256 JWT with content-type application/jwt — but the trigger is the request's Accept header, not this metadata field. Honouring the field would make a signed response the per-client default, which needs a store.Client member the record does not carry, so the exact behaviour this row asserts has no path. Rebind once the client record can express it."
+    out_of_scope_reason: "The OP does sign UserInfo responses — internal/userinfo/serve_jwt.go returns a JWT in the OP's issuing algorithm with content-type application/jwt — but the trigger is the request's Accept header, not this metadata field. Honouring the field would make a signed response the per-client default, which needs a store.Client member the record does not carry, so the exact behaviour this row asserts has no path. Rebind once the client record can express it."
 
   - id: IDT-53
     severity: P1

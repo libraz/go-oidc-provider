@@ -81,8 +81,7 @@ rows:
     behaviour: |
       When id_token_signed_response_alg is omitted, the OP defaults it
       to "RS256".
-    status: out-of-scope
-    out_of_scope_reason: "v1.0 ships ES256-only id_token signing (internal/registrationendpoint/metadata.go validateIDTokenAlg accepts only ES256, defaultIDTokenAlg = ES256). RS256 is not on the v1.0 surface — it would be rejected with invalid_client_metadata, not silently defaulted. The 'defaults to RS256' contract is non-spec residue."
+    status: active
 
   - id: DCR-DEF-03
     severity: P0
@@ -163,7 +162,7 @@ rows:
       When id_token_signed_response_alg requests an HS* algorithm, the
       OP issues a client_secret because an HMAC key is required.
     status: out-of-scope
-    out_of_scope_reason: "v1.0 enforces id_token_signed_response_alg = ES256 only (internal/registrationendpoint/metadata.go validateIDTokenAlg). HS-family algorithms are rejected with invalid_client_metadata before reaching any client_secret-issuance branch; the 'HS* alg forces a secret' coupling has no v1.0 wire path. The contract is non-spec residue (its OP supported HS256/HS384/HS512 for clients and minted secrets to back the HMAC key)."
+    out_of_scope_reason: "The OP accepts id_token_signed_response_alg only as its own issuing algorithm (ES256 or RS256) or none (internal/registrationendpoint/metadata_validate.go). HS-family algorithms are rejected with invalid_client_metadata before reaching any client_secret-issuance branch; the 'HS* alg forces a secret' coupling has no v1.0 wire path. The contract is non-spec residue (its OP supported HS256/HS384/HS512 for clients and minted secrets to back the HMAC key)."
 
   - id: DCR-SEC-04
     severity: P0
@@ -173,7 +172,7 @@ rows:
       requests an HS* algorithm, the OP issues a client_secret on the
       same grounds as DCR-SEC-03.
     status: out-of-scope
-    out_of_scope_reason: "Same root cause as DCR-SEC-03: v1.0 rejects HS* algorithms across the JWA surface. userinfo_signed_response_alg is not exposed in op.ClientMetadata or registrationendpoint.ClientMetadata, and request_object_signing_alg is gated by validateRequestObjectSigningAlg to {RS256, PS256, ES256, EdDSA} — HS variants never reach the secret-issuance fork. The 'HS forces secret' contract is non-spec residue."
+    out_of_scope_reason: "Same root cause as DCR-SEC-03: v1.0 rejects HS* algorithms across the JWA surface. userinfo_signed_response_alg is accepted only as the OP's issuing algorithm or none, and request_object_signing_alg is gated by validateRequestObjectSigningAlg to {RS256, PS256, ES256, EdDSA} — HS variants never reach the secret-issuance fork. The 'HS forces secret' contract is non-spec residue."
 
   - id: DCR-SEC-05
     severity: P0

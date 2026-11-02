@@ -278,10 +278,14 @@ func TestScenario_JWKS_003_HandlerDoesNotBindEntities(t *testing.T) {
 	}
 }
 
-// TestScenario_JWKS_012_RSAKeyPublishesNAndE is OOS — see catalog out_of_scope_reason.
+// TestScenario_JWKS_012_RSAKeyPublishesNAndE asserts that an RS256 OP
+// publishes its RSA key with n and e (2048 bits or more, e=65537), as an
+// RS256 signing entry, and never the private members.
+//
+// Spec: RFC 7518 §6.3.
 func TestScenario_JWKS_012_RSAKeyPublishesNAndE(t *testing.T) {
 	t.Parallel()
-	t.Skip("out-of-scope: JWKS-012 (see catalog out_of_scope_reason)")
+	sigAlgAssertRSAJWKS(t)
 }
 
 // TestScenario_JWKS_014_OKPKeyPublishesCrvAndX is OOS — see catalog out_of_scope_reason.

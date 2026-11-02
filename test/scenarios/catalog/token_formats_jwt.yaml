@@ -24,7 +24,7 @@ rows:
       When the resource server pins jwt.sign.alg=PS256, saving an
       access token produces a JWS whose header alg is PS256.
     status: out-of-scope
-    out_of_scope_reason: Go OP issues ES256 only; per-resource alt signing alg pinning (PS256/RS256/ES512) is not on the v1.0 surface
+    out_of_scope_reason: The OP issues access tokens in one algorithm for the whole instance (ES256 by default, RS256 via op.WithSigningAlgorithm); per-resource signing alg pinning (PS256/RS256/ES512) is not on the surface
 
   - id: TFJ-002
     severity: P1
@@ -33,7 +33,7 @@ rows:
       When accessTokenFormat=jwt is selected without a jwt block, the
       OP defaults to alg=RS256 and selects a kid from its own keystore.
     status: out-of-scope
-    out_of_scope_reason: Go OP issues ES256 only; per-resource alt signing alg pinning (PS256/RS256/ES512) is not on the v1.0 surface
+    out_of_scope_reason: The OP issues access tokens in one algorithm for the whole instance (ES256 by default, RS256 via op.WithSigningAlgorithm); per-resource signing alg pinning (PS256/RS256/ES512) is not on the surface
 
   - id: TFJ-003
     severity: P2
@@ -43,7 +43,7 @@ rows:
       same defaults as omitting the block entirely (alg=RS256, kid
       drawn from the keystore).
     status: out-of-scope
-    out_of_scope_reason: Go OP issues ES256 only; per-resource alt signing alg pinning (PS256/RS256/ES512) is not on the v1.0 surface
+    out_of_scope_reason: The OP issues access tokens in one algorithm for the whole instance (ES256 by default, RS256 via op.WithSigningAlgorithm); per-resource signing alg pinning (PS256/RS256/ES512) is not on the surface
 
   - id: TFJ-004
     severity: P1
@@ -176,7 +176,7 @@ rows:
       Configuring jwt.sign.alg=none is rejected at save time with
       "JWT Access Tokens may not use JWS algorithm \"none\"".
     status: out-of-scope
-    out_of_scope_reason: "alg=none has no caller surface: op.WithKeyset accepts asymmetric crypto.Signer entries only (ES256), so an alg=none JWS cannot be reached at runtime; the rejection is structural rather than a runtime save-time error"
+    out_of_scope_reason: "alg=none has no caller surface: op.WithKeyset accepts asymmetric crypto.Signer entries only (ES256 / RS256), so an alg=none JWS cannot be reached at runtime; the rejection is structural rather than a runtime save-time error"
 
   - id: TFJ-018
     severity: P0
@@ -216,7 +216,7 @@ rows:
       with "resolved Resource Server jwt configuration has no
       corresponding key in the provider's keystore".
     status: out-of-scope
-    out_of_scope_reason: Go OP issues ES256 only; per-resource alt signing alg pinning (PS256/RS256/ES512) is not on the v1.0 surface
+    out_of_scope_reason: The OP issues access tokens in one algorithm for the whole instance (ES256 by default, RS256 via op.WithSigningAlgorithm); per-resource signing alg pinning (PS256/RS256/ES512) is not on the surface
 
   - id: TFJ-022
     severity: P0

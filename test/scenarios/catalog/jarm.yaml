@@ -25,8 +25,8 @@ rows:
     spec: JARM §6 / RFC 8414
     behaviour: |
       When JARM is enabled, /.well-known/openid-configuration
-      publishes authorization_signing_alg_values_supported with at
-      least "ES256" (v1.0 signs with ES256 only) and
+      publishes authorization_signing_alg_values_supported with
+      the OP's issuing alg ("ES256" by default, "RS256" when selected) and
       response_modes_supported equal to ["query", "form_post",
       "query.jwt", "fragment.jwt", "form_post.jwt", "jwt"]. The
       authorization_encryption_alg_values_supported and
@@ -120,7 +120,7 @@ rows:
     status: out-of-scope
     out_of_scope_reason: |
       No JARM alg the OP can be configured with consumes client_secret.
-      Signing is ES256 only, and the supported JWE alg families are
+      Signing is asymmetric only (the OP's ES256 or RS256), and the supported JWE alg families are
       asymmetric (RSA-OAEP-256, ECDH-ES / +A128KW / +A256KW) with the
       recipient key resolved from the client's JWKS — the
       secret-derived families (HS*, bare A*KW, dir) are rejected by
