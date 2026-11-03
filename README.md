@@ -56,21 +56,37 @@ go get github.com/libraz/go-oidc-provider/op/storeadapter/dynamodb@v1.4.0
 ```go
 db, _ := sql.Open("mysql", dsn)          // your existing database
 st, err := oidcsql.New(db, oidcsql.MySQL()) // op/storeadapter/sql
-// Apply st.Migrations() with your migration tool (st.Migrate in development).
+// Apply st.Migrations() with your migration tool.
+
+keys, err := op.LoadKeyset("signing.pem") // PEM private key
+if err != nil {
+    log.Fatal(err)
+}
+cookieKeys, err := op.LoadSymmetricKeys("cookie.key") // 32 bytes, AES-256-GCM
+if err != nil {
+    log.Fatal(err)
+}
 
 handler, err := op.New(
     op.WithIssuer("https://idp.example.com"),
     op.WithStore(st),
-    op.WithKeyset(op.Keyset{{KeyID: "k1", Signer: priv}}),
-    op.WithCookieKeys(cookieKey), // 32 bytes, AES-256-GCM
+    op.WithKeyset(keys),
+    op.WithCookieKeys(cookieKeys...),
     op.WithLoginFlow(op.LoginFlow{
-        Primary: op.PrimaryPassword{Store: users{db}},
+        Primary: op.PrimaryPassword{Store: users{db}}, // your type with the three methods below
     }),
 )
 if err != nil {
     log.Fatal(err)
 }
 log.Fatal(http.ListenAndServe(":8080", handler))
+```
+
+Generate the keys once:
+
+```sh
+openssl ecparam -name prime256v1 -genkey -noout | openssl pkcs8 -topk8 -nocrypt -out signing.pem
+openssl rand -hex 32 > cookie.key
 ```
 
 `users` is your existing users table, read through three methods of

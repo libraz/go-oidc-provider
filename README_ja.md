@@ -35,21 +35,37 @@ go get github.com/libraz/go-oidc-provider/op/storeadapter/dynamodb@v1.4.0
 ```go
 db, _ := sql.Open("mysql", dsn)          // 既存のデータベース
 st, err := oidcsql.New(db, oidcsql.MySQL()) // op/storeadapter/sql
-// st.Migrations() を手元の migration ツールで適用する（開発中は st.Migrate）。
+// st.Migrations() を migration ツールで適用する。
+
+keys, err := op.LoadKeyset("signing.pem") // PEM 形式の秘密鍵
+if err != nil {
+    log.Fatal(err)
+}
+cookieKeys, err := op.LoadSymmetricKeys("cookie.key") // 32 バイト, AES-256-GCM
+if err != nil {
+    log.Fatal(err)
+}
 
 handler, err := op.New(
     op.WithIssuer("https://idp.example.com"),
     op.WithStore(st),
-    op.WithKeyset(op.Keyset{{KeyID: "k1", Signer: priv}}),
-    op.WithCookieKeys(cookieKey), // 32 バイト, AES-256-GCM
+    op.WithKeyset(keys),
+    op.WithCookieKeys(cookieKeys...),
     op.WithLoginFlow(op.LoginFlow{
-        Primary: op.PrimaryPassword{Store: users{db}},
+        Primary: op.PrimaryPassword{Store: users{db}}, // 下の 3 メソッドを持つあなたの型
     }),
 )
 if err != nil {
     log.Fatal(err)
 }
 log.Fatal(http.ListenAndServe(":8080", handler))
+```
+
+鍵は最初に一度だけ生成します。
+
+```sh
+openssl ecparam -name prime256v1 -genkey -noout | openssl pkcs8 -topk8 -nocrypt -out signing.pem
+openssl rand -hex 32 > cookie.key
 ```
 
 `users` は既存のユーザテーブルで、OP は `store.UserPasswordStore` の 3 メソッドを通して読みます。どれも未知のユーザには `store.ErrNotFound` を返します。
