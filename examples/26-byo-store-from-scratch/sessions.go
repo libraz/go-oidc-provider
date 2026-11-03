@@ -22,6 +22,13 @@ type sessionStore struct {
 	now func() time.Time
 }
 
+// SessionSubjectDeleter is the extension Provider.ForgetSubject needs to
+// erase every seat a subject holds.
+var (
+	_ store.SessionStore          = (*sessionStore)(nil)
+	_ store.SessionSubjectDeleter = (*sessionStore)(nil)
+)
+
 const (
 	sessionUpsert = `
 INSERT INTO vault_browser_seats
@@ -44,6 +51,8 @@ FROM vault_browser_seats WHERE seat_id = ?`
 
 	sessionTouch  = `UPDATE vault_browser_seats SET expires_epoch = ?, touched_epoch = ? WHERE seat_id = ?`
 	sessionDelete = `DELETE FROM vault_browser_seats WHERE seat_id = ?`
+
+	sessionDeleteByPrincipal = `DELETE FROM vault_browser_seats WHERE principal = ?`
 
 	sessionByBand = `
 SELECT seat_id, principal, auth_epoch, amr_methods, acr_class, chooser_band,
@@ -126,6 +135,19 @@ func (s *sessionStore) Delete(ctx context.Context, id string) error {
 	}
 	if n == 0 || absent {
 		return store.ErrNotFound
+	}
+	return nil
+}
+
+// DeleteBySubject removes every seat of the principal, expired or not, and
+// leaves other principals' seats alone even inside the same chooser band.
+// Zero matching rows is success.
+func (s *sessionStore) DeleteBySubject(ctx context.Context, subject string) error {
+	if subject == "" {
+		return errors.New("sessions.DeleteBySubject: empty subject")
+	}
+	if _, err := s.q.ExecContext(ctx, sessionDeleteByPrincipal, subject); err != nil {
+		return fmt.Errorf("sessions.DeleteBySubject: %w", err)
 	}
 	return nil
 }

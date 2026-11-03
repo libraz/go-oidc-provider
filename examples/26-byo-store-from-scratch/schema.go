@@ -159,6 +159,8 @@ CREATE TABLE IF NOT EXISTS vault_browser_seats (
     issued_epoch     INTEGER NOT NULL,
     touched_epoch    INTEGER NOT NULL
 );
+-- Serves sessionStore.DeleteBySubject, which Provider.ForgetSubject calls.
+CREATE INDEX IF NOT EXISTS vault_browser_seats_principal ON vault_browser_seats (principal);
 
 CREATE TABLE IF NOT EXISTS vault_flow_scratch (
     scratch_id       TEXT PRIMARY KEY,

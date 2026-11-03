@@ -273,9 +273,16 @@ func (s *metadataStore) Set(ctx context.Context, key, value string) error {
 
 type lockoutStore struct{ q querier }
 
-var _ store.AuthnLockoutStore = (*lockoutStore)(nil)
+// AuthnLockoutDeleter is the extension Provider.ForgetSubject needs to
+// erase a subject's lockout row.
+var (
+	_ store.AuthnLockoutStore   = (*lockoutStore)(nil)
+	_ store.AuthnLockoutDeleter = (*lockoutStore)(nil)
+)
 
 const (
+	lockoutDelete = `DELETE FROM vault_signin_strikes WHERE principal = ?`
+
 	lockoutSelect = `
 SELECT principal, strike_count, first_strike_epoch, barred_until_epoch, row_version
 FROM vault_signin_strikes WHERE principal = ?`
@@ -310,6 +317,22 @@ func (s *lockoutStore) Get(ctx context.Context, subject string) (*store.AuthnLoc
 	r.LockedUntil = timeOf(barred)
 	r.Version = uint64(version)
 	return &r, nil
+}
+
+// Delete removes the subject's strike row; an absent row is ErrNotFound.
+func (s *lockoutStore) Delete(ctx context.Context, subject string) error {
+	res, err := s.q.ExecContext(ctx, lockoutDelete, subject)
+	if err != nil {
+		return fmt.Errorf("lockouts.Delete: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("lockouts.Delete.RowsAffected: %w", err)
+	}
+	if n == 0 {
+		return store.ErrNotFound
+	}
+	return nil
 }
 
 // CompareAndSwap inserts when expectedVersion is zero and otherwise updates
