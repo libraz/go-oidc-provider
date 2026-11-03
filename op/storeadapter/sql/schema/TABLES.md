@@ -2,21 +2,27 @@
 
 <!-- Generated from tables.go by TestTablesDoc; regenerate with `go test -run TestTablesDoc -update .` in op/storeadapter/sql. -->
 
+Apply every migration file (a new database applies them all). Create every
+table whatever your configuration uses; the unused ones stay empty. The only
+column you add to your own users table is an opaque subject, when it lacks
+one.
+
+With your own user store, `oidc_users` stays empty: the OP reads users through
+your `store.UserStore` and writes to that table only through the bundled one.
+
 `op.New` checks, at construction, the tables the configuration uses (the
 "Checked when" column) and names any that are missing. Run against an empty
 database, its error lists every table your configuration needs in one pass.
-A table whose condition your configuration does not meet does not stop
-startup, but create every table from `schema/<dialect>/v1.sql` anyway and
-leave the unused ones empty: the release files under `migrations/<dialect>`
-alter optional tables too, and `Store.ValidateSchema`, the deploy gate,
-checks every table. A table checked always must exist even while it stays
-empty; its row says what reaches it.
+`Store.ValidateSchema`, the deploy gate, checks every table, and the release
+files under `migrations/<dialect>` alter optional tables too. A table checked
+always must exist even while it stays empty; its row says what reaches it.
 `WithTablePrefix` replaces the `oidc_` prefix of every name and `WithNaming`
-renames one table through its key; the columns are fixed. Your own
-users table needs no new column when it already has an opaque identifier that
-is assigned once and never reused: the OP only needs that subject from it,
-through a `store.UserStore`. A table keyed only by an auto-increment id or an
-email address adds one such column.
+renames one table through its key; the columns are fixed. Your users table
+needs no new column when it already has an opaque identifier that is assigned
+once and never reused: the OP only needs that subject from it. A table keyed
+only by an auto-increment id or an email address adds one such column.
+
+## Which tables a configuration reads
 
 The default configuration (the `authorization_code` and `refresh_token`
 grants, password login against your own user store, every other option at its

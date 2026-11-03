@@ -1,18 +1,16 @@
 # SQL adapter schema migrations
 
-The SQL lives in `schema/migrations/{sqlite,mysql,postgres}/`, one file per
-release in golang-migrate's `NNNNNN_<version>.up.sql` form.
+Production applies `Store.Migrations()` with a migration tool; that is the
+only upgrade path. The SQL lives in `schema/migrations/{sqlite,mysql,postgres}/`,
+one file per release in golang-migrate's `NNNNNN_<version>.up.sql` form.
 `000001_v1.0.0.up.sql` creates the schema v1.0.0 shipped; each later file
 applies one release's changes. `Store.Migrations()` returns the configured
 dialect's files with the `WithTablePrefix` and `WithNaming` table names applied,
 so a migration tool can read them directly; take the files from it rather than
-from the repository when the names differ from the defaults. `TABLES.md` lists what each table
-holds and when the OP uses it.
+from the repository when the names differ from the defaults. `TABLES.md` lists
+what each table holds and when the OP uses it.
 
-- **A new database** applies every file in order, or runs `Store.Schema()`
-  (`schema/<dialect>/v1.sql`) instead; both reach the same schema. `v1.sql` is
-  the complete current schema for a fresh database: the `v1` names the schema
-  generation, not release v1.0.0.
+- **A new database** applies every file in order.
 - **An existing database** is first recorded at the last release it applied,
   then takes only the later files. With golang-migrate that is
   `migrate force <N>`: a database created by v1.2.0 runs `migrate force 3`,
@@ -20,6 +18,18 @@ holds and when the OP uses it.
   version table (see [Coexisting with your application's
   migrations](#coexisting-with-your-applications-migrations)), never the
   application's.
+- golang-migrate's MySQL driver needs `multiStatements=true` in the DSN,
+  because each file holds several statements.
+- Atlas reads the directory with `format=golang-migrate` once
+  `atlas migrate hash` has written its `atlas.sum`.
+
+## Development shortcuts
+
+For a local or throwaway database, `Store.Schema()` (`schema/<dialect>/v1.sql`)
+and `Store.Migrate` create the schema without a migration tool. `v1.sql` is the
+complete current schema for a fresh database: the `v1` names the schema
+generation, not release v1.0.0.
+
 - **A database created from `v1.sql`**, `Store.Schema()` or `Store.Migrate`
   and later handed to a migration tool is not recorded at any version. Record
   it at the newest migration first (`migrate force N`, N being the number of
@@ -27,19 +37,16 @@ holds and when the OP uses it.
   every file against tables that already exist. A deployment that will use a
   migration tool from the start should create the database from
   `Store.Migrations()` instead of `v1.sql`.
-- golang-migrate's MySQL driver needs `multiStatements=true` in the DSN,
-  because each file holds several statements.
-- Atlas reads the directory with `format=golang-migrate` once
-  `atlas migrate hash` has written its `atlas.sum`.
+- `Store.Migrate` does not upgrade an existing database. Its `CREATE TABLE IF
+  NOT EXISTS` statements leave an existing table as it is, so no column is ever
+  added that way. On SQLite and PostgreSQL the index statements are the same
+  standalone `CREATE INDEX IF NOT EXISTS` statements `v1.sql` carries, so a
+  `Store.Migrate` run does add a missing index. **On MySQL the migration files
+  are the only way to get the indexes.** MySQL has no `CREATE INDEX IF NOT
+  EXISTS`, so `v1.sql` declares every index inline in its `CREATE TABLE`, which
+  does nothing to a table that already exists.
 
-`Store.Migrate` does not upgrade an existing database. Its `CREATE TABLE IF
-NOT EXISTS` statements leave an existing table as it is, so no column is ever
-added that way. On SQLite and PostgreSQL the index statements are the same
-standalone `CREATE INDEX IF NOT EXISTS` statements `v1.sql` carries, so a
-`Store.Migrate` run does add a missing index. **On MySQL the migration files
-are the only way to get the indexes.** MySQL has no `CREATE INDEX IF NOT
-EXISTS`, so `v1.sql` declares every index inline in its `CREATE TABLE`, which
-does nothing to a table that already exists.
+## Checks after applying
 
 After applying, `op.New` checks at construction the tables the configuration
 uses and fails naming any that is missing. `Store.ValidateSchema` checks every
@@ -222,6 +229,13 @@ Signals Framework transmitter's streams and its queue of Security Event Tokens.
 until Shared Signals is enabled. Being new,
 they are created by a `Store.Migrate` run as well, indexes included on every
 dialect; the file repeats the statements for deployments that never run it.
+
+`idx_oidc_sessions_subject` on `oidc_sessions(subject)` serves the delete of
+every session of one subject, which `Provider.ForgetSubject` issues; without it
+the `DELETE` scans the table. On MySQL the file's `ALTER TABLE ... ADD INDEX`
+is the only way to add it to an existing table, because `Store.Migrate` leaves
+an existing table as it is. SQLite and PostgreSQL get it from `Store.Migrate`
+as well.
 
 ## Deployment order and writer compatibility
 
