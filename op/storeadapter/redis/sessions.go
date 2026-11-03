@@ -20,7 +20,8 @@ import (
 // per-group SET that mirrors the parent record's lifecycle: Save
 // adds the session ID to the set, Delete removes it, and
 // ListByChooserGroup performs lazy cleanup of stale IDs whose parent
-// record has been evicted by Redis TTL.
+// record has been evicted by Redis TTL. A per-subject SET maintained the
+// same way backs [sessionStore.DeleteBySubject].
 //
 // SessionStore lives outside the transactional cluster: the OP does
 // not coordinate Session writes with token-endpoint
@@ -48,6 +49,13 @@ type sessionStore struct {
 // snapshot that is no longer current is refused rather than written, and
 // the caller retries against what is there now.
 //
+// KEYS[1] is the record, KEYS[2] the subject SET (always present), and
+// KEYS[3] the chooser-group SET (present only when the record has a
+// group). ARGV[1] is the new payload, ARGV[2] the TTL in milliseconds,
+// ARGV[3] the session id, ARGV[4] the stored bytes the caller read.
+// Re-adding to the subject SET indexes sessions written before that SET
+// existed on their next Touch.
+//
 // Returns 0 when the key is gone, 2 when the record changed under the
 // caller, and 1 when the refresh applied.
 const touchSessionLua = `
@@ -59,13 +67,16 @@ if current ~= ARGV[4] then
 	return 2
 end
 redis.call("SET", KEYS[1], ARGV[1], "PX", ARGV[2], "XX")
-if #KEYS == 2 then
-	redis.call("SADD", KEYS[2], ARGV[3])
-	local group_ttl = redis.call("PTTL", KEYS[2])
-	local requested_ttl = tonumber(ARGV[2])
-	if group_ttl < requested_ttl then
-		redis.call("PEXPIRE", KEYS[2], requested_ttl)
+local requested_ttl = tonumber(ARGV[2])
+local function index(key)
+	redis.call("SADD", key, ARGV[3])
+	if redis.call("PTTL", key) < requested_ttl then
+		redis.call("PEXPIRE", key, requested_ttl)
 	end
+end
+index(KEYS[2])
+if #KEYS == 3 then
+	index(KEYS[3])
 end
 return 1
 `
@@ -107,6 +118,30 @@ func (s *sessionStore) sessionKey(id string) string {
 
 func (s *sessionStore) chooserGroupKey(groupID string) string {
 	return s.parent.prefix + "session:cg:" + groupID
+}
+
+// subjectKey names the per-subject SET that [sessionStore.DeleteBySubject]
+// enumerates. Like the chooser-group SET it only proposes candidates; the
+// record's own Subject decides what is deleted.
+func (s *sessionStore) subjectKey(subject string) string {
+	return s.parent.prefix + "session:sub:" + subject
+}
+
+// staleIndexKeys returns the chooser-group and subject SETs that list
+// sess.ID under the record it replaces but not under sess.
+func (s *sessionStore) staleIndexKeys(ctx context.Context, sess *store.Session) []string {
+	existing, err := s.fetch(ctx, sess.ID)
+	if err != nil || existing == nil {
+		return nil
+	}
+	var keys []string
+	if existing.ChooserGroupID != "" && existing.ChooserGroupID != sess.ChooserGroupID {
+		keys = append(keys, s.chooserGroupKey(existing.ChooserGroupID))
+	}
+	if existing.Subject != sess.Subject {
+		keys = append(keys, s.subjectKey(existing.Subject))
+	}
+	return keys
 }
 
 // Save persists a new session or replaces an existing one. The store
@@ -154,21 +189,20 @@ func (s *sessionStore) Save(ctx context.Context, sess *store.Session) error {
 	}
 
 	// Upsert path: if the record already exists with a different
-	// chooser group, the stale secondary-index entry is evicted in the
-	// transaction below rather than by a bare command whose failure
-	// nobody observes.
-	var previousGroupKey string
-	if existing, err := s.fetch(ctx, sess.ID); err == nil &&
-		existing != nil && existing.ChooserGroupID != "" &&
-		existing.ChooserGroupID != sess.ChooserGroupID {
-		previousGroupKey = s.chooserGroupKey(existing.ChooserGroupID)
-	}
-
+	// chooser group or subject, the stale secondary-index entries are
+	// evicted in the transaction below rather than by a bare command
+	// whose failure nobody observes.
 	pipe := s.parent.client.TxPipeline()
-	if previousGroupKey != "" {
-		pipe.SRem(ctx, previousGroupKey, sess.ID)
+	for _, key := range s.staleIndexKeys(ctx, sess) {
+		pipe.SRem(ctx, key, sess.ID)
 	}
 	pipe.Set(ctx, s.sessionKey(sess.ID), payload, ttl)
+	// The subject SET gets the same bounded lifetime as the chooser-group
+	// SET below, for the same eviction-priority reason.
+	subjectKey := s.subjectKey(sess.Subject)
+	pipe.SAdd(ctx, subjectKey, sess.ID)
+	pipe.ExpireNX(ctx, subjectKey, ttl)
+	pipe.ExpireGT(ctx, subjectKey, ttl)
 	if sess.ChooserGroupID != "" {
 		groupKey := s.chooserGroupKey(sess.ChooserGroupID)
 		pipe.SAdd(ctx, groupKey, sess.ID)
@@ -273,7 +307,8 @@ func (s *sessionStore) touchOnce(ctx context.Context, id string, expiresAt, upda
 		// real Delete to keep the chooser-group index honest.
 		return s.Delete(ctx, id)
 	}
-	keys := []string{s.sessionKey(id)}
+	// Layout fixed by touchSessionLua: record, subject SET, optional group SET.
+	keys := []string{s.sessionKey(id), s.subjectKey(rec.Subject)}
 	if rec.ChooserGroupID != "" {
 		keys = append(keys, s.chooserGroupKey(rec.ChooserGroupID))
 	}
@@ -321,6 +356,7 @@ func (s *sessionStore) Delete(ctx context.Context, id string) error {
 
 	pipe := s.parent.client.TxPipeline()
 	delCmd := pipe.Del(ctx, s.sessionKey(id))
+	pipe.SRem(ctx, s.subjectKey(rec.Subject), id)
 	if rec.ChooserGroupID != "" {
 		pipe.SRem(ctx, s.chooserGroupKey(rec.ChooserGroupID), id)
 	}
@@ -329,6 +365,58 @@ func (s *sessionStore) Delete(ctx context.Context, id string) error {
 	}
 	if delCmd.Val() == 0 || expired {
 		return store.ErrNotFound
+	}
+	return nil
+}
+
+// DeleteBySubject removes every session whose record names subject,
+// expired or not, together with its chooser-group index entry. The
+// subject SET only proposes candidates: an id whose record is gone, is
+// unreadable, or now names another subject is dropped from the SET
+// without touching any record, so a sibling sharing a chooser group stays.
+//
+// Only the ids read here are removed from the SET rather than deleting
+// the key, so a session Saved concurrently stays indexed. A Touch racing
+// the delete cannot resurrect a record: its script refuses a missing key.
+// Sessions written before the SET existed and never Touched since are not
+// found; they expire through their own TTL.
+func (s *sessionStore) DeleteBySubject(ctx context.Context, subject string) error {
+	if subject == "" {
+		return errors.New("oidcredis: empty subject")
+	}
+	subjectKey := s.subjectKey(subject)
+	ids, err := s.parent.client.SMembers(ctx, subjectKey).Result()
+	if err != nil {
+		return fmt.Errorf("oidcredis: SMEMBERS subject sessions: %w", err)
+	}
+	if len(ids) == 0 {
+		return nil
+	}
+	keys := make([]string, len(ids))
+	for i, id := range ids {
+		keys[i] = s.sessionKey(id)
+	}
+	rawValues, err := s.parent.client.MGet(ctx, keys...).Result()
+	if err != nil {
+		return fmt.Errorf("oidcredis: MGET sessions: %w", err)
+	}
+
+	pipe := s.parent.client.TxPipeline()
+	members := make([]any, len(ids))
+	for i, raw := range rawValues {
+		members[i] = ids[i]
+		rec, ok := decodeSessionRaw(raw)
+		if !ok || rec.Subject != subject {
+			continue
+		}
+		pipe.Del(ctx, keys[i])
+		if rec.ChooserGroupID != "" {
+			pipe.SRem(ctx, s.chooserGroupKey(rec.ChooserGroupID), ids[i])
+		}
+	}
+	pipe.SRem(ctx, subjectKey, members...)
+	if _, err := pipe.Exec(ctx); err != nil {
+		return fmt.Errorf("oidcredis: DEL subject sessions: %w", err)
 	}
 	return nil
 }
@@ -476,4 +564,7 @@ func decode(rec *sessionRecord) *store.Session {
 	}
 }
 
-var _ store.SessionStore = (*sessionStore)(nil)
+var (
+	_ store.SessionStore          = (*sessionStore)(nil)
+	_ store.SessionSubjectDeleter = (*sessionStore)(nil)
+)
