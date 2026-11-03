@@ -242,6 +242,7 @@ func WithInteractions(i ...Interaction) Option {
 			}
 		}
 		c.interactions = append(c.interactions, i...)
+		c.recordBrowserSurface("WithInteractions")
 		return nil
 	})
 }
@@ -439,6 +440,7 @@ func WithLoginFlow(flow LoginFlow) Option {
 		}
 		c.loginFlow = flow
 		c.loginFlowSet = true
+		c.recordBrowserSurface("WithLoginFlow")
 		return nil
 	})
 }
@@ -513,6 +515,7 @@ func WithSPAUI(ui SPAUI) Option {
 		c.spaUI = ui
 		c.spaUI.ContentSecurityPolicy = policy
 		c.spaUISet = true
+		c.recordBrowserSurface("WithSPAUI")
 		// In SPA mode the SPA owns the chooser surface via the JSON state
 		// envelope, so a chooser template configured alongside it is
 		// silently ignored. Stash the intent here so applyDefaults can emit
@@ -605,6 +608,7 @@ func WithConsentUI(ui ConsentUI) Option {
 		c.consentUI = ui
 		c.consentUI.ContentSecurityPolicy = policy
 		c.consentUISet = true
+		c.recordBrowserSurface("WithConsentUI")
 		return nil
 	})
 }
@@ -637,6 +641,7 @@ func WithChooserUI(ui ChooserUI) Option {
 		c.chooserUI = ui
 		c.chooserUI.ContentSecurityPolicy = policy
 		c.chooserUISet = true
+		c.recordBrowserSurface("WithChooserUI")
 		// In SPA mode the SPA owns the chooser surface via the JSON state
 		// envelope when [WithSPAUI] is also active. Stash the intent for
 		// applyDefaults regardless of which option was called first.

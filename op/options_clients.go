@@ -221,6 +221,7 @@ func WithFirstPartyClients(ids ...string) Option {
 			seen[id] = struct{}{}
 		}
 		c.firstPartyClients = append(c.firstPartyClients, ids...)
+		c.recordBrowserSurface("WithFirstPartyClients")
 		return nil
 	})
 }

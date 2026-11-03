@@ -3,6 +3,7 @@ package op
 import (
 	"net"
 	"net/url"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -34,6 +35,7 @@ func (c *config) validate() error {
 		c.validateFeatureActivation,
 		c.validateRegistration,
 		c.validateLoginFlowRequired,
+		c.validateAuthorizationCodeGrantRequired,
 		c.validateInteractions,
 		c.validateLocales,
 		c.validateFirstPartyClients,
@@ -408,6 +410,44 @@ func (c *config) validateLoginFlowRequired() error {
 		return ErrLoginFlowRequired
 	}
 	return nil
+}
+
+// recordBrowserSurface notes that a browser sign-in option was set outside
+// [WithDefaults]; repeats are dropped.
+func (c *config) recordBrowserSurface(name string) {
+	if c.applyingDefaults || slices.Contains(c.browserSurfaceExplicit, name) {
+		return
+	}
+	c.browserSurfaceExplicit = append(c.browserSurfaceExplicit, name)
+}
+
+// validateAuthorizationCodeGrantRequired refuses an explicit browser
+// sign-in option combined with a grant set that has no /authorize
+// endpoint. [WithGrants] replaces the defaults, so the option would
+// otherwise be dropped without a trace. A login flow that is the claim
+// source for a grant resolving end users (device code, CIBA) is
+// legitimate without authorization_code and is not counted.
+func (c *config) validateAuthorizationCodeGrantRequired() error {
+	if grantsRequireAuthorizeEndpoint(c.grants) {
+		return nil
+	}
+	loginFlowIsClaimSource := (nilcheck.IsNil(c.userStore) || c.userStoreDefaulted()) &&
+		c.inferredUserStore() != nil &&
+		grantsResolveEndUser(c.grants)
+	var names []string
+	for _, n := range c.browserSurfaceExplicit {
+		if n == "WithLoginFlow" && loginFlowIsClaimSource {
+			continue
+		}
+		names = append(names, n)
+	}
+	if len(names) == 0 {
+		return nil
+	}
+	return newConfigurationError(
+		"WithGrants leaves out authorization_code, which these options require: "+strings.Join(names, ", "),
+		ErrAuthorizationCodeGrantRequired,
+	)
 }
 
 // validateInteractions enforces uniqueness of [Interaction.Name]

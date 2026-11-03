@@ -82,6 +82,10 @@ type config struct {
 	// are applied, after every other option.
 	applyingDefaults bool
 
+	// browserSurfaceExplicit lists the browser sign-in options set outside
+	// [WithDefaults]; validateAuthorizationCodeGrantRequired reads it.
+	browserSurfaceExplicit []string
+
 	// cookieKeys carries the AES-256-GCM keys used by the Cookie codec.
 	// The first entry is the active encryption key; the remainder are
 	// rotation slots tried in order on decryption only. Length 32 bytes

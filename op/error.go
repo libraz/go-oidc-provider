@@ -256,6 +256,20 @@ var ErrLoginFlowRequired = &Error{
 	Description: "the authorization_code grant is enabled but no LoginFlow is registered; supply WithLoginFlow, or drop the grant with WithGrants",
 }
 
+// ErrAuthorizationCodeGrantRequired is returned by [New] when a browser
+// sign-in option ([WithLoginFlow], [WithSPAUI], [WithConsentUI],
+// [WithChooserUI], [WithInteractions], [WithFirstPartyClients]) is set
+// explicitly but the grant set from [WithGrants] lacks authorization_code.
+// [WithGrants] replaces the default set, so the browser flow would be
+// silently unreachable. The error message names the options that matched;
+// match it with [errors.Is].
+//
+// Stable since v1.5.
+var ErrAuthorizationCodeGrantRequired = &Error{
+	Code:        codeConfiguration,
+	Description: "browser sign-in options are set but the authorization_code grant is not enabled; WithGrants replaces the default grant set, so list grant.AuthorizationCode with the other grants, or remove the browser sign-in options",
+}
+
 // ErrAuthnLockoutStoreRequired is returned by [New] when the [LoginFlow]
 // has a step that counts failures (a password or second-factor step, or an
 // [ExternalStep] with CountFailures) but no cross-factor lockout store

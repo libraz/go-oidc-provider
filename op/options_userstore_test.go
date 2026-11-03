@@ -145,7 +145,9 @@ func noUserStoreOpts(tb testing.TB, extra ...op.Option) []op.Option {
 		op.WithStore(inmem.New()),
 		op.WithKeyset(validKeyset(tb)),
 		op.WithCookieKeys(newRandomCookieKey(tb)),
-		fixtureAuthenticator(),
+		// A default, so a grant set without authorization_code does not
+		// trip the unused-browser-option check before the user-store one.
+		op.WithDefaults(fixtureAuthenticator()),
 	}, extra...)
 }
 
