@@ -1070,6 +1070,19 @@ func (s *authnLockoutStore) CompareAndSwap(
 	return true, nil
 }
 
+// Delete implements [store.AuthnLockoutDeleter]. Lockout records carry
+// no TTL, so presence is the answer, as for the other factor substores.
+func (s *authnLockoutStore) Delete(ctx context.Context, subject string) error {
+	existed, err := s.parent.deleteKey(ctx, s.parent.names.authnLockouts, subject)
+	if err != nil {
+		return wrapErr("authnLockouts.Delete", err)
+	}
+	if !existed {
+		return store.ErrNotFound
+	}
+	return nil
+}
+
 // putIfDocMatches writes entry only when the stored document still equals
 // expected. Passkey assertions retain whole-document CAS because their
 // record has not adopted the MFA generation token.
@@ -1106,4 +1119,6 @@ var (
 	_ store.RecoveryStore     = (*recoveryStore)(nil)
 	_ store.PasskeyStore      = (*passkeyStore)(nil)
 	_ store.AuthnLockoutStore = (*authnLockoutStore)(nil)
+
+	_ store.AuthnLockoutDeleter = (*authnLockoutStore)(nil)
 )

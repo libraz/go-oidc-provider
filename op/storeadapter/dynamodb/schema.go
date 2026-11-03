@@ -237,9 +237,10 @@ func (s *Store) TableDefinitions() []TableDefinition {
 		{
 			Name:                 n.sessions,
 			KeySchema:            keySchema(attrPK),
-			AttributeDefinitions: stringAttr(attrPK, attrChooserGroup),
+			AttributeDefinitions: stringAttr(attrPK, attrChooserGroup, attrSubject),
 			GlobalSecondaryIndexes: []types.GlobalSecondaryIndex{
 				gsi(indexByChooserGroup, attrChooserGroup),
+				gsi(indexBySubject, attrSubject),
 			},
 			TTLAttribute: attrTTL,
 		},

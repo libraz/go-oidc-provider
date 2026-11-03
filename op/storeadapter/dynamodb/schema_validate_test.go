@@ -91,13 +91,13 @@ func TestValidateSchema_ReportsIndexAndKeyDrift(t *testing.T) {
 	const prefix = "valdrift_"
 	s := provisioned(t, client, prefix, "sessions", "par_records")
 
-	// sessions without its by_chooser_group index.
+	// sessions without its by_chooser_group and by_subject indexes.
 	createTable(t, client, prefix+"sessions", types.ScalarAttributeTypeS)
 	// par_records keyed on a number instead of a string.
 	createTable(t, client, prefix+"par_records", types.ScalarAttributeTypeN)
 
 	wantSchemaError(t, validatorOf(t, s.Sessions()).ValidateSchema(ctx),
-		"valdrift_sessions is missing secondary indexes: by_chooser_group")
+		"valdrift_sessions is missing secondary indexes: by_chooser_group, by_subject")
 	wantSchemaError(t, validatorOf(t, s.PushedAuthRequests()).ValidateSchema(ctx),
 		"valdrift_par_records has key schema (pk:N:HASH), want (pk:S:HASH)", "recreate the table")
 }

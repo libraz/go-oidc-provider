@@ -30,6 +30,7 @@ func (s *sessionStore) Save(ctx context.Context, sess *store.Session) error {
 	}
 	entry.expires(sess.ExpiresAt)
 	entry.set(attrChooserGroup, sess.ChooserGroupID)
+	entry.set(attrSubject, sess.Subject)
 	if err := s.parent.overwrite(ctx, s.parent.names.sessions, entry); err != nil {
 		return wrapErr("sessions.Save", err)
 	}
@@ -93,6 +94,8 @@ func (s *sessionStore) touchOnce(ctx context.Context, id string, expiresAt, upda
 	}
 	entry.expires(expiresAt)
 	entry.set(attrChooserGroup, current.ChooserGroupID)
+	// Also how a session saved before the attribute existed enters by_subject.
+	entry.set(attrSubject, current.Subject)
 
 	_, err = s.parent.api.PutItem(ctx, &dynamodb.PutItemInput{
 		TableName: aws.String(s.parent.names.sessions),
@@ -133,6 +136,42 @@ func (s *sessionStore) Delete(ctx context.Context, id string) error {
 	}
 	if !live {
 		return store.ErrNotFound
+	}
+	return nil
+}
+
+// DeleteBySubject implements [store.SessionSubjectDeleter]. It
+// enumerates through by_subject alone and ignores liveness, so an expired
+// item still awaiting TTL reclamation goes too. Each delete is
+// conditioned on the stored subject, because the index read is eventually
+// consistent and a stale hit must not remove another subject's session. A
+// session saved before the subject attribute existed and never touched
+// since is not indexed and stays until its TTL removes it.
+func (s *sessionStore) DeleteBySubject(ctx context.Context, subject string) error {
+	if subject == "" {
+		return errors.New("oidcdynamo: empty session subject")
+	}
+	matches, err := s.parent.queryIndex(
+		ctx, s.parent.names.sessions, indexBySubject, attrSubject, subject,
+	)
+	if err != nil {
+		return wrapErr("sessions.DeleteBySubject", err)
+	}
+	for _, match := range matches {
+		id := readS(match, attrPK)
+		if id == "" {
+			continue
+		}
+		_, err := s.parent.api.DeleteItem(ctx, &dynamodb.DeleteItemInput{
+			TableName:                 aws.String(s.parent.names.sessions),
+			Key:                       key(id),
+			ConditionExpression:       aws.String("#subject = :subject"),
+			ExpressionAttributeNames:  map[string]string{"#subject": attrSubject},
+			ExpressionAttributeValues: map[string]types.AttributeValue{":subject": avS(subject)},
+		})
+		if err != nil && !isConditionalCheckFailed(err) {
+			return wrapErr("sessions.DeleteBySubject", err)
+		}
 	}
 	return nil
 }
@@ -180,4 +219,7 @@ func decodeSession(found item) (*store.Session, error) {
 	return &sess, nil
 }
 
-var _ store.SessionStore = (*sessionStore)(nil)
+var (
+	_ store.SessionStore          = (*sessionStore)(nil)
+	_ store.SessionSubjectDeleter = (*sessionStore)(nil)
+)
