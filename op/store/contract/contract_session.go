@@ -35,6 +35,13 @@ var sessionCases = []subtest{
 	{"ListByChooserGroupSkipsExpired", sessionListByChooserGroupSkipsExpired},
 	{"ListByChooserGroupFollowsTheRecord", sessionListByChooserGroupFollowsTheRecord},
 	{"ConcurrentRotate", sessionConcurrentRotate},
+	{"DeleteBySubjectRemovesEverySession", sessionDeleteBySubjectRemovesAll},
+	{"DeleteBySubjectKeepsOtherSubjects", sessionDeleteBySubjectKeepsOthers},
+	{"DeleteBySubjectRemovesExpired", sessionDeleteBySubjectRemovesExpired},
+	{"DeleteBySubjectWithoutSessions", sessionDeleteBySubjectNone},
+	{"DeleteBySubjectRepeats", sessionDeleteBySubjectRepeats},
+	{"DeleteBySubjectRejectsEmpty", sessionDeleteBySubjectRejectsEmpty},
+	{"DeleteBySubjectAfterTouch", sessionDeleteBySubjectAfterTouch},
 }
 
 // sessionConcurrentRotate is a thin adapter that funnels the harness's
@@ -482,6 +489,167 @@ func sessionListByChooserGroupFollowsTheRecord(t *testing.T, f Factory) {
 	if len(joined) != 1 || joined[0].ID != s.ID {
 		t.Fatalf("ListByChooserGroup(new group) = %+v, want exactly %q", joined, s.ID)
 	}
+}
+
+// requireSessionSubjectDeleter returns the session substore as a
+// [store.SessionSubjectDeleter], skipping the test when the backend does not
+// implement the extension.
+func requireSessionSubjectDeleter(t *testing.T, s store.Store) store.SessionSubjectDeleter {
+	t.Helper()
+	return requireCapability[store.SessionSubjectDeleter](t, s.Sessions())
+}
+
+// saveSubjectSession stores a live session for subject in groupID.
+func saveSubjectSession(t *testing.T, sessions store.SessionStore, now time.Time, id, subject, groupID string) *store.Session {
+	t.Helper()
+	s := newSession(now, id)
+	s.Subject = subject
+	s.ChooserGroupID = groupID
+	if err := sessions.Save(context.Background(), s); err != nil {
+		t.Fatalf("Save %s: %v", id, err)
+	}
+	return s
+}
+
+// assertSessionGone asserts that Find no longer resolves id and that its
+// chooser group no longer lists it.
+func assertSessionGone(t *testing.T, sessions store.SessionStore, id, groupID string) {
+	t.Helper()
+	if _, err := sessions.Find(context.Background(), id); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("Find %s after DeleteBySubject: want ErrNotFound, got %v", id, err)
+	}
+	assertChooserGroupOmits(t, sessions, groupID, id)
+}
+
+// sessionDeleteBySubjectRemovesAll pins that every session of the subject
+// goes, across chooser groups, and leaves neither a record nor a listing.
+func sessionDeleteBySubjectRemovesAll(t *testing.T, f Factory) {
+	b := f(t)
+	deleter := requireSessionSubjectDeleter(t, b.Store)
+	ctx := context.Background()
+	saveSubjectSession(t, deleter, b.Now(), "s-dbs-1", "dbs-user", "cg-dbs-1")
+	saveSubjectSession(t, deleter, b.Now(), "s-dbs-2", "dbs-user", "cg-dbs-1")
+	saveSubjectSession(t, deleter, b.Now(), "s-dbs-3", "dbs-user", "cg-dbs-2")
+
+	if err := deleter.DeleteBySubject(ctx, "dbs-user"); err != nil {
+		t.Fatalf("DeleteBySubject: %v", err)
+	}
+	assertSessionGone(t, deleter, "s-dbs-1", "cg-dbs-1")
+	assertSessionGone(t, deleter, "s-dbs-2", "cg-dbs-1")
+	assertSessionGone(t, deleter, "s-dbs-3", "cg-dbs-2")
+}
+
+// sessionDeleteBySubjectKeepsOthers pins that a subject sharing a chooser
+// group with the erased one keeps its session: the group is a browser, and
+// signing the other account out would be a different operation.
+func sessionDeleteBySubjectKeepsOthers(t *testing.T, f Factory) {
+	b := f(t)
+	deleter := requireSessionSubjectDeleter(t, b.Store)
+	ctx := context.Background()
+	saveSubjectSession(t, deleter, b.Now(), "s-dbs-gone", "dbs-gone", "cg-dbs-shared")
+	saveSubjectSession(t, deleter, b.Now(), "s-dbs-kept", "dbs-kept", "cg-dbs-shared")
+
+	if err := deleter.DeleteBySubject(ctx, "dbs-gone"); err != nil {
+		t.Fatalf("DeleteBySubject: %v", err)
+	}
+	assertSessionGone(t, deleter, "s-dbs-gone", "cg-dbs-shared")
+	if _, err := deleter.Find(ctx, "s-dbs-kept"); err != nil {
+		t.Fatalf("Find the other subject's session: %v — DeleteBySubject reached a session of another subject", err)
+	}
+	assertChooserGroupHolds(t, deleter, "cg-dbs-shared", "s-dbs-kept")
+}
+
+// sessionDeleteBySubjectRemovesExpired pins that an expired record goes too.
+// Find and ListByChooserGroup never return one, so the case asserts what is
+// observable: the call succeeds, the live sibling goes, and nothing of the
+// subject resolves or is listed afterwards. A past-dated Save and, where the
+// backend has [Backend.Advance], a record expired in place are both driven.
+func sessionDeleteBySubjectRemovesExpired(t *testing.T, f Factory) {
+	b := f(t)
+	deleter := requireSessionSubjectDeleter(t, b.Store)
+	ctx := context.Background()
+
+	saveSubjectSession(t, deleter, b.Now(), "s-dbs-live", "dbs-expiry", "cg-dbs-expiry")
+	pastDated := newSession(b.Now(), "s-dbs-past-dated")
+	pastDated.Subject = "dbs-expiry"
+	pastDated.ChooserGroupID = "cg-dbs-expiry"
+	pastDated.ExpiresAt = b.Now().Add(-time.Hour)
+	if err := deleter.Save(ctx, pastDated); err != nil {
+		t.Fatalf("Save past-dated: %v", err)
+	}
+	ids := []string{"s-dbs-live", "s-dbs-past-dated"}
+	if b.Advance != nil {
+		const ttl = time.Minute
+		resident := newSession(b.Now(), "s-dbs-expired-in-place")
+		resident.Subject = "dbs-expiry"
+		resident.ChooserGroupID = "cg-dbs-expiry"
+		resident.ExpiresAt = b.Now().Add(ttl)
+		if err := deleter.Save(ctx, resident); err != nil {
+			t.Fatalf("Save: %v", err)
+		}
+		// Overshoot the expiry: backends differ on the boundary instant.
+		b.Advance(2 * ttl)
+		ids = append(ids, resident.ID)
+	}
+
+	if err := deleter.DeleteBySubject(ctx, "dbs-expiry"); err != nil {
+		t.Fatalf("DeleteBySubject: %v", err)
+	}
+	for _, id := range ids {
+		assertSessionGone(t, deleter, id, "cg-dbs-expiry")
+	}
+}
+
+// sessionDeleteBySubjectNone pins that a subject with no session is not an
+// error: the bulk operation reports nil for zero matches.
+func sessionDeleteBySubjectNone(t *testing.T, f Factory) {
+	b := f(t)
+	deleter := requireSessionSubjectDeleter(t, b.Store)
+	if err := deleter.DeleteBySubject(context.Background(), "dbs-nobody"); err != nil {
+		t.Fatalf("DeleteBySubject for a subject without sessions: want nil, got %v", err)
+	}
+}
+
+// sessionDeleteBySubjectRepeats pins idempotence, which is what makes a
+// partially failed erasure retryable.
+func sessionDeleteBySubjectRepeats(t *testing.T, f Factory) {
+	b := f(t)
+	deleter := requireSessionSubjectDeleter(t, b.Store)
+	ctx := context.Background()
+	saveSubjectSession(t, deleter, b.Now(), "s-dbs-repeat", "dbs-repeat", "cg-dbs-repeat")
+	for attempt := 1; attempt <= 2; attempt++ {
+		if err := deleter.DeleteBySubject(ctx, "dbs-repeat"); err != nil {
+			t.Fatalf("DeleteBySubject attempt %d: want nil, got %v", attempt, err)
+		}
+	}
+	assertSessionGone(t, deleter, "s-dbs-repeat", "cg-dbs-repeat")
+}
+
+// sessionDeleteBySubjectRejectsEmpty pins that an empty subject is refused
+// rather than matched against records with no subject.
+func sessionDeleteBySubjectRejectsEmpty(t *testing.T, f Factory) {
+	b := f(t)
+	deleter := requireSessionSubjectDeleter(t, b.Store)
+	if err := deleter.DeleteBySubject(context.Background(), ""); err == nil {
+		t.Fatal("DeleteBySubject with an empty subject: want an error, got nil")
+	}
+}
+
+// sessionDeleteBySubjectAfterTouch pins that a session whose idle timer was
+// extended is still found by subject: a backend keeping a per-subject index
+// with its own TTL has to carry that TTL forward on Touch.
+func sessionDeleteBySubjectAfterTouch(t *testing.T, f Factory) {
+	b := f(t)
+	deleter := requireSessionSubjectDeleter(t, b.Store)
+	ctx := context.Background()
+	saveSubjectSession(t, deleter, b.Now(), "s-dbs-touched", "dbs-touched", "cg-dbs-touched")
+	if err := deleter.Touch(ctx, "s-dbs-touched", b.Now().Add(3*time.Hour), b.Now().Add(time.Minute)); err != nil {
+		t.Fatalf("Touch: %v", err)
+	}
+	if err := deleter.DeleteBySubject(ctx, "dbs-touched"); err != nil {
+		t.Fatalf("DeleteBySubject: %v", err)
+	}
+	assertSessionGone(t, deleter, "s-dbs-touched", "cg-dbs-touched")
 }
 
 // --- PushedAuthRequestStore --------------------------------------------------

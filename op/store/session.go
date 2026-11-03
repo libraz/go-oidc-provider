@@ -190,3 +190,19 @@ type SessionStore interface {
 	// records whose ExpiresAt has passed, mirroring [SessionStore.Find].
 	ListByChooserGroup(ctx context.Context, groupID string) ([]*Session, error)
 }
+
+// SessionSubjectDeleter is the optional extension of [SessionStore] that
+// op.Provider.ForgetSubject requires; it verifies the extension before its
+// first write. Every bundled adapter implements it.
+//
+// Stable since v1.5.
+type SessionSubjectDeleter interface {
+	SessionStore
+
+	// DeleteBySubject removes every session record whose Subject is subject,
+	// expired or not, and drops each from its chooser-group listing. Sessions
+	// of other subjects, including those sharing a chooser group, MUST stay.
+	// It returns nil when the subject holds no session, so a repeated call
+	// succeeds. An empty subject is an error.
+	DeleteBySubject(ctx context.Context, subject string) error
+}

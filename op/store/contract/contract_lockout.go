@@ -24,6 +24,9 @@ var authnLockoutCases = []factorCase[AuthnLockoutFactory]{
 	{"DefensiveCopies", authnLockoutDefensiveCopies},
 	{"ConcurrentSameVersionHasOneWinner", authnLockoutConcurrentCAS},
 	{"RejectsMalformedInput", authnLockoutRejectsMalformed},
+	{"DeleteRemovesTheRecord", authnLockoutDeleteRemoves},
+	{"DeleteMissingIsNotFound", authnLockoutDeleteMissing},
+	{"DeleteKeepsOtherSubjects", authnLockoutDeleteKeepsOthers},
 }
 
 // RunAuthnLockouts exercises the versioned transition guarantees of
@@ -233,6 +236,58 @@ func authnLockoutConcurrentCAS(t *testing.T, f AuthnLockoutFactory) {
 	}
 	if got.Version != 2 || (got.FailedCount != 8 && got.FailedCount != 9) {
 		t.Fatalf("final record = %+v, want Version=2 and one candidate count", got)
+	}
+}
+
+// seedLockout inserts a failure record for subject.
+func seedLockout(t *testing.T, s store.AuthnLockoutStore, subject string) {
+	t.Helper()
+	rec := lockoutContractRecord()
+	rec.Subject = subject
+	swapped, err := s.CompareAndSwap(context.Background(), 0, rec)
+	if err != nil || !swapped {
+		t.Fatalf("CompareAndSwap seed %s = (%v, %v), want (true, nil)", subject, swapped, err)
+	}
+}
+
+// authnLockoutDeleteRemoves pins that Delete leaves no record behind, so a
+// later Get reads the "no failures yet" state.
+func authnLockoutDeleteRemoves(t *testing.T, f AuthnLockoutFactory) {
+	ctx := context.Background()
+	s := requireCapability[store.AuthnLockoutDeleter](t, f(t))
+	seedLockout(t, s, "alice")
+	if err := s.Delete(ctx, "alice"); err != nil {
+		t.Fatalf("Delete: %v", err)
+	}
+	if _, err := s.Get(ctx, "alice"); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("Get after Delete error = %v, want ErrNotFound", err)
+	}
+}
+
+// authnLockoutDeleteMissing pins the single-key convention shared with the
+// factor stores: removing a record that is not there reports ErrNotFound.
+func authnLockoutDeleteMissing(t *testing.T, f AuthnLockoutFactory) {
+	s := requireCapability[store.AuthnLockoutDeleter](t, f(t))
+	if err := s.Delete(context.Background(), "nobody"); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("Delete missing error = %v, want ErrNotFound", err)
+	}
+}
+
+// authnLockoutDeleteKeepsOthers pins that Delete is keyed by subject alone.
+func authnLockoutDeleteKeepsOthers(t *testing.T, f AuthnLockoutFactory) {
+	ctx := context.Background()
+	s := requireCapability[store.AuthnLockoutDeleter](t, f(t))
+	seedLockout(t, s, "alice")
+	seedLockout(t, s, "bob")
+	if err := s.Delete(ctx, "alice"); err != nil {
+		t.Fatalf("Delete: %v", err)
+	}
+	got, err := s.Get(ctx, "bob")
+	if err != nil {
+		t.Fatalf("Get other subject after Delete: %v", err)
+	}
+	if got.FailedCount != lockoutContractRecord().FailedCount {
+		t.Fatalf("other subject's record changed: %+v", got)
 	}
 }
 

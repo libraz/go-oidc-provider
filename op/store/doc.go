@@ -30,7 +30,9 @@
 // op.New, not discovered at request time. The condition that makes an extension
 // mandatory is derived from the grant set, the feature set, and the options
 // already present; no extension gets an option of its own, so there is one
-// predicate per capability rather than two that can disagree.
+// predicate per capability rather than two that can disagree. An extension
+// required only by a Provider method, which is a call and not a configuration,
+// is verified by that method before its first write.
 //
 // # Capability requirement matrix
 //
@@ -87,6 +89,16 @@
 // implements it on some and not others reports a completed cascade while
 // leaving live records bound to the deleted client in the substores it
 // missed, and nothing at the call site can tell.
+//
+// Extensions that a Provider method requires, and what the method does
+// without them:
+//
+//	Extension              Asserted on         Required by                 Result when absent
+//	---------------------  ------------------  --------------------------  ----------------------
+//	SessionSubjectDeleter  Store.Sessions()    op.Provider.ForgetSubject   configuration_error,
+//	                                                                       nothing is changed
+//	AuthnLockoutDeleter    the lockout store   op.Provider.ForgetSubject   configuration_error,
+//	                                                                       nothing is changed
 //
 // A backend can verify its own placement decisions against
 // [github.com/libraz/go-oidc-provider/op/store/contract], which exercises the

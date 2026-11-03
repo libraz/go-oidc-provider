@@ -194,6 +194,8 @@ var singleWinnerCases = map[methodRef]string{
 	{iface: "GrantStore", method: "Save"}:                                   "Concurrency/GrantAmendKeepsEveryWriterScope",
 	{iface: "GrantRevocationStore", method: "RevokeGrant"}:                  "Concurrency/RevokeGrantKeepsTheWidestWindow",
 	{iface: "SessionStore", method: "Touch"}:                                "SessionStore/TouchLeavesEveryOtherField",
+	{iface: "SessionSubjectDeleter", method: "Touch"}:                       "SessionStore/TouchLeavesEveryOtherField",
+	{iface: "AuthnLockoutDeleter", method: "CompareAndSwap"}:                "RunAuthnLockouts/ConcurrentSameVersionHasOneWinner",
 	{iface: "ConsumedJTIStore", method: "Mark"}:                             "ConsumedJTIStore/ConcurrentMarkHasOneWinner",
 	{iface: "InteractionStoreCAS", method: "CompareAndSwap"}:                "InteractionStore/ConcurrentCompareAndSwapHasOneWinner",
 	{iface: "InteractionStoreCAS", method: "DeleteIfUnchanged"}:             "InteractionStore/ConcurrentDeleteIfUnchangedHasOneWinner",

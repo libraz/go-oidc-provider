@@ -43,6 +43,7 @@ import (
 //nolint:gochecknoglobals // registry of interface types; declared once and read-only.
 var allStoreInterfaces = []reflect.Type{
 	typeOf[store.AccessTokenRegistry](),
+	typeOf[store.AuthnLockoutDeleter](),
 	typeOf[store.AuthnLockoutProvider](),
 	typeOf[store.AuthnLockoutStore](),
 	typeOf[store.AuthorizationCodeStore](),
@@ -74,6 +75,7 @@ var allStoreInterfaces = []reflect.Type{
 	typeOf[store.SchemaValidator](),
 	typeOf[store.SessionDurabilityReporter](),
 	typeOf[store.SessionStore](),
+	typeOf[store.SessionSubjectDeleter](),
 	typeOf[store.SharedSignalsStore](),
 	typeOf[store.SSFEventStore](),
 	typeOf[store.SSFStreamStore](),

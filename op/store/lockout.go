@@ -115,3 +115,15 @@ type AuthnLockoutStore interface {
 	// and version overflow.
 	CompareAndSwap(ctx context.Context, expectedVersion uint64, next *AuthnLockoutRecord) (bool, error)
 }
+
+// AuthnLockoutDeleter is the optional extension of [AuthnLockoutStore] that
+// op.Provider.ForgetSubject requires.
+//
+// Stable since v1.5.
+type AuthnLockoutDeleter interface {
+	AuthnLockoutStore
+
+	// Delete removes the subject's failure record. It returns [ErrNotFound]
+	// when none exists, as the factor stores' Delete does.
+	Delete(ctx context.Context, subject string) error
+}
