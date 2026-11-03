@@ -19,6 +19,11 @@ few configurations it used to accept; its `Changed` section names each one.
 `v1.4.0` adds columns to the SQL adapter's tables, which must be applied
 before upgrading, and adds fields and optional interfaces to `op/store` that a
 bring-your-own store may adopt; one that does not keeps working as before.
+`v1.5.0` breaks the stable surface again, as a minor release: an OP with no
+`op.WithProfile` now requires PKCE (`profile.OIDCCore` restores the old
+shape), `store.Store` loses `Users()` so the user store is passed through the
+login flow or `op.WithUserStore`, and every deprecated symbol is removed. Its
+`Changed` and `Removed` sections list each one with its replacement.
 
 The main module and the storage-adapter sub-modules
 (`op/storeadapter/sql`, `op/storeadapter/redis`, and from `v1.0.0`
