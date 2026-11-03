@@ -32,3 +32,5 @@ CREATE TABLE IF NOT EXISTS oidc_ssf_events (
     INDEX idx_oidc_ssf_events_due (delivery_method, held, stream_id, next_attempt_at, jti),
     INDEX idx_oidc_ssf_events_expires (expires_at)
 );
+
+ALTER TABLE oidc_sessions ADD INDEX idx_oidc_sessions_subject (subject);

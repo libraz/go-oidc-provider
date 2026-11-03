@@ -19,6 +19,14 @@ type authnLockoutStore struct {
 
 func newAuthnLockoutStore(s *Store) *authnLockoutStore { return &authnLockoutStore{parent: s} }
 
+var _ store.AuthnLockoutDeleter = (*authnLockoutStore)(nil)
+
+// Delete implements [store.AuthnLockoutDeleter]; it reports
+// [store.ErrNotFound] when the subject has no counter.
+func (s *authnLockoutStore) Delete(ctx context.Context, subject string) error {
+	return execDeleteOne(ctx, s.parent.db, "authnLockouts.Delete", s.parent.queries.lockoutDelete, subject)
+}
+
 func (s *authnLockoutStore) Get(ctx context.Context, subject string) (*store.AuthnLockoutRecord, error) {
 	var (
 		rec       store.AuthnLockoutRecord

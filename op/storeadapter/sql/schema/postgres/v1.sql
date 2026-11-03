@@ -228,6 +228,7 @@ CREATE TABLE IF NOT EXISTS oidc_sessions (
 );
 CREATE INDEX IF NOT EXISTS idx_oidc_sessions_chooser ON oidc_sessions(chooser_group_id);
 CREATE INDEX IF NOT EXISTS idx_oidc_sessions_expires ON oidc_sessions(expires_at);
+CREATE INDEX IF NOT EXISTS idx_oidc_sessions_subject ON oidc_sessions(subject);
 
 -- oidc_par_records.uri stores the SHA-256 hex digest (64 ASCII
 -- chars) of the request_uri bearer secret returned to the client by

@@ -99,6 +99,18 @@ func (s *sessionStore) Delete(ctx context.Context, id string) error {
 	})
 }
 
+var _ store.SessionSubjectDeleter = (*sessionStore)(nil)
+
+// DeleteBySubject implements [store.SessionSubjectDeleter]. It removes every
+// row of the subject, expired ones included, and reports nil when none exist.
+func (s *sessionStore) DeleteBySubject(ctx context.Context, subject string) error {
+	if subject == "" {
+		return errors.New("oidcsql: sessions.DeleteBySubject: empty subject")
+	}
+	_, err := execCount(ctx, s.runner(), "sessions.DeleteBySubject", s.parent.queries.sessionDeleteBySubject, subject)
+	return err
+}
+
 func (s *sessionStore) ListByChooserGroup(ctx context.Context, groupID string) ([]*store.Session, error) {
 	rows, err := s.runner().QueryContext(ctx, s.parent.queries.sessionListByChooserGroup, groupID)
 	if err != nil {

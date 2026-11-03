@@ -56,6 +56,23 @@ func TestValidateSchema_MissingIndexFailsFullAndScopedChecks(t *testing.T) {
 	}
 }
 
+func TestValidateSchema_MissingSessionSubjectIndexFailsFullAndScopedChecks(t *testing.T) {
+	t.Parallel()
+
+	s, db := newMigratedSQLite(t)
+	execAll(t, db, "DROP INDEX idx_oidc_sessions_subject")
+	scoped, ok := s.Sessions().(store.SchemaValidator)
+	if !ok {
+		t.Fatal("Sessions is not a SchemaValidator")
+	}
+	const want = "oidcsql: oidc_sessions has no index on subject; create it from schema/sqlite/v1.sql"
+	for name, err := range map[string]error{"full": s.ValidateSchema(t.Context()), "scoped": scoped.ValidateSchema(t.Context())} {
+		if err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("%s check error = %v, want it to contain %q", name, err, want)
+		}
+	}
+}
+
 // The check compares leading columns, never index names.
 func TestValidateSchema_IndexUnderAnotherNamePasses(t *testing.T) {
 	t.Parallel()

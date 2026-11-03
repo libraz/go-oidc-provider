@@ -230,7 +230,8 @@ CREATE TABLE IF NOT EXISTS oidc_sessions (
     updated_at BIGINT NOT NULL,
     created_at BIGINT NOT NULL,
     INDEX idx_oidc_sessions_chooser (chooser_group_id),
-    INDEX idx_oidc_sessions_expires (expires_at)
+    INDEX idx_oidc_sessions_expires (expires_at),
+    INDEX idx_oidc_sessions_subject (subject)
 );
 
 -- oidc_par_records.uri stores the SHA-256 hex digest (64 ASCII

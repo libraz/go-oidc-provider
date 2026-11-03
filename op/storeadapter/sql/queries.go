@@ -98,6 +98,7 @@ type queries struct {
 	sessionFind               string
 	sessionTouch              string
 	sessionDelete             string
+	sessionDeleteBySubject    string
 	sessionListByChooserGroup string
 	sessionGC                 string
 
@@ -210,6 +211,7 @@ type queries struct {
 	lockoutGet    string
 	lockoutInsert string
 	lockoutUpdate string
+	lockoutDelete string
 
 	// shared-signals streams and SET queue
 	ssfStreamInsert         string
@@ -683,6 +685,9 @@ func buildQueries(d Dialect, n nameMap) (queries, error) {
 		sessionDelete: d.rebind(
 			"DELETE FROM " + n.sessions + " WHERE id = ?",
 		),
+		sessionDeleteBySubject: d.rebind(
+			"DELETE FROM " + n.sessions + " WHERE subject = ?",
+		),
 		sessionListByChooserGroup: d.rebind(
 			"SELECT " + sessionCols +
 				" FROM " + n.sessions + " WHERE chooser_group_id = ?",
@@ -1087,6 +1092,9 @@ func buildQueries(d Dialect, n nameMap) (queries, error) {
 			"UPDATE " + n.authnLockouts +
 				" SET failed_count = ?, record_version = ?, first_failure_at = ?, locked_until = ?" +
 				" WHERE subject = ? AND record_version = ?",
+		),
+		lockoutDelete: d.rebind(
+			"DELETE FROM " + n.authnLockouts + " WHERE subject = ?",
 		),
 	}
 	addSSFQueries(&q, d, n)
