@@ -20,7 +20,7 @@ posture and the conformance scoreboard. This README covers installation, the
 shape of the repository, and the decisions to know about before adopting the
 library.
 
-> **Status: `v1.4.0`.** The public `op` surface follows strict
+> **Status: `v1.5.0`.** The public `op` surface follows strict
 > [Semantic Versioning](https://semver.org/spec/v2.0.0.html) from the 1.0
 > release on. Symbols documented with an `Experimental:` marker are exempt.
 > Today that is Grant Management, Client ID Metadata Documents, the ID-JAG
@@ -39,16 +39,16 @@ library.
 ## Install
 
 ```sh
-go get github.com/libraz/go-oidc-provider@v1.4.0
+go get github.com/libraz/go-oidc-provider@v1.5.0
 ```
 
 Go 1.26+. Storage adapters are published as sub-modules on the same tag, so
 their drivers stay out of your `go.sum` until you opt in:
 
 ```sh
-go get github.com/libraz/go-oidc-provider/op/storeadapter/sql@v1.4.0
-go get github.com/libraz/go-oidc-provider/op/storeadapter/redis@v1.4.0
-go get github.com/libraz/go-oidc-provider/op/storeadapter/dynamodb@v1.4.0
+go get github.com/libraz/go-oidc-provider/op/storeadapter/sql@v1.5.0
+go get github.com/libraz/go-oidc-provider/op/storeadapter/redis@v1.5.0
+go get github.com/libraz/go-oidc-provider/op/storeadapter/dynamodb@v1.5.0
 ```
 
 ## Quickstart

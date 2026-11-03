@@ -12,22 +12,22 @@ Go 向けの OpenID Connect Provider（Authorization Server）ライブラリで
 
 **ドキュメント: [go-oidc-provider.libraz.net](https://go-oidc-provider.libraz.net/ja/)** — 概念・ユースケース・オプションリファレンス・運用ガイド・セキュリティ方針・適合試験スコアボードを掲載しています。本 README では、インストール手順、リポジトリの構成、採用前に把握しておくべき設計判断を扱います。
 
-> **ステータス: `v1.4.0`**。1.0 リリース以降、公開 `op` API は [Semantic Versioning](https://semver.org/spec/v2.0.0.html) に厳密に従います。godoc に `Experimental:` マーカーを持つシンボルだけが例外で、現在の対象は Grant Management、Client ID Metadata Document、ID-JAG プロファイル（Identity Assertion JWT Authorization Grant の発行と償還）、Shared Signals で配信する RISC のセキュリティイベント型です。いずれもドラフト段階の仕様に追従しており、wire 形式がまだ変わりうるためです。一覧は [`api/experimental.txt`](api/experimental.txt) に機械生成され、`make verify` が再生成して差分を検査するため、例外の範囲がレビューを経ずに広がることはありません。移行時の注意点は [`CHANGELOG.md`](CHANGELOG.md) にまとめています。
+> **ステータス: `v1.5.0`**。1.0 リリース以降、公開 `op` API は [Semantic Versioning](https://semver.org/spec/v2.0.0.html) に厳密に従います。godoc に `Experimental:` マーカーを持つシンボルだけが例外で、現在の対象は Grant Management、Client ID Metadata Document、ID-JAG プロファイル（Identity Assertion JWT Authorization Grant の発行と償還）、Shared Signals で配信する RISC のセキュリティイベント型です。いずれもドラフト段階の仕様に追従しており、wire 形式がまだ変わりうるためです。一覧は [`api/experimental.txt`](api/experimental.txt) に機械生成され、`make verify` が再生成して差分を検査するため、例外の範囲がレビューを経ずに広がることはありません。移行時の注意点は [`CHANGELOG.md`](CHANGELOG.md) にまとめています。
 >
 > 本プロジェクトは独立して開発・保守しているもので、ベンダー製品ではありません。リリースごとに OpenID Foundation の適合試験スイートで回帰検証していますが、正式な認定は受けておらず、サポートはベストエフォートです。
 
 ## インストール
 
 ```sh
-go get github.com/libraz/go-oidc-provider@v1.4.0
+go get github.com/libraz/go-oidc-provider@v1.5.0
 ```
 
 Go 1.26 以上が必要です。DB / Redis / AWS SDK のドライバを引き込むストアアダプタは、同じタグで別モジュールとして公開しています。明示的に取り込むまで、利用者の `go.sum` に余計な依存は入りません。
 
 ```sh
-go get github.com/libraz/go-oidc-provider/op/storeadapter/sql@v1.4.0
-go get github.com/libraz/go-oidc-provider/op/storeadapter/redis@v1.4.0
-go get github.com/libraz/go-oidc-provider/op/storeadapter/dynamodb@v1.4.0
+go get github.com/libraz/go-oidc-provider/op/storeadapter/sql@v1.5.0
+go get github.com/libraz/go-oidc-provider/op/storeadapter/redis@v1.5.0
+go get github.com/libraz/go-oidc-provider/op/storeadapter/dynamodb@v1.5.0
 ```
 
 ## クイックスタート
