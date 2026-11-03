@@ -41,12 +41,14 @@ package main
 
 import (
 	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
 	"log"
 	"log/slog"
 	"net/http"
 	"time"
 
-	"github.com/libraz/go-oidc-provider/examples/internal/devkeys"
 	"github.com/libraz/go-oidc-provider/examples/internal/rpkit"
 	"github.com/libraz/go-oidc-provider/examples/internal/serve"
 	"github.com/libraz/go-oidc-provider/op"
@@ -75,7 +77,15 @@ func main() {
 }
 
 func run() error {
-	keys := devkeys.MustEphemeral("minimal-1")
+	// Ephemeral keys for the demo; production loads them with op.LoadKeyset / op.LoadSymmetricKeys.
+	priv, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		return err
+	}
+	cookieKey := make([]byte, 32)
+	if _, err := rand.Read(cookieKey); err != nil {
+		return err
+	}
 
 	st := inmem.New()
 	if err := seedUser(st); err != nil {
@@ -90,8 +100,8 @@ func run() error {
 	provider, err := op.New(
 		op.WithIssuer(issuer),
 		op.WithStore(st),
-		op.WithKeyset(keys.Keyset()),
-		op.WithCookieKeys(keys.CookieKey),
+		op.WithKeyset(op.Keyset{{KeyID: "minimal-1", Signer: priv}}),
+		op.WithCookieKeys(cookieKey),
 		op.WithProfile(profile.OAuth21),
 		op.WithLoginFlow(loginFlow),
 		op.WithLogger(slog.Default()),

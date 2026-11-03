@@ -61,7 +61,9 @@
 // to authenticate. Enable the authorization_code grant without one, however,
 // and [New] refuses to construct: an OP that can start an authorization it has
 // no credential to finish is exactly the zero-value start the boot contract
-// exists to exclude. [PrimaryPassword] is the usual starting point; further
+// exists to exclude. The reverse is refused too: browser sign-in options set
+// while the authorization_code grant is off ([WithGrants] replaces the
+// defaults) make [New] return [ErrAuthorizationCodeGrantRequired]. [PrimaryPassword] is the usual starting point; further
 // factors attach as [Rule] entries.
 //
 // # Where to start
@@ -85,6 +87,9 @@
 //     reverse proxies it trusts.
 //   - [WithSPAUI] or [WithConsentUI]: your own login and consent pages in
 //     place of the built-in ones.
+//   - When a user leaves: make the user store answer [store.ErrNotFound],
+//     then call [Provider.RevokeSubject] to disable or
+//     [Provider.ForgetSubject] (which revokes too) to erase.
 //
 // End-user records come from [PrimaryPassword]'s Store or from
 // [WithUserStore]; [WithStore] holds only the OP's own records. Set
