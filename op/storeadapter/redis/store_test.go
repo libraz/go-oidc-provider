@@ -207,7 +207,6 @@ func TestStore_OutOfScopeAccessorsReturnNil(t *testing.T) {
 		{"DeviceCodes", s.DeviceCodes()},
 		{"CIBARequests", s.CIBARequests()},
 		{"PushedAuthRequests", s.PushedAuthRequests()},
-		{"Users", s.Users()},
 		{"AccessTokens", s.AccessTokens()},
 		{"InitialAccessTokens", s.InitialAccessTokens()},
 		{"RegistrationAccessTokens", s.RegistrationAccessTokens()},

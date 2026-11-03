@@ -109,7 +109,12 @@ func buildRouter(cfg *config, keySet *keys.Set, encSet *keys.EncryptionSet, scop
 	strictCORS := cors.NewStrict(originAllow, auditEmitter)
 	ceremonyCORS := cors.NewStrict(interactionOrigins, auditEmitter)
 	encResolver := buildClientEncryptionResolver(cfg)
-	claimUsers := newClaimTypeGuard(cfg.effectiveUserStore(), cfg.logger)
+	// A nil source (client_credentials-only OP) stays a nil interface so the
+	// handlers' no-directory paths apply rather than a guard over nothing.
+	var claimUsers store.UserStore
+	if users := cfg.effectiveUserStore(); !nilcheck.IsNil(users) {
+		claimUsers = newClaimTypeGuard(users, cfg.logger)
+	}
 	subjectProjector := subjectProjectorFor(cfg)
 	if err := mountDiscovery(mux, cfg, publicCORS, discHandler); err != nil {
 		return nil, err

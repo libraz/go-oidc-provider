@@ -31,11 +31,8 @@ type scratchStore struct {
 	// SQLite-backed store needs it.
 	txGate chan struct{}
 
-	// users is built once and reused by every call to Users(), unlike
-	// the other substores. op.New compares the login step's store
-	// against WithStore(...).Users() with == to warn about a
-	// misconfigured split; a fresh *userStore on every call would make
-	// that comparison fail on a store that is correctly wired to itself.
+	// users is the user projection handed to op.PrimaryPassword. It is not
+	// a store.Store substore.
 	users *userStore
 }
 
@@ -91,8 +88,6 @@ func (s *scratchStore) Interactions() store.InteractionStore {
 }
 
 func (s *scratchStore) ConsumedJTIs() store.ConsumedJTIStore { return &jtiStore{q: s.q(), now: s.now} }
-
-func (s *scratchStore) Users() store.UserStore { return s.users }
 
 func (s *scratchStore) AccessTokens() store.AccessTokenRegistry {
 	return &accessTokenStore{q: s.q()}

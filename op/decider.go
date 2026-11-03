@@ -2,15 +2,6 @@ package op
 
 import "context"
 
-// AuditDenyReasonKey is a slog attribute key reserved for [Deny.Reason].
-//
-// Deprecated: no code path emits this key. A denied login is recorded on
-// the operational logger installed by [WithLogger] under the plain
-// "reason" attribute, so an assertion that matches AuditDenyReasonKey
-// never fires; match "reason" instead. The constant is retained so
-// existing references keep compiling and its value will not change.
-const AuditDenyReasonKey = "audit.deny.reason"
-
 // Decider is the imperative complement to [LoginFlow.Rules]. The
 // orchestrator consults the Decider on every evaluation pass before
 // it iterates the rule list; a non-[Pass] [Decision] short-circuits

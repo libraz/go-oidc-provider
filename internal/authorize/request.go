@@ -158,9 +158,8 @@ type Request struct {
 }
 
 // Policy carries the runtime policy bits the [Request.Validate]
-// pipeline consults. A zero value means "no profile is active": PKCE
-// is recommended but not enforced when the request omits
-// code_challenge entirely. Setting [Policy.PKCERequired] reverses
+// pipeline consults. A zero value leaves PKCE recommended but not
+// enforced when the request omits code_challenge entirely. Setting [Policy.PKCERequired] reverses
 // that — every request MUST carry a code_challenge — and matches the
 // FAPI 2.0 / OAuth 2.1 stance.
 //

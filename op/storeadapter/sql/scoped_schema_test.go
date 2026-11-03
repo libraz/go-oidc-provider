@@ -255,7 +255,7 @@ type scopedConfig func(t *testing.T, s *Store, users *scopedUsers) []op.Option
 // scopedDefault is the default configuration: password login against
 // the embedder's user store, every other option at its default.
 func scopedDefault(_ *testing.T, _ *Store, users *scopedUsers) []op.Option {
-	return []op.Option{passwordFlow(users)}
+	return []op.Option{passwordFlow(users), op.WithUserStore(users)}
 }
 
 // scopedCase pairs a configuration that requires tables with one that
@@ -356,9 +356,9 @@ func scopedCases() []scopedCase {
 			},
 		},
 		{
-			name: "userstore fallback", tags: []string{"userstore-fallback"}, tables: []string{"users"},
+			name: "adapter user store", tags: []string{"userstore"}, tables: []string{"users"},
 			on: func(_ *testing.T, s *Store, _ *scopedUsers) []op.Option {
-				return []op.Option{op.WithLoginFlow(op.LoginFlow{Primary: op.PrimaryPassword{Store: s.UserPasswords()}})}
+				return []op.Option{op.WithUserStore(s.Users())}
 			},
 			off: scopedDefault,
 		},
@@ -369,14 +369,12 @@ func scopedCases() []scopedCase {
 				"authorization_codes", "sessions", "interactions", "authn_lockouts",
 			},
 			on: scopedDefault,
-			// Without a login flow the claims user store falls back to the
-			// adapter's users table, so the embedder names its own.
 			off: func(_ *testing.T, _ *Store, users *scopedUsers) []op.Option {
 				return []op.Option{op.WithGrants(grant.ClientCredentials), op.WithUserStore(users)}
 			},
 		},
 		{
-			name:   "composite routes sessions, interactions and users elsewhere",
+			name:   "composite routes sessions, interactions and lockouts elsewhere",
 			tags:   []string{"authorize", "lockout"},
 			tables: []string{"sessions", "interactions", "authn_lockouts"},
 			on:     scopedDefault,
@@ -388,7 +386,7 @@ func scopedCases() []scopedCase {
 					composite.WithDefault(s),
 					composite.With(composite.Sessions, mem),
 					composite.With(composite.Interactions, mem),
-					composite.With(composite.Users, mem),
+					composite.With(composite.AuthnLockouts, mem),
 				)
 				if err != nil {
 					t.Fatalf("composite.New: %v", err)

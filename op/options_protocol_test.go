@@ -9,9 +9,8 @@ import (
 	"time"
 )
 
-// TestWithAllowPrivateNetworkBackchannel drives the option and its
-// deprecated predecessor against a fresh config and confirms the accessor
-// reads back the value. The SSRF behaviour itself is exercised by
+// TestWithAllowPrivateNetworkBackchannel drives the option against a fresh
+// config and confirms the accessor reads back the value. The SSRF behaviour itself is exercised by
 // internal/backchannel/deliverer_ssrf_test.go.
 func TestWithAllowPrivateNetworkBackchannel(t *testing.T) {
 	t.Parallel()
@@ -22,8 +21,6 @@ func TestWithAllowPrivateNetworkBackchannel(t *testing.T) {
 		want bool
 	}{
 		{"opt-in", WithAllowPrivateNetworkBackchannel(), true},
-		{"deprecated-false", WithBackchannelAllowPrivateNetwork(false), false},
-		{"deprecated-true", WithBackchannelAllowPrivateNetwork(true), true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -36,21 +33,6 @@ func TestWithAllowPrivateNetworkBackchannel(t *testing.T) {
 				t.Errorf("BackchannelAllowsPrivateNetwork = %v, want %v", got, tc.want)
 			}
 		})
-	}
-}
-
-// TestWithAllowPrivateNetworkBackchannel_ConflictsWithDeprecated pins that
-// the two spellings claim one setting, so a configuration carrying both
-// is refused instead of resolved by option order.
-func TestWithAllowPrivateNetworkBackchannel_ConflictsWithDeprecated(t *testing.T) {
-	t.Parallel()
-
-	c := &config{}
-	if err := WithBackchannelAllowPrivateNetwork(false).apply(c); err != nil {
-		t.Fatalf("apply deprecated: %v", err)
-	}
-	if err := WithAllowPrivateNetworkBackchannel().apply(c); err == nil {
-		t.Fatal("expected a conflict error when both spellings are supplied")
 	}
 }
 

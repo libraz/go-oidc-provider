@@ -77,7 +77,7 @@ func TestRefresh_CommitConflictEndsAsReplay(t *testing.T) {
 	capture := newAuditCapture()
 	prov := testkit.NewProvider(t,
 		testkit.WithClock(clock),
-		testkit.WithOptions(op.WithStore(decorated), op.WithAuditLogger(capture.logger())),
+		testkit.WithOptions(op.WithStore(decorated), op.WithUserStore(backing.Users()), op.WithAuditLogger(capture.logger())),
 	)
 	prov.Store = backing
 	f := &fixture{

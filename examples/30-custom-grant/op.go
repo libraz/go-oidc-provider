@@ -42,6 +42,8 @@ func buildProvider(keys *devkeys.Material, servicePub *ecdsa.PublicKey) (*op.Pro
 	provider, err := op.New(
 		op.WithIssuer(issuer),
 		op.WithStore(st),
+		// refresh_token resolves end-user subjects, so a user store is required.
+		op.WithUserStore(st.Users()),
 		op.WithKeyset(keys.Keyset()),
 		op.WithCookieKeys(keys.CookieKey),
 		// Custom grants are registered outside the built-in grant set,

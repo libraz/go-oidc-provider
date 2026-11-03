@@ -6,8 +6,9 @@
 // op.WithStore. Because scratchStore.GrantRevocations() returns nil,
 // the build pins op.WithAccessTokenRevocationStrategy(RevocationStrategyNone)
 // so the library accepts the missing substore. The PrimaryPassword
-// login Step reads credentials through the same scratchStore's Users()
-// substore (store.UserPasswordStore).
+// login Step reads credentials through the scratchStore's user projection
+// (store.UserPasswordStore), which is also where claims are read from:
+// the aggregate store carries no users.
 //
 // The store implements only the read-only store.ClientStore (GetClient),
 // not store.ClientRegistry, so WithStaticClients is intentionally NOT
@@ -18,27 +19,20 @@
 package main
 
 import (
-	"errors"
 	"fmt"
 
 	"github.com/libraz/go-oidc-provider/examples/internal/devkeys"
 	"github.com/libraz/go-oidc-provider/op"
 	"github.com/libraz/go-oidc-provider/op/profile"
-	"github.com/libraz/go-oidc-provider/op/store"
 )
 
 func buildProvider(storage *scratchStore) (*op.Provider, error) {
 	keys := devkeys.MustEphemeral("byo-store-from-scratch-1")
 
-	// The login Step needs the password lookups, so reach the concrete
-	// user substore as a store.UserPasswordStore.
-	users, ok := storage.Users().(store.UserPasswordStore)
-	if !ok {
-		return nil, errors.New("scratch users substore does not implement store.UserPasswordStore")
-	}
-
+	// The OP reads end-user claims from the login flow's PrimaryPassword
+	// store, so no op.WithUserStore is needed.
 	flow := op.LoginFlow{
-		Primary: op.PrimaryPassword{Store: users},
+		Primary: op.PrimaryPassword{Store: storage.users},
 	}
 
 	provider, err := op.New(

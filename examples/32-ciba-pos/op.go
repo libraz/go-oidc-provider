@@ -40,6 +40,8 @@ func buildProvider() (*op.Provider, *inmem.Store, error) {
 	provider, err := op.New(
 		op.WithIssuer(issuer),
 		op.WithStore(st),
+		// CIBA redeems for an end user the store must know.
+		op.WithUserStore(st.Users()),
 		op.WithKeyset(keys.Keyset()),
 		op.WithCookieKeys(keys.CookieKey),
 		// CIBA is the only grant this OP serves. The POS terminal never

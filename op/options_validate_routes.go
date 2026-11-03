@@ -81,7 +81,6 @@ func (c *config) configuredEndpoints() []configuredEndpoint {
 		{name: "Revoke", value: c.endpoints.Revoke},
 		{name: "PAR", value: c.endpoints.PAR},
 		{name: "Interaction", value: c.endpoints.Interaction},
-		{name: "Session", value: c.endpoints.Session},
 		{name: "Register", value: c.endpoints.Register},
 		{name: "DeviceAuthorization", value: c.endpoints.DeviceAuthorization},
 		{name: "Backchannel", value: c.endpoints.Backchannel},
@@ -127,11 +126,6 @@ func (c *config) activeRouteReservations() []routeReservation {
 		routes = append(routes,
 			routeReservation{name: "WithEndpoints.Authorize", path: protocolEndpointPath(c, c.endpoints.Authorize)},
 			routeReservation{name: "WithEndpoints.EndSession", path: protocolEndpointPath(c, c.endpoints.EndSession)},
-			// Session is a public endpoint namespace reserved for the
-			// interaction API. Reserve it even while its individual
-			// operations remain owned by the interaction handler so an
-			// override cannot be shadowed by another endpoint.
-			routeReservation{name: "WithEndpoints.Session", path: protocolEndpointPath(c, c.endpoints.Session), prefix: true},
 		)
 		if c.spaUISet {
 			routes = append(routes, routeReservation{

@@ -57,7 +57,7 @@ func TestCIMD_ProfileWithoutNoneAuth(t *testing.T) {
 			return []string{"private_key_jwt"}
 		case profile.FAPI2MessageSigning:
 			return []string{"none", "private_key_jwt"}
-		case profile.OAuth21, profile.FAPICIBA:
+		case profile.OAuth21, profile.OIDCCore, profile.FAPICIBA:
 			return nil
 		}
 		return nil

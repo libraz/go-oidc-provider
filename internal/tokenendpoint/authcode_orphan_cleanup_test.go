@@ -89,6 +89,7 @@ func TestAuthCode_MintFailureCleanupSparesEarlierExchangesAccessToken(t *testing
 		testkit.WithClock(movableClock{cur: &cur}),
 		testkit.WithOptions(
 			op.WithStore(decorated),
+			op.WithUserStore(backing.Users()),
 			op.WithFeature(feature.Introspect),
 			op.WithAccessTokenFormat(op.AccessTokenFormatOpaque),
 		),

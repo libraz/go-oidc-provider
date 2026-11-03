@@ -10,7 +10,6 @@ import (
 )
 
 const (
-	startupPKCEMsg        = "no security profile requires PKCE"
 	startupClaimSourceMsg = "resolved the source of ID Token and /userinfo claims"
 )
 
@@ -35,7 +34,7 @@ func TestNew_StartupDiagnosticsGoToDefaultLogger(t *testing.T) { //nolint:parall
 		t.Fatalf("op.New: %v", err)
 	}
 	out := buf.String()
-	for _, want := range []string{startupPKCEMsg, startupClaimSourceMsg} {
+	for _, want := range []string{startupClaimSourceMsg} {
 		if !strings.Contains(out, want) {
 			t.Errorf("default logger output missing %q; got:\n%s", want, out)
 		}
@@ -55,7 +54,7 @@ func TestNew_WithLoggerKeepsStartupDiagnosticsOffDefault(t *testing.T) { //nolin
 	if defBuf.Len() != 0 {
 		t.Errorf("default logger received output despite WithLogger:\n%s", defBuf.String())
 	}
-	for _, want := range []string{startupPKCEMsg, startupClaimSourceMsg} {
+	for _, want := range []string{startupClaimSourceMsg} {
 		if !strings.Contains(own.String(), want) {
 			t.Errorf("supplied logger output missing %q; got:\n%s", want, own.String())
 		}

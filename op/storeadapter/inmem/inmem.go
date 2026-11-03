@@ -255,7 +255,9 @@ func (s *Store) Interactions() store.InteractionStore { return s.interactions }
 // ConsumedJTIs implements [store.Store].
 func (s *Store) ConsumedJTIs() store.ConsumedJTIStore { return s.jtis }
 
-// Users implements [store.Store].
+// Users returns the in-memory [store.UserStore]. It is not part of
+// [store.Store]; pass it to op.WithUserStore (or use [Store.UserPasswords]
+// for PrimaryPassword.Store).
 func (s *Store) Users() store.UserStore { return s.users }
 
 // InitialAccessTokens implements [store.Store].
@@ -328,10 +330,10 @@ func (s *Store) Passkeys() store.PasskeyStore { return s.passkeys }
 
 // EmailOTPs returns the [store.EmailOTPStore] backed by this Store.
 // Like [Store.TOTPs] / [Store.Passkeys] the substore is not part of
-// the aggregate [store.Store] interface — the email-OTP wiring lives
-// behind [op.NewEmailOTPAuthenticator] — but the accessor is exposed
-// here so the authn package and its tests can reach the reference
-// implementation without forking the in-memory backend.
+// the aggregate [store.Store] interface — it is handed to
+// [op.StepEmailOTP] — but the accessor is exposed here so the authn
+// package and its tests can reach the reference implementation without
+// forking the in-memory backend.
 func (s *Store) EmailOTPs() store.EmailOTPStore { return s.emailotps }
 
 // AuthnLockouts returns the [store.AuthnLockoutStore] backed by this

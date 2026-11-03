@@ -182,6 +182,7 @@ func buildFlowFixture(t *testing.T, label string, clock *movableClock, authnOpt 
 	opts = append(opts,
 		op.WithIssuer(testkit.DefaultIssuer),
 		op.WithStore(st),
+		op.WithUserStore(st.Users()),
 		op.WithKeyset(op.Keyset{newFlowSigningKey(t)}),
 		op.WithCookieKeys(newFlowCookieKey(t)),
 		op.WithInteractionDriver(testkit.AutoConsentDriver{}),

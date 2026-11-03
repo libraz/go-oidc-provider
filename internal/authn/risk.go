@@ -166,15 +166,6 @@ type RiskOutcome struct {
 	// session at the assurance the assessor refused.
 	RequiredFactors []FactorType
 
-	// MinAAL was an assurance floor over an unenumerated candidate set.
-	// The Steps a [Config.LoginFlow] declares are named individually, so
-	// the floor has nothing to filter and the orchestrator never reads
-	// it.
-	//
-	// Deprecated: name the qualifying factors in RequiredFactors, or
-	// encode the floor as a rule whose step meets it.
-	MinAAL AAL
-
 	// NewDevice reports that the request comes from a device this
 	// user has not been seen on before. It is the signal
 	// [op.RuleNewDevice] thresholds against, and the assessor is its

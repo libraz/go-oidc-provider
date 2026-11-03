@@ -1038,7 +1038,6 @@ func buildDiscoveryInput(cfg *config, scopes *scoperegistry.Registry, locales *i
 			Revoke:              cfg.endpoints.Revoke,
 			PAR:                 cfg.endpoints.PAR,
 			Interaction:         cfg.endpoints.Interaction,
-			Session:             cfg.endpoints.Session,
 			Register:            cfg.endpoints.Register,
 			DeviceAuthorization: cfg.endpoints.DeviceAuthorization,
 			Backchannel:         cfg.endpoints.Backchannel,

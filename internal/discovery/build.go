@@ -247,7 +247,6 @@ type EndpointPaths struct {
 	Revoke              string
 	PAR                 string
 	Interaction         string
-	Session             string
 	Register            string
 	DeviceAuthorization string
 	Backchannel         string

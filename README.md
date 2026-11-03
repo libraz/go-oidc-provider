@@ -55,15 +55,18 @@ go get github.com/libraz/go-oidc-provider/op/storeadapter/dynamodb@v1.4.0
 ## Quickstart
 
 ```go
+db, _ := sql.Open("mysql", dsn)          // your existing database
+st, err := oidcsql.New(db, oidcsql.MySQL()) // op/storeadapter/sql
+// Apply st.Migrations() with your migration tool (st.Migrate in development).
+
 handler, err := op.New(
     op.WithIssuer("https://idp.example.com"),
     op.WithStore(st),
     op.WithKeyset(op.Keyset{{KeyID: "k1", Signer: priv}}),
     op.WithCookieKeys(cookieKey), // 32 bytes, AES-256-GCM
     op.WithLoginFlow(op.LoginFlow{
-        Primary: op.PrimaryPassword{Store: users},
+        Primary: op.PrimaryPassword{Store: users{db}},
     }),
-    op.WithProfile(profile.OAuth21), // PKCE on every authorization-code request
 )
 if err != nil {
     log.Fatal(err)
@@ -71,16 +74,27 @@ if err != nil {
 log.Fatal(http.ListenAndServe(":8080", handler))
 ```
 
-`st` holds the OP's own records (clients, codes, tokens, sessions). `op.New`
-checks the SQL adapter's tables your configuration uses and names any that are
-missing; [`TABLES.md`](op/storeadapter/sql/schema/TABLES.md) lists which
-those are. `users` is your existing users table behind
-`store.UserPasswordStore`: three read methods, plus an optional hash
-write-back when legacy hashes (such as bcrypt) are rehashed through
-`PrimaryPassword.LegacySchemes`, and no new column when the table already has
-an opaque identifier assigned once and never reused (not an auto-increment id
-or an email address). See
+`users` is your existing users table, read through three methods of
+`store.UserPasswordStore`. Each returns `store.ErrNotFound` for an unknown
+user:
+
+```go
+func (u users) FindBySubject(ctx context.Context, sub string) (*store.User, error)
+func (u users) FindByUsername(ctx context.Context, login string) (*store.User, error)
+func (u users) ReadPasswordHash(ctx context.Context, sub string) ([]byte, error) // PHC argon2id
+```
+
+The table gains no column when it already has an opaque identifier assigned
+once and never reused (not an auto-increment id or an email address). The
+same store supplies the ID Token and `/userinfo` claims; `op.WithUserStore`
+is for claims kept elsewhere. Legacy hashes such as bcrypt verify through
+`PrimaryPassword.LegacySchemes`. See
 [Bring your own user store](https://go-oidc-provider.libraz.net/use-cases/byo-userstore).
+
+`st` holds the OP's own records (clients, codes, tokens, sessions) in
+`oidc_*` tables next to yours. `op.New` checks the tables your configuration
+uses and names every missing one in one error;
+[`TABLES.md`](op/storeadapter/sql/schema/TABLES.md) lists them.
 
 `Issuer`, `Store` and `Keyset` are always required. `CookieKeys` and
 `LoginFlow` are required whenever the `authorization_code` grant is enabled,
@@ -94,12 +108,13 @@ issuer, so that is the first URL to fetch.
 
 A security profile is declared with one option, and the constructor refuses to
 start when the declared profile conflicts with the rest of the configuration.
-Without one the OP keeps the OpenID Connect Core shape, where a confidential
-client may redeem a code without PKCE, and `op.New` logs a warning saying so (to `slog.Default()` when no `WithLogger` is set):
+Without one the OP runs `profile.OAuth21`, which requires PKCE on every
+authorization-code request. Relying parties that cannot send PKCE need the
+OpenID Connect Core shape, which is declared rather than defaulted:
 
 ```go
-op.WithProfile(profile.OAuth21)      // OAuth 2.1: PKCE on every code request
 op.WithProfile(profile.FAPI2Baseline) // PAR + JAR + DPoP, ES256 signing, alg lock
+op.WithProfile(profile.OIDCCore)      // PKCE optional for confidential clients
 ```
 
 `profile.OAuth21` is the OAuth 2.1 posture, not FAPI 2.0 Baseline; the FAPI

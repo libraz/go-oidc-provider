@@ -107,10 +107,8 @@ func run(logger *slog.Logger) error {
 	opts := []op.Option{
 		op.WithIssuer(cfg.Issuer),
 		op.WithStore(storage),
-		// The password step above already authenticates against the
-		// members table; without this, /userinfo and ID-token claims
-		// would resolve against storage's empty Users() instead of the
-		// table a member actually signed into.
+		// Names the members table the password step above signs into as the
+		// source of /userinfo and ID-token claims.
 		op.WithUserStore(members),
 		op.WithKeyset(cfg.Keyset),
 		op.WithCookieKeys(cfg.CookieKey),

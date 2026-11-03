@@ -3,9 +3,8 @@ package op
 import "time"
 
 // BackchannelAllowsPrivateNetwork reports whether
-// [WithAllowPrivateNetworkBackchannel] (or the deprecated
-// [WithBackchannelAllowPrivateNetwork] with true) was applied to this config. The wiring layer (op_builders.go) consults the
-// accessor when constructing the back-channel deliverer so the
+// [WithAllowPrivateNetworkBackchannel] was applied to this config. The
+// wiring layer (op_builders.go) consults the accessor when constructing the back-channel deliverer so the
 // per-config gate flows through to the SSRF check.
 //
 // The accessor is the only path through which the SSRF gate's
@@ -38,8 +37,7 @@ func (c *config) BackchannelAllowsPrivateNetwork() bool {
 // deliverer level only; the other fetchers keep their own
 // WithAllowPrivateNetwork* flags ([WithAllowPrivateNetworkJWKS],
 // [WithAllowPrivateNetworkJAR], ...) so private-network access granted
-// to one never widens another. Repeating the option is a no-op; combining
-// it with [WithBackchannelAllowPrivateNetwork] fails [New].
+// to one never widens another. Repeating the option is a no-op.
 //
 // Stable since v1.5.
 func WithAllowPrivateNetworkBackchannel() Option {
@@ -52,26 +50,8 @@ func WithAllowPrivateNetworkBackchannel() Option {
 	})
 }
 
-// WithBackchannelAllowPrivateNetwork sets the gate
-// [WithAllowPrivateNetworkBackchannel] opens; false leaves it closed.
-//
-// Deprecated: use [WithAllowPrivateNetworkBackchannel], named like the
-// other WithAllowPrivateNetwork* options.
-//
-// Stable since v1.0.
-func WithBackchannelAllowPrivateNetwork(allow bool) Option {
-	return optionFunc(func(c *config) error {
-		if err := c.claimSlot(slotBackchannelAllowPrivateNetwork, "WithBackchannelAllowPrivateNetwork"); err != nil {
-			return err
-		}
-		c.backchannelAllowPrivateNetwork = allow
-		return nil
-	})
-}
-
-// slotBackchannelAllowPrivateNetwork is the single-valued setting both
-// back-channel private-network options claim, so supplying both is
-// refused as a conflict.
+// slotBackchannelAllowPrivateNetwork is the claim key of the
+// back-channel private-network setting.
 const slotBackchannelAllowPrivateNetwork = "backchannelAllowPrivateNetwork"
 
 // WithBackchannelFanOutBudget caps the total wall-clock time one

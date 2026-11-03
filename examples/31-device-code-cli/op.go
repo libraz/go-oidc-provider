@@ -41,6 +41,8 @@ func buildProvider() (*op.Provider, *inmem.Store, error) {
 	provider, err := op.New(
 		op.WithIssuer(issuer),
 		op.WithStore(st),
+		// The device grant redeems for an end user the store must know.
+		op.WithUserStore(st.Users()),
 		op.WithKeyset(keys.Keyset()),
 		op.WithCookieKeys(keys.CookieKey),
 		// The device-code grant is the only one this OP serves. The

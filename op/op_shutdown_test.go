@@ -272,6 +272,7 @@ func TestNew_RecordsBackchannelCoordinator(t *testing.T) {
 	provider, err := New(
 		WithIssuer(shutdownFixtureIssuer),
 		WithStore(inmem.New()),
+		WithUserStore(inmem.New().Users()),
 		WithKeyset(Keyset{SigningKey{KeyID: "sig-1", Signer: priv}}),
 		WithCookieKeys(cookieKey),
 		WithLoginFlow(LoginFlow{Primary: ExternalStep{
@@ -340,6 +341,7 @@ func TestProviderShutdown_StopsSharedSignalsWorker(t *testing.T) {
 	provider, err := New(
 		WithIssuer(shutdownFixtureIssuer),
 		WithStore(inmem.New()),
+		WithUserStore(inmem.New().Users()),
 		WithKeyset(Keyset{SigningKey{KeyID: "sig-1", Signer: priv}}),
 		WithCookieKeys(cookieKey),
 		WithLoginFlow(LoginFlow{Primary: ExternalStep{

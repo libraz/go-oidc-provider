@@ -8,30 +8,36 @@ import (
 )
 
 // effectiveUserStore resolves where the OP reads end-user claims from, in
-// order: the dedicated [WithUserStore] value when one was supplied; the
-// Store of the login flow's primary [PrimaryPassword] (see
-// inferredUserStore); the Users() substore of the [WithStore] backend.
+// order: a [WithUserStore] value given explicitly; the Store of the login
+// flow's primary [PrimaryPassword] (see inferredUserStore); a
+// [WithUserStore] value that arrived through [WithDefaults]. It returns
+// nil when none is set.
 //
-// Resolution rather than wrapping is the point of the option. A wrapper
-// that shadows Users() has to be built out of the concrete backend type
-// to keep the backend's optional capabilities visible to the type
-// assertions [New] makes; building it out of the [store.Store]
-// interface instead compiles cleanly and silently erases them. Choosing
-// between values here cannot lose anything, because the backend the
-// rest of the library sees is the one the embedder passed.
+// A defaulted value ranks last so a harness that supplies a baseline user
+// store (the testkit does) does not override the store a login flow
+// authenticates against.
 //
 // The login-flow inference exists so the records a login resolves a
 // subject from and the records claims are read from need not be wired
 // twice; a deployment that wants them apart says so with
 // [WithUserStore].
 func (c *config) effectiveUserStore() store.UserStore { //nolint:ireturn,nolintlint // store.UserStore is the substore contract.
-	if !nilcheck.IsNil(c.userStore) {
+	if !nilcheck.IsNil(c.userStore) && !c.userStoreDefaulted() {
 		return c.userStore
 	}
 	if inferred := c.inferredUserStore(); inferred != nil {
 		return inferred
 	}
-	return c.store.Users()
+	if !nilcheck.IsNil(c.userStore) {
+		return c.userStore
+	}
+	return nil
+}
+
+// userStoreDefaulted reports whether the [WithUserStore] value came from
+// [WithDefaults] rather than an explicit option.
+func (c *config) userStoreDefaulted() bool {
+	return c.claimed["WithUserStore"].fallback
 }
 
 // inferredUserStore returns the Store of the login flow's primary
@@ -79,7 +85,7 @@ func (c *config) warnUserStoreMismatch() {
 	if nilcheck.IsNil(claims) {
 		return
 	}
-	c.infoClaimSource(claims)
+	c.infoClaimSource()
 	for _, step := range c.loginFlowSteps() {
 		authn, field := stepUserStore(step)
 		if nilcheck.IsNil(authn) || !comparableStores(authn, claims) {
@@ -101,16 +107,9 @@ func (c *config) warnUserStoreMismatch() {
 }
 
 // infoClaimSource logs the resolved claim source once at construction,
-// because the resolution order is not visible from the option list. When
-// the source is not Store.Users() and that substore is a different value,
-// the line also says Users() goes unread, so an empty oidc_users table
-// does not read as missing data.
-func (c *config) infoClaimSource(claims store.UserStore) {
-	attrs := []any{"claim_source", claimSourceOption(c)}
-	if backend := c.store.Users(); !nilcheck.IsNil(backend) && comparableStores(claims, backend) && any(claims) != any(backend) {
-		attrs = append(attrs, "store_users", "not read")
-	}
-	c.startupLog().Info("resolved the source of ID Token and /userinfo claims", attrs...)
+// because the resolution order is not visible from the option list.
+func (c *config) infoClaimSource() {
+	c.startupLog().Info("resolved the source of ID Token and /userinfo claims", "claim_source", claimSourceOption(c))
 }
 
 // loginFlowSteps returns every [Step] the configured flow can run, in
@@ -164,11 +163,8 @@ func comparableStores(a, b store.UserStore) bool {
 // claimSourceOption names the option the claim side came from, so the
 // warning points at the wiring to fix rather than at an address.
 func claimSourceOption(c *config) string {
-	if !nilcheck.IsNil(c.userStore) {
+	if !nilcheck.IsNil(c.userStore) && (!c.userStoreDefaulted() || c.inferredUserStore() == nil) {
 		return "WithUserStore"
 	}
-	if c.inferredUserStore() != nil {
-		return "LoginFlow.Primary PrimaryPassword.Store"
-	}
-	return "WithStore(...).Users()"
+	return "LoginFlow.Primary PrimaryPassword.Store"
 }

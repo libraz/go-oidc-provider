@@ -6,13 +6,15 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/libraz/go-oidc-provider/internal/nilcheck"
 	"github.com/libraz/go-oidc-provider/op/store"
 	"github.com/libraz/go-oidc-provider/op/storeadapter/inmem"
 )
 
 // TestEffectiveUserStore_Inference pins the claim-source resolution order:
 // an explicit WithUserStore value, then the primary PrimaryPassword's
-// Store, then Store.Users().
+// Store, then a WithUserStore value that came from WithDefaults. Nothing
+// else is consulted: the aggregate store carries no users.
 func TestEffectiveUserStore_Inference(t *testing.T) {
 	t.Parallel()
 
@@ -22,10 +24,12 @@ func TestEffectiveUserStore_Inference(t *testing.T) {
 	var nilPasswords store.UserPasswordStore
 
 	cases := []struct {
-		name     string
-		userSt   store.UserStore
-		flow     *LoginFlow
-		wantSame store.UserStore
+		name   string
+		userSt store.UserStore
+		flow   *LoginFlow
+		// defaulted marks userSt as supplied through WithDefaults.
+		defaulted bool
+		wantSame  store.UserStore
 	}{
 		{
 			name:     "WithUserStore wins over the primary store",
@@ -55,29 +59,45 @@ func TestEffectiveUserStore_Inference(t *testing.T) {
 			wantSame: primary.Users(),
 		},
 		{
-			name:     "ExternalStep falls back to Store.Users()",
+			name:     "ExternalStep resolves nothing",
 			flow:     &LoginFlow{Primary: ExternalStep{}},
-			wantSame: backend.Users(),
+			wantSame: nil,
 		},
 		{
-			name:     "PrimaryPassword with a nil-like Store falls back to Store.Users()",
+			name:     "PrimaryPassword with a nil-like Store resolves nothing",
 			flow:     &LoginFlow{Primary: PrimaryPassword{Store: nilPasswords}},
-			wantSame: backend.Users(),
+			wantSame: nil,
 		},
 		{
-			name:     "no login flow falls back to Store.Users()",
-			wantSame: backend.Users(),
+			name:     "no login flow resolves nothing",
+			wantSame: nil,
+		},
+		{
+			name:      "defaulted WithUserStore applies when nothing else does",
+			userSt:    explicit.Users(),
+			defaulted: true,
+			wantSame:  explicit.Users(),
+		},
+		{
+			name:      "defaulted WithUserStore yields to the primary store",
+			userSt:    explicit.Users(),
+			defaulted: true,
+			flow:      &LoginFlow{Primary: PrimaryPassword{Store: primary.UserPasswords()}},
+			wantSame:  primary.Users(),
 		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			c := &config{store: backend, userStore: tc.userSt}
+			if tc.defaulted {
+				c.claimed = map[string]claim{"WithUserStore": {option: "WithUserStore", fallback: true}}
+			}
 			if tc.flow != nil {
 				c.loginFlow = *tc.flow
 				c.loginFlowSet = true
 			}
-			if got := c.effectiveUserStore(); any(got) != any(tc.wantSame) {
+			if got := c.effectiveUserStore(); !nilcheck.IsNil(got) && any(got) != any(tc.wantSame) || nilcheck.IsNil(got) && tc.wantSame != nil {
 				t.Fatalf("effectiveUserStore = %T(%p), want %T(%p)", got, got, tc.wantSame, tc.wantSame)
 			}
 		})
@@ -85,12 +105,11 @@ func TestEffectiveUserStore_Inference(t *testing.T) {
 }
 
 // TestEffectiveUserStore_InfoNamesClaimSource checks the construction
-// notice: exactly one INFO naming the claim source, which also says
-// Store.Users() goes unread when the source is a different store.
+// notice: exactly one INFO naming the claim source, which is one of two
+// options.
 func TestEffectiveUserStore_InfoNamesClaimSource(t *testing.T) {
 	t.Parallel()
 
-	backend := inmem.New()
 	other := inmem.New()
 
 	cases := []struct {
@@ -98,19 +117,16 @@ func TestEffectiveUserStore_InfoNamesClaimSource(t *testing.T) {
 		userSt     store.UserStore
 		primary    store.UserPasswordStore
 		wantSource string
-		wantUnread bool
 	}{
-		{name: "inferred, different stores", primary: other.UserPasswords(), wantSource: "LoginFlow.Primary PrimaryPassword.Store", wantUnread: true},
-		{name: "inferred, identical stores", primary: backend.UserPasswords(), wantSource: "LoginFlow.Primary PrimaryPassword.Store"},
-		{name: "explicit WithUserStore", userSt: other.Users(), wantSource: "WithUserStore", wantUnread: true},
-		{name: "Store.Users fallback", wantSource: "WithStore(...).Users()"},
+		{name: "inferred", primary: other.UserPasswords(), wantSource: "LoginFlow.Primary PrimaryPassword.Store"},
+		{name: "explicit WithUserStore", userSt: other.Users(), wantSource: "WithUserStore"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			var buf bytes.Buffer
 			c := &config{
-				store:     backend,
+				store:     inmem.New(),
 				userStore: tc.userSt,
 				logger:    slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo})),
 			}
@@ -126,8 +142,8 @@ func TestEffectiveUserStore_InfoNamesClaimSource(t *testing.T) {
 			if !strings.Contains(out, "claim_source="+tc.wantSource) && !strings.Contains(out, `claim_source="`+tc.wantSource+`"`) {
 				t.Fatalf("INFO does not name claim_source %q; got:\n%s", tc.wantSource, out)
 			}
-			if got := strings.Contains(out, "store_users="); got != tc.wantUnread {
-				t.Fatalf("store_users attribute present = %v, want %v; got:\n%s", got, tc.wantUnread, out)
+			if strings.Contains(out, "store_users") {
+				t.Fatalf("INFO still carries a store_users attribute; got:\n%s", out)
 			}
 			if strings.Contains(out, "level=WARN") {
 				t.Fatalf("resolution must not warn; got:\n%s", out)

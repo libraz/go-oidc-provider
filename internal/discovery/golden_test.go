@@ -62,7 +62,6 @@ func allFeaturesInput() discovery.Input {
 			Revoke:              "/revoke",
 			PAR:                 "/par",
 			Interaction:         "/interaction",
-			Session:             "/session",
 			Register:            "/register",
 			DeviceAuthorization: "/device_authorization",
 			Backchannel:         "/bc-authorize",

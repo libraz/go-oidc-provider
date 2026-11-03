@@ -65,7 +65,6 @@ func (s nonRegistryStore) PushedAuthRequests() store.PushedAuthRequestStore {
 }
 func (s nonRegistryStore) Interactions() store.InteractionStore { return s.inner.Interactions() }
 func (s nonRegistryStore) ConsumedJTIs() store.ConsumedJTIStore { return s.inner.ConsumedJTIs() }
-func (s nonRegistryStore) Users() store.UserStore               { return s.inner.Users() }
 func (s nonRegistryStore) InitialAccessTokens() store.InitialAccessTokenStore {
 	return s.inner.InitialAccessTokens()
 }
@@ -101,6 +100,7 @@ func dcrBaseOpts(tb testing.TB, s store.Store, clock op.Clock) []op.Option {
 	return []op.Option{
 		op.WithIssuer(validIssuer),
 		op.WithStore(s),
+		withUsersOf(s),
 		op.WithKeyset(validKeyset(tb)),
 		op.WithCookieKeys(newRandomCookieKey(tb)),
 		op.WithClock(clock),
@@ -717,6 +717,7 @@ func TestIntegration_DCR_IssuerPath_ClientManagementIsReachable(t *testing.T) {
 	provider, err := op.New(
 		op.WithIssuer(tenantIssuer),
 		op.WithStore(s),
+		op.WithUserStore(s.Users()),
 		op.WithKeyset(validKeyset(t)),
 		op.WithCookieKeys(newRandomCookieKey(t)),
 		op.WithClock(clock),

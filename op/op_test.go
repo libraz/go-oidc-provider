@@ -103,18 +103,13 @@ type noSessionsStore struct{ stubStore }
 
 func (noSessionsStore) Sessions() store.SessionStore { return nil }
 
-// noJTIsStore and noUsersStore return nil from the substore every
-// deployment dereferences at request time — the consumed-JTI store
-// behind private_key_jwt / JAR / DPoP replay defence, and the user
-// store behind the always-mounted /userinfo — so op.New must refuse
-// them regardless of grant or feature set.
+// noJTIsStore returns nil from the consumed-JTI substore every
+// deployment dereferences at request time (private_key_jwt / JAR / DPoP
+// replay defence), so op.New must refuse it regardless of grant or
+// feature set.
 type noJTIsStore struct{ stubStore }
 
 func (noJTIsStore) ConsumedJTIs() store.ConsumedJTIStore { return nil }
-
-type noUsersStore struct{ stubStore }
-
-func (noUsersStore) Users() store.UserStore { return nil }
 
 type storeWithoutTransactions struct {
 	store.Store
@@ -245,12 +240,10 @@ func (stubTx) GrantRevocations() store.GrantRevocationStore     { return stubGra
 func (stubTx) Commit() error                                    { return nil }
 func (stubTx) Rollback() error                                  { return nil }
 
-// Users is invoked eagerly by buildRouter to wire the /userinfo handler;
-// returning a no-op substore lets construction tests exercise op.New
-// without seeding a real backend. The stub returns ErrNotFound for every
-// lookup so any test that actually issues a /userinfo request would still
-// observe the missing-user behaviour.
-func (stubStore) Users() store.UserStore { return stubUserStore{} }
+// stubUserStore is the no-op user store the construction fixtures pass to
+// op.WithUserStore. It returns ErrNotFound for every lookup so any test
+// that actually issues a /userinfo request would still observe the
+// missing-user behaviour.
 
 type stubUserStore struct{}
 
@@ -395,6 +388,16 @@ func validBaseOpts(tb testing.TB) []op.Option {
 // configuration [op.New] requires alongside the authorization_code
 // grant. Tests that assemble their own option slice rather than
 // calling [validBaseOpts] append it.
+// withUsersOf passes s's own user records to op.WithUserStore when s is a
+// bundled-adapter style store with a concrete Users(), and an empty
+// in-memory directory otherwise.
+func withUsersOf(s store.Store) op.Option {
+	if u, ok := s.(interface{ Users() store.UserStore }); ok {
+		return op.WithUserStore(u.Users())
+	}
+	return op.WithUserStore(inmem.New().Users())
+}
+
 func fixtureAuthenticator() op.Option {
 	return op.WithLoginFlow(op.LoginFlow{Primary: op.ExternalStep{
 		Authenticator: stubAuthenticator{typ: fixtureFactor, aal: op.AAL1},
@@ -410,6 +413,7 @@ func validBaseOptsNoAuthn(tb testing.TB) []op.Option {
 	return []op.Option{op.WithDefaults(
 		op.WithIssuer(validIssuer),
 		op.WithStore(stubStore{}),
+		op.WithUserStore(stubUserStore{}),
 		op.WithKeyset(validKeyset(tb)),
 		op.WithCookieKeys(newRandomCookieKey(tb)),
 	)}
@@ -496,10 +500,10 @@ func TestNew_RejectsMissingSessionStore(t *testing.T) {
 }
 
 // TestNew_RejectsMissingRequestTimeSubstores pins that a nil
-// ConsumedJTIs() or Users() fails op.New as a configuration error
-// naming the substore, instead of silently disabling JAR replay defence
-// or nil-dereferencing on the first /userinfo request, and that
-// WithUserStore satisfies the user-store requirement on its own.
+// ConsumedJTIs() fails op.New as a configuration error naming the
+// substore, instead of silently disabling JAR replay defence, and that a
+// configuration with no user store is refused until WithUserStore
+// supplies one.
 func TestNew_RejectsMissingRequestTimeSubstores(t *testing.T) {
 	t.Parallel()
 
@@ -520,7 +524,7 @@ func TestNew_RejectsMissingRequestTimeSubstores(t *testing.T) {
 		want  string
 	}{
 		{"consumed-jtis", noJTIsStore{}, "ConsumedJTIStore"},
-		{"users", noUsersStore{}, "UserStore"},
+		{"users", stubStore{}, "WithUserStore"},
 	} {
 		err := build(tc.store)
 		if err == nil {
@@ -531,8 +535,8 @@ func TestNew_RejectsMissingRequestTimeSubstores(t *testing.T) {
 			t.Errorf("%s: err = %v, want a server configuration error naming %s", tc.name, err, tc.want)
 		}
 	}
-	if err := build(noUsersStore{}, op.WithUserStore(stubUserStore{})); err != nil {
-		t.Errorf("WithUserStore over a store without Users(): %v", err)
+	if err := build(stubStore{}, op.WithUserStore(stubUserStore{})); err != nil {
+		t.Errorf("WithUserStore with a store the aggregate lacks users: %v", err)
 	}
 }
 
@@ -620,6 +624,7 @@ func TestNew_AllowsMissingRetryResponsesWithoutRefreshGrant(t *testing.T) {
 	_, err := op.New(
 		op.WithIssuer(validIssuer),
 		op.WithStore(storeWithoutRefreshRetry{}),
+		op.WithUserStore(stubUserStore{}),
 		op.WithKeyset(validKeyset(t)),
 		op.WithCookieKeys(newRandomCookieKey(t)),
 		op.WithGrants(grant.AuthorizationCode),

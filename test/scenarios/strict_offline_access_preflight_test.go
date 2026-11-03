@@ -67,6 +67,7 @@ func TestStrictOfflineAccess_RefusesPreFlagTokenWithoutConsumingIt(t *testing.T)
 	strictOP, err := op.New(
 		op.WithIssuer(lax.Issuer),
 		op.WithStore(lax.Store),
+		op.WithUserStore(lax.Store.Users()),
 		op.WithKeyset(op.Keyset{lax.SigningKey}),
 		op.WithCookieKeys(cookieKey),
 		op.WithInteractionDriver(testkit.AutoConsentDriver{}),

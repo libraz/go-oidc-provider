@@ -33,7 +33,7 @@
 // The transactional cluster substores (composite.TxClusterKinds —
 // AuthorizationCodes, RefreshTokens, Grants, PushedAuthRequests,
 // AccessTokens, OpaqueAccessTokens, GrantRevocations) and the long-lived
-// substores (Clients, Users, IATs, RATs) are deliberately out of scope.
+// substores (Clients, IATs, RATs) are deliberately out of scope.
 // The first-cut canonical deployment is therefore SQL durable + Redis
 // volatile, composed through
 // [github.com/libraz/go-oidc-provider/op/storeadapter/composite] —

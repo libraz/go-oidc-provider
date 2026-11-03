@@ -128,6 +128,7 @@ func newDynamoFactory(t *testing.T) contract.Factory {
 		disableEmulatorTTL(t, client, s)
 		return contract.Backend{
 			Store: s,
+			Users: s.Users(),
 			Now:   clock.Now,
 			Advance: func(delta time.Duration) {
 				clock.now = clock.now.Add(delta)

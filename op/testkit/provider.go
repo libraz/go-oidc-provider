@@ -180,6 +180,7 @@ func defaultOptions(tb testing.TB, issuer string, st *inmem.Store, signKey op.Si
 	return []op.Option{
 		op.WithIssuer(issuer),
 		op.WithStore(st),
+		op.WithUserStore(st.Users()),
 		op.WithKeyset(op.Keyset{signKey}),
 		op.WithCookieKeys(generateCookieKey(tb)),
 		op.WithInteractionDriver(AutoConsentDriver{}),
@@ -202,7 +203,7 @@ func subjectLoginFlow(auth op.Authenticator) op.Option {
 // [Provider.Store] as a minimal user record unless the test already
 // seeded that subject, because the token endpoint refuses to redeem for
 // a subject the user store cannot find. A caller that replaces the store
-// through [WithOptions] seeds its own users. The returned Provider is non-nil; failures fail the test via
+// through [WithOptions] seeds its own users and passes op.WithUserStore. The returned Provider is non-nil; failures fail the test via
 // [testing.TB.Fatalf] before returning.
 func NewProvider(tb testing.TB, opts ...Option) *Provider {
 	tb.Helper()

@@ -58,7 +58,8 @@ func TestApproveUserCode_EmitsVerificationApproved(t *testing.T) {
 	s := newVerificationStore()
 	newPendingDeviceCode(t, s, "dev-approve-audit", "ABCDEFGH")
 	emitter := &captureEmitter{}
-	deps := &devicecodekit.Deps{DeviceCodes: s.DeviceCodes(), Audit: emitter}
+	deps := &devicecodekit.Deps{DeviceCodes: s.DeviceCodes()}
+	deps.SetAuditEmitter(emitter)
 
 	if err := devicecodekit.ApproveUserCode(ctx, deps, "ABCDEFGH", "user-1", time.Time{}); err != nil {
 		t.Fatalf("ApproveUserCode: %v", err)
@@ -86,7 +87,8 @@ func TestApproveUserCode_SecondApprovalIsNotAudited(t *testing.T) {
 	s := newVerificationStore()
 	newPendingDeviceCode(t, s, "dev-approve-twice", "ABCDEFGH")
 	emitter := &captureEmitter{}
-	deps := &devicecodekit.Deps{DeviceCodes: s.DeviceCodes(), Audit: emitter}
+	deps := &devicecodekit.Deps{DeviceCodes: s.DeviceCodes()}
+	deps.SetAuditEmitter(emitter)
 
 	if err := devicecodekit.ApproveUserCode(ctx, deps, "ABCDEFGH", "user-1", time.Time{}); err != nil {
 		t.Fatalf("first ApproveUserCode: %v", err)
@@ -106,7 +108,8 @@ func TestDenyUserCode_EmitsVerificationDeniedWithReason(t *testing.T) {
 	s := newVerificationStore()
 	newPendingDeviceCode(t, s, "dev-deny-audit", "ABCDEFGH")
 	emitter := &captureEmitter{}
-	deps := &devicecodekit.Deps{DeviceCodes: s.DeviceCodes(), Audit: emitter}
+	deps := &devicecodekit.Deps{DeviceCodes: s.DeviceCodes()}
+	deps.SetAuditEmitter(emitter)
 
 	if err := devicecodekit.DenyUserCode(ctx, deps, "ABCDEFGH", "user_denied"); err != nil {
 		t.Fatalf("DenyUserCode: %v", err)
@@ -137,7 +140,8 @@ func TestVerificationHelpers_MissingRecordIsNotAudited(t *testing.T) {
 	ctx := context.Background()
 	s := newVerificationStore()
 	emitter := &captureEmitter{}
-	deps := &devicecodekit.Deps{DeviceCodes: s.DeviceCodes(), Audit: emitter}
+	deps := &devicecodekit.Deps{DeviceCodes: s.DeviceCodes()}
+	deps.SetAuditEmitter(emitter)
 
 	if err := devicecodekit.ApproveUserCode(ctx, deps, "ZZZZZZZZ", "user-1", time.Time{}); !errors.Is(err, devicecodekit.ErrUnknownDeviceCode) {
 		t.Fatalf("ApproveUserCode: err = %v, want ErrUnknownDeviceCode", err)

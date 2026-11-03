@@ -24,6 +24,10 @@ import (
 	"github.com/libraz/go-oidc-provider/op/testkit"
 )
 
+type fixedClock struct{ t time.Time }
+
+func (c fixedClock) Now() time.Time { return c.t }
+
 const (
 	jbIssuerA     = "https://idp-a.testkit.invalid"
 	jbIssuerB     = "https://ras-b.testkit.invalid"

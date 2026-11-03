@@ -23,9 +23,11 @@ import (
 // deliberately leaves panicking) construct without panic.
 func validBaseOptsWithInmem(tb testing.TB) []op.Option {
 	tb.Helper()
+	st := inmem.New()
 	return []op.Option{op.WithDefaults(
 		op.WithIssuer(validIssuer),
-		op.WithStore(inmem.New()),
+		op.WithStore(st),
+		op.WithUserStore(st.Users()),
 		op.WithKeyset(validKeyset(tb)),
 		op.WithCookieKeys(newRandomCookieKey(tb)),
 		fixtureAuthenticator(),
@@ -125,15 +127,6 @@ func TestWithEndpoints_RejectsActiveRouteCollisions(t *testing.T) {
 			endpoints: op.Endpoints{JWKS: "/shared", Token: "/shared"},
 			wantLeft:  "JWKS",
 			wantRight: "Token",
-		},
-		{
-			name: "interaction session prefix",
-			// Session is deprecated and mounts nothing, but it still
-			// takes part in the collision check; that is the property
-			// this row covers.
-			endpoints: op.Endpoints{Interaction: "/flow", Session: "/flow/session"},
-			wantLeft:  "Interaction",
-			wantRight: "Session",
 		},
 	}
 	for _, tc := range cases {

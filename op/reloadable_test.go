@@ -67,6 +67,7 @@ func (f *reloadFixture) opts(t *testing.T, issuer, kid string, extra ...op.Optio
 	opts := []op.Option{
 		op.WithIssuer(issuer),
 		op.WithStore(f.st),
+		op.WithUserStore(f.st.Users()),
 		op.WithKeyset(f.keyset(t, kid)),
 		op.WithCookieKeys(f.cookieKey),
 		op.WithClock(fakeClock{now: reloadNow()}),
@@ -546,6 +547,7 @@ func TestReload_SigningAlgorithmSwitch(t *testing.T) {
 	opts := func(extra ...op.Option) []op.Option {
 		return testkit.MinimalOptions(t, append([]op.Option{
 			op.WithStore(st),
+			op.WithUserStore(st.Users()),
 			op.WithCookieKeys(cookieKey),
 			op.WithAccessTokenFormat(store.AccessTokenFormatJWT),
 		}, extra...)...)

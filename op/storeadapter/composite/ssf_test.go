@@ -14,7 +14,7 @@ import (
 var oldKinds = []composite.Kind{
 	composite.Clients, composite.AuthorizationCodes, composite.RefreshTokens,
 	composite.Grants, composite.Sessions, composite.PushedAuthRequests,
-	composite.Interactions, composite.ConsumedJTIs, composite.Users,
+	composite.Interactions, composite.ConsumedJTIs,
 	composite.InitialAccessTokens, composite.RegistrationAccessTokens,
 	composite.AccessTokens, composite.OpaqueAccessTokens,
 	composite.GrantRevocations, composite.Metadata, composite.DeviceCodes,

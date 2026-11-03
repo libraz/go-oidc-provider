@@ -35,6 +35,7 @@ func newFactory(now time.Time) contract.Factory {
 		s := inmem.New(inmem.WithClock(clock))
 		return contract.Backend{
 			Store: s,
+			Users: s.Users(),
 			Now:   clock.Now,
 			Advance: func(delta time.Duration) {
 				clock.now = clock.now.Add(delta)

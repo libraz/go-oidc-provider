@@ -689,6 +689,7 @@ func validBaseOptsWithStoreNoAuthn(tb testing.TB, st *inmem.Store) []op.Option {
 	return []op.Option{op.WithDefaults(
 		op.WithIssuer(validIssuer),
 		op.WithStore(st),
+		op.WithUserStore(st.Users()),
 		op.WithKeyset(validKeyset(tb)),
 		op.WithCookieKeys(newRandomCookieKey(tb)),
 	)}

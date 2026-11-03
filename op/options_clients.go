@@ -24,6 +24,11 @@ import (
 // commit can leave the batch applied, and the next build accepts it. Existing equivalent static clients are accepted unchanged;
 // metadata or secret differences return a configuration conflict rather than
 // overwriting an operator-managed record.
+//
+// The stored record, not the seed, is authoritative once written: after
+// editing a seed (a redirect URI, a rotated secret), run
+// [SyncStaticClients] with the new seeds as a deploy step before the
+// Provider starts, or [New] refuses the edit.
 // Stable since v1.0.
 func WithStaticClients(seeds ...ClientSeed) Option {
 	return optionFunc(func(c *config) error {

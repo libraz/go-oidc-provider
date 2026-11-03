@@ -710,8 +710,8 @@ func (s *Store) ConsumedJTIs() store.ConsumedJTIStore { return s.jtisImpl }
 
 // Users returns the [store.UserStore] handle. The adapter's UserStore
 // is read-only; embedders write to oidc_users through their own admin
-// plane. The OP does not read it when op.PrimaryPassword or
-// op.WithUserStore names another user store.
+// plane. It is not part of [store.Store]: pass it to op.WithUserStore, or
+// use [Store.UserPasswords] for PrimaryPassword.Store.
 func (s *Store) Users() store.UserStore { return s.usersImpl }
 
 // InitialAccessTokens returns the [store.InitialAccessTokenStore]

@@ -54,6 +54,10 @@ type Backend struct {
 	// transition-specific assertions.
 	Advance func(time.Duration)
 
+	// Users is the user store under test. It is not part of
+	// [store.Store]; a nil Users skips every user sub-test.
+	Users store.UserStore
+
 	// SeedUser installs a directory entry the password ceremony can
 	// resolve against, together with the username it authenticates under
 	// and its encoded password hash.

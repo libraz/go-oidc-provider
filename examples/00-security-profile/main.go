@@ -1,24 +1,22 @@
 //go:build example
 
-// Example 00 demonstrates [op.WithProfile] as a declaration: what a
-// security profile changes, and why declaring none is a different
-// thing from declaring the permissive one.
+// Example 00 demonstrates [op.WithProfile]: what a security profile
+// changes, and how to opt out of the OAuth 2.1 default.
 //
 // Two OPs run side by side in the same process with identical
 // options except for one line:
 //
-//   - :8080 — no profile declared. This is the OpenID Connect Core
-//     1.0 shape. OIDC Core predates RFC 7636, so a confidential
+//   - :8080 — op.WithProfile(profile.OIDCCore). The OpenID Connect
+//     Core 1.0 shape. OIDC Core predates RFC 7636, so a confidential
 //     client MAY omit code_challenge and the OP admits the request.
-//   - :8081 — op.WithProfile(profile.OAuth21). The OAuth 2.1 /
-//     RFC 9700 posture: PKCE is mandatory on every authorization-code
-//     request, and the same request is refused.
+//   - :8081 — op.WithProfile(profile.OAuth21), which is also what an
+//     OP with no WithProfile runs. The OAuth 2.1 / RFC 9700 posture:
+//     PKCE is mandatory on every authorization-code request, and the
+//     same request is refused.
 //
-// Both answers are spec-correct. That is the problem the profile
-// solves: without a declaration, "we admit legacy relying parties on
-// purpose" and "nobody ever thought about it" produce byte-identical
-// configurations. profile.OAuth21 is how a deployment says the
-// former in the type system, and op.New then holds it to that.
+// Both answers are spec-correct. profile.OIDCCore is how a
+// deployment states, in the type system, that it admits legacy
+// relying parties on purpose.
 //
 // Run with the example build tag:
 //
@@ -29,8 +27,8 @@
 // Each OP emits one "startup.profile" audit record at construction.
 // Both records print to stdout on boot; compare their extras:
 //
-//	"profiles": []          "pkce_required": false   ← :8080
-//	"profiles": ["baseline"] "pkce_required": true   ← :8081
+//	"profiles": ["oidc-core"] "pkce_required": false ← :8080
+//	"profiles": ["baseline"]  "pkce_required": true  ← :8081
 //
 // The record carries the resolved policy, not just the declaration —
 // which sender-constraint mechanism won, which client-auth methods
@@ -69,13 +67,13 @@
 //
 // # Choosing
 //
-// Declare profile.OAuth21 unless PKCE-incapable relying parties are
-// still connected. It costs nothing else: it caps no token lifetime,
-// restricts no client-authentication method, and requires neither PAR
-// nor sender-constrained tokens. Those belong to the FAPI profiles —
-// see 03-fapi2. During a migration, run without a profile and declare
-// it once the last legacy RP is gone; the startup record is how you
-// confirm the switch landed.
+// Leave the profile unset (profile.OAuth21) unless PKCE-incapable
+// relying parties are still connected. It costs nothing else: it caps
+// no token lifetime, restricts no client-authentication method, and
+// requires neither PAR nor sender-constrained tokens. Those belong to
+// the FAPI profiles — see 03-fapi2. During a migration, declare
+// profile.OIDCCore and drop it once the last legacy RP is gone; the
+// startup record is how you confirm the switch landed.
 //
 // PRODUCTION CAVEATS:
 //   - Keys: ephemeral; load from a vault / KMS in production.
@@ -102,8 +100,8 @@ import (
 )
 
 const (
-	unprofiledAddr = ":8080"
-	baselineAddr   = ":8081"
+	oidcCoreAddr = ":8080"
+	baselineAddr = ":8081"
 
 	clientID    = "profile-demo-rp"
 	redirectURI = "http://localhost:5173/cb"
@@ -119,29 +117,28 @@ func main() {
 	// the posture is readable before the first request arrives.
 	auditLogger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
 
-	unprofiled, err := buildProvider("http://127.0.0.1"+unprofiledAddr, auditLogger)
+	oidcCore, err := buildProvider("http://127.0.0.1"+oidcCoreAddr, auditLogger, op.WithProfile(profile.OIDCCore))
 	if err != nil {
-		log.Fatalf("unprofiled OP: %v", err)
+		log.Fatalf("oidc-core OP: %v", err)
 	}
-	// The single line that separates the two OPs.
 	baseline, err := buildProvider("http://127.0.0.1"+baselineAddr, auditLogger, op.WithProfile(profile.OAuth21))
 	if err != nil {
 		log.Fatalf("baseline OP: %v", err)
 	}
 
-	log.Printf("no profile declared  → http://127.0.0.1%s (admits a confidential client without PKCE)", unprofiledAddr)
+	log.Printf("profile.OIDCCore    → http://127.0.0.1%s (admits a confidential client without PKCE)", oidcCoreAddr)
 	log.Printf("profile.OAuth21     → http://127.0.0.1%s (refuses the same request)", baselineAddr)
 	log.Printf("demo user: username=%q password=%q", demoUsername, demoPassword)
 
 	errCh := make(chan error, 2)
-	go func() { errCh <- serve.Listen(unprofiledAddr, mount(unprofiled), unprofiled) }()
+	go func() { errCh <- serve.Listen(oidcCoreAddr, mount(oidcCore), oidcCore) }()
 	go func() { errCh <- serve.Listen(baselineAddr, mount(baseline), baseline) }()
 	log.Fatal(<-errCh)
 }
 
 // buildProvider assembles one OP. Every option is identical across
-// the two instances; the caller supplies the profile declaration (or
-// does not) through extra.
+// the two instances; the caller supplies the profile declaration
+// through extra.
 func buildProvider(issuer string, auditLogger *slog.Logger, extra ...op.Option) (*op.Provider, error) {
 	keys := devkeys.MustEphemeral("security-profile-" + issuer)
 

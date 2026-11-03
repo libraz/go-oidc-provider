@@ -21,15 +21,6 @@ func TestZeroArgPrivateNetworkOptions_AreIdempotent(t *testing.T) {
 	}
 }
 
-func TestWithAllowPrivateNetworkBackchannel_ConflictsWithBoolVariant(t *testing.T) {
-	t.Parallel()
-
-	_, err := newConfig([]Option{WithAllowPrivateNetworkBackchannel(), WithBackchannelAllowPrivateNetwork(true)})
-	if err == nil || !strings.Contains(err.Error(), "conflicts with prior") {
-		t.Fatalf("err = %v, want a slot conflict", err)
-	}
-}
-
 func TestWithDefaults_UIOptionsYieldToExplicitCounterpart(t *testing.T) {
 	t.Parallel()
 

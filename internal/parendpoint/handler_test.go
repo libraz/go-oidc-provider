@@ -15,6 +15,7 @@ import (
 	httptestutil "github.com/libraz/go-oidc-provider/internal/testutil/httptest"
 	"github.com/libraz/go-oidc-provider/op"
 	"github.com/libraz/go-oidc-provider/op/feature"
+	"github.com/libraz/go-oidc-provider/op/profile"
 	"github.com/libraz/go-oidc-provider/op/store"
 	"github.com/libraz/go-oidc-provider/op/testkit"
 )
@@ -41,12 +42,12 @@ type fixture struct {
 // newFixture builds a fixture pinned to a deterministic clock. The
 // 2026-04-26 anchor matches the existing test suites and the docs'
 // "today" baseline.
-func newFixture(tb testing.TB) *fixture {
+func newFixture(tb testing.TB, extra ...op.Option) *fixture {
 	tb.Helper()
 	clock := fixedClock{now: time.Date(2026, 4, 26, 12, 0, 0, 0, time.UTC)}
 	prov := testkit.NewProvider(tb,
 		testkit.WithClock(clock),
-		testkit.WithOptions(op.WithFeature(feature.PAR)),
+		testkit.WithOptions(append([]op.Option{op.WithFeature(feature.PAR)}, extra...)...),
 	)
 	return &fixture{
 		prov:     prov,
@@ -371,15 +372,10 @@ func TestHandler_RequestURIInBody_Rejected(t *testing.T) {
 	}
 }
 
-// TestHandler_MissingPKCE_AcceptedUnderNoProfile asserts that an
-// authorization request without code_challenge is accepted when no
-// profile is active. PKCE is profile-conditional: the library's
-// overall posture is OAuth 2.1 (PKCE good practice everywhere), but
-// the OpenID Connect Basic certification suite drives the OP without
-// PKCE because OIDC Core 1.0 predates RFC 7636. The test pins the
-// contract so a regression that re-instates the always-required gate
-// becomes loud.
-func TestHandler_MissingPKCE_AcceptedUnderNoProfile(t *testing.T) {
+// TestHandler_MissingPKCE_RejectedByDefault asserts that an authorization
+// request without code_challenge is refused when no profile is declared:
+// the implicit default is profile.OAuth21, which requires PKCE.
+func TestHandler_MissingPKCE_RejectedByDefault(t *testing.T) {
 	t.Parallel()
 
 	f := newFixture(t)
@@ -390,10 +386,29 @@ func TestHandler_MissingPKCE_AcceptedUnderNoProfile(t *testing.T) {
 	resp := f.post(t, form, client.ID, secret)
 	defer resp.Body.Close()
 
-	// The PAR endpoint accepts the request and persists a
-	// request_uri; the response is 201 Created with a
-	// request_uri / expires_in payload. Profile-mandated PKCE
-	// is covered separately by the FAPI 2.0 fixtures.
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("status=%d want 400", resp.StatusCode)
+	}
+	body := decodeJSON(t, resp)
+	if body["error"] != "invalid_request" {
+		t.Errorf("error=%v want invalid_request", body["error"])
+	}
+}
+
+// TestHandler_MissingPKCE_AcceptedUnderOIDCCore asserts that the explicit
+// profile.OIDCCore opt-out admits a confidential client without PKCE: OIDC
+// Core 1.0 predates RFC 7636.
+func TestHandler_MissingPKCE_AcceptedUnderOIDCCore(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t, op.WithProfile(profile.OIDCCore))
+	client, secret := f.confidentialClient(t)
+	form := goodAuthorizeForm(client.ID, client.RedirectURIs[0])
+	form.Del("code_challenge")
+	form.Del("code_challenge_method")
+	resp := f.post(t, form, client.ID, secret)
+	defer resp.Body.Close()
+
 	if resp.StatusCode != http.StatusCreated {
 		t.Fatalf("status=%d want 201", resp.StatusCode)
 	}

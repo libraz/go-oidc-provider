@@ -79,19 +79,13 @@ func WithDeviceCodeGrant(opts ...DeviceCodeOption) Option {
 // [WithDeviceVerificationURI], [WithDeviceCodeExpiry] and
 // [WithDeviceCodePollInterval] to [WithDeviceCodeGrant].
 //
-// A DeviceCodeOption is also an [Option], so one passed straight to [New]
-// still applies. That form is deprecated: it sets the value without
-// enabling the grant, which reads as if it did.
-//
 // Stable since v1.5.
 type DeviceCodeOption interface {
-	Option
 	applyDeviceCode(c *config) error
 }
 
 type deviceCodeOptionFunc func(*config) error
 
-func (f deviceCodeOptionFunc) apply(c *config) error           { return f(c) }
 func (f deviceCodeOptionFunc) applyDeviceCode(c *config) error { return f(c) }
 
 // WithDeviceVerificationURI overrides the verification URI advertised

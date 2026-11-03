@@ -92,7 +92,7 @@ func grantClosureFixture(
 	}
 	prov := testkit.NewProvider(tb,
 		testkit.WithClock(clock),
-		testkit.WithOptions(append([]op.Option{op.WithStore(decorated)}, opts...)...),
+		testkit.WithOptions(append([]op.Option{op.WithStore(decorated), op.WithUserStore(backing.Users())}, opts...)...),
 	)
 	prov.Store = backing
 	return &fixture{

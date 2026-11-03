@@ -187,16 +187,6 @@ type Deps struct {
 	// worker rather than shipping it inline — and safe for concurrent use.
 	AuditLogger *slog.Logger
 
-	// Audit is the structured audit-event sink used in preference to
-	// AuditLogger when both are set.
-	//
-	// Deprecated: the field's interface type takes a package-internal
-	// event type as its method argument, so no code outside this module
-	// can implement it and the field can only be assigned from within
-	// the library. Embedders wire AuditLogger instead; it carries the
-	// same device-code events.
-	Audit audit.Emitter
-
 	// AccessTokens is the per-JTI JWT access-token registry [Revoke]
 	// uses under [store.RevocationStrategyJTIRegistry], and the fallback
 	// cascade used when GrantRevocations is absent during migration.
@@ -250,6 +240,10 @@ type Deps struct {
 	// The pre-bound record APIs do not consult this limiter and retain their
 	// existing per-record strike contract.
 	AttemptLimiter AttemptLimiter
+
+	// audit is an in-process sink that takes precedence over AuditLogger;
+	// only the package's own tests set it.
+	audit audit.Emitter
 
 	limiterMu sync.Mutex
 	limiter   AttemptLimiter
@@ -461,8 +455,8 @@ func (d *Deps) auditEmitter() audit.Emitter {
 	if d == nil {
 		return audit.Discard()
 	}
-	if d.Audit != nil {
-		return d.Audit
+	if d.audit != nil {
+		return d.audit
 	}
 	if d.AuditLogger == nil {
 		return audit.Discard()

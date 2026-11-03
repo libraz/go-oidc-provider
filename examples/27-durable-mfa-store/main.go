@@ -198,7 +198,7 @@ func run() error {
 	}
 
 	flow := op.LoginFlow{
-		Primary: op.PrimaryPassword{Store: storage.Users().(store.UserPasswordStore)},
+		Primary: op.PrimaryPassword{Store: storage.UserPasswords()},
 		Rules: []op.Rule{
 			op.RuleAlways(op.StepTOTP{Store: totpStore, EncryptionKey: totpKey}),
 		},

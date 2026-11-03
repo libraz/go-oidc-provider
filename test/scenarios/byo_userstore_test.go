@@ -42,8 +42,8 @@ const (
 // busRecorder wraps a delegate store.UserStore (which may be nil to
 // always return store.ErrNotFound) and counts every FindBySubject
 // invocation. The same recorder type is used by every BUS-NNN row to
-// observe whether the OP actually reached store.Users().FindBySubject
-// at each call site.
+// observe whether the OP actually reached the user store's
+// FindBySubject at each call site.
 type busRecorder struct {
 	delegate store.UserStore
 	calls    atomic.Int32
@@ -67,20 +67,8 @@ func (r *busRecorder) FindBySubject(ctx context.Context, sub string) (*store.Use
 	return r.delegate.FindBySubject(ctx, sub)
 }
 
-// busHybridStore is the embedding wrapper the BUS rows exercise. It
-// embeds an aggregate inmem.Store and shadows Users() with a
-// busRecorder, mirroring the pattern an embedder uses to plug an
-// existing users table into the OP without forking the rest of the
-// substores.
-type busHybridStore struct {
-	*inmem.Store
-	users store.UserStore
-}
-
-func (h *busHybridStore) Users() store.UserStore { return h.users }
-
 // busFixture bundles the testkit Provider, the embedder-side aggregate
-// store (the same instance the hybrid wraps), the recorder, and the
+// store (the same instance the recorder reads through), the recorder, and the
 // registered client so the per-row tests can drive flows without
 // repeating wiring.
 type busFixture struct {
@@ -94,9 +82,8 @@ func newBUSFixture(t *testing.T, opts ...op.Option) *busFixture {
 	t.Helper()
 	base := inmem.New()
 	rec := &busRecorder{delegate: base.Users()}
-	hybrid := &busHybridStore{Store: base, users: rec}
 
-	full := append([]op.Option{op.WithStore(hybrid)}, opts...)
+	full := append([]op.Option{op.WithStore(base), op.WithUserStore(rec)}, opts...)
 	tk := testkit.NewProvider(t, testkit.WithOptions(full...))
 
 	hash, err := op.HashClientSecret(busClientSecret)
@@ -204,8 +191,8 @@ func claimsRequestExtra(tb testing.TB, payload any) url.Values {
 }
 
 // TestScenario_BUS_001_UserInfoCallsStoreUsers checks that a /userinfo
-// call routes through store.Users().FindBySubject on the value passed
-// to op.WithStore — there is no internal claim cache that would let
+// call routes through FindBySubject on the value passed to
+// op.WithUserStore — there is no internal claim cache that would let
 // the OP short-circuit the lookup.
 //
 // Spec: OIDC Core §5.3.
@@ -243,7 +230,7 @@ func TestScenario_BUS_001_UserInfoCallsStoreUsers(t *testing.T) {
 
 // TestScenario_BUS_002_IDTokenAssemblyCallsStoreUsers checks that
 // projecting a §5.5 "claims" payload addressed to the id_token at the
-// token endpoint routes through store.Users().FindBySubject. Standard
+// token endpoint routes through the user store's FindBySubject. Standard
 // id_token claims are not exercised here — the library issues those
 // directly.
 //
@@ -278,20 +265,18 @@ func TestScenario_BUS_002_IDTokenAssemblyCallsStoreUsers(t *testing.T) {
 }
 
 // TestScenario_BUS_003_EmbeddingOverrideShadowsBaseUsers checks that
-// when an aggregate store.Store is embedded by a wrapper with its own
-// Users() method, the OP observes the wrapper's override at every
-// call site that reads end-user claims. The base store's Users() is
-// never reached.
+// the store.UserStore passed to op.WithUserStore is the one the OP
+// reads at every call site that reads end-user claims, whatever the
+// aggregate store passed to op.WithStore holds. The aggregate's own
+// users are never reached.
 //
 // Spec: implementation contract.
 func TestScenario_BUS_003_EmbeddingOverrideShadowsBaseUsers(t *testing.T) {
 	t.Parallel()
 	base := inmem.New()
-	baseRecorder := &busRecorder{delegate: base.Users()}
 	override := &busRecorder{delegate: base.Users()}
-	hybrid := &busHybridStore{Store: base, users: override}
 
-	tk := testkit.NewProvider(t, testkit.WithOptions(op.WithStore(hybrid)))
+	tk := testkit.NewProvider(t, testkit.WithOptions(op.WithStore(base), op.WithUserStore(override)))
 
 	hash, err := op.HashClientSecret(busClientSecret)
 	if err != nil {
@@ -338,15 +323,12 @@ func TestScenario_BUS_003_EmbeddingOverrideShadowsBaseUsers(t *testing.T) {
 		t.Fatalf("/userinfo status=%d", status)
 	}
 	if override.calls.Load() == 0 {
-		t.Error("override Users() never reached")
-	}
-	if baseRecorder.calls.Load() != 0 {
-		t.Errorf("base recorder reached %d times — embedding shadow leaked", baseRecorder.calls.Load())
+		t.Error("WithUserStore value never reached")
 	}
 }
 
 // TestScenario_BUS_004_UserInfoNotFoundReturnsInvalidToken checks that
-// when store.Users().FindBySubject returns store.ErrNotFound at the
+// when the user store's FindBySubject returns store.ErrNotFound at the
 // /userinfo endpoint, the OP responds with 401 + WWW-Authenticate
 // error="invalid_token" — never 500.
 //
@@ -565,21 +547,20 @@ func TestScenario_BUS_009_TxInterfaceDoesNotExposeUsers(t *testing.T) {
 }
 
 // TestScenario_BUS_010_PrimaryPasswordStoreIndependentOfUsers checks
-// that op.PrimaryPassword{Store: A} and Store.Users() = B are
+// that op.PrimaryPassword{Store: A} and op.WithUserStore(B) are
 // accepted by op.New as independent values: the library does NOT
 // require the password lookup store to be the same instance as the
-// aggregate Users() backend, as long as both honour the contract for
-// their own subject space.
+// claim source, as long as both honour the contract for their own
+// subject space.
 //
 // Spec: implementation contract.
 func TestScenario_BUS_010_PrimaryPasswordStoreIndependentOfUsers(t *testing.T) {
 	t.Parallel()
 	primaryStore := inmem.New() // backs PrimaryPassword.Store
-	usersBacking := inmem.New() // backs aggregate store.Users() via embedding
-	hybrid := &busHybridStore{Store: usersBacking, users: usersBacking.Users()}
+	usersBacking := inmem.New() // backs the claim source passed to WithUserStore
 
-	if primaryStore.UserPasswords() == hybrid.Users() {
-		t.Fatal("primary and aggregate user stores accidentally point at the same instance")
+	if primaryStore.UserPasswords() == usersBacking.Users() {
+		t.Fatal("primary and claim-source user stores accidentally point at the same instance")
 	}
 
 	// op.New is invoked directly (not via testkit.NewProvider) because
@@ -590,7 +571,8 @@ func TestScenario_BUS_010_PrimaryPasswordStoreIndependentOfUsers(t *testing.T) {
 	cookieKey := testkit.NewCookieKey(t)
 	provider, err := op.New(
 		op.WithIssuer(testkit.DefaultIssuer),
-		op.WithStore(hybrid),
+		op.WithStore(usersBacking),
+		op.WithUserStore(usersBacking.Users()),
 		op.WithKeyset(op.Keyset{signKey}),
 		op.WithCookieKeys(cookieKey),
 		op.WithLoginFlow(op.LoginFlow{
@@ -601,7 +583,7 @@ func TestScenario_BUS_010_PrimaryPasswordStoreIndependentOfUsers(t *testing.T) {
 		t.Fatalf("op.New: %v", err)
 	}
 	if provider == nil {
-		t.Fatal("op.New returned nil Provider despite independent password / aggregate user stores")
+		t.Fatal("op.New returned nil Provider despite independent password / claim-source user stores")
 	}
 }
 
@@ -630,25 +612,19 @@ func TestScenario_BUS_011_EmptyClaimsYieldsBareSubResponse(t *testing.T) {
 }
 
 // TestScenario_BUS_012_CompositeUsersRouteEquivalentToEmbedding checks
-// that when an embedder routes Users via composite.With(Users, b)
-// where b implements store.Store, the OP reads end-user claims from
-// b.Users() at the same call sites BUS-001 / BUS-002 cover. Composite
-// routing and the embedding-wrapper pattern are observationally
-// equivalent.
+// that when the aggregate store is a composite, which routes no user
+// records, the store.UserStore passed to op.WithUserStore is read at the
+// same call sites BUS-001 / BUS-002 cover.
 //
 // Spec: implementation contract.
 func TestScenario_BUS_012_CompositeUsersRouteEquivalentToEmbedding(t *testing.T) {
 	t.Parallel()
 	primary := inmem.New() // owns Clients / AuthorizationCodes / Sessions / ...
-	users := inmem.New()   // hosts Users only via composite routing
+	users := inmem.New()   // hosts the user records only
 
 	rec := &busRecorder{delegate: users.Users()}
-	usersHybrid := &busHybridStore{Store: users, users: rec}
 
-	routed, err := composite.New(
-		composite.WithDefault(primary),
-		composite.With(composite.Users, usersHybrid),
-	)
+	routed, err := composite.New(composite.WithDefault(primary))
 	if err != nil {
 		t.Fatalf("composite.New: %v", err)
 	}
@@ -674,7 +650,7 @@ func TestScenario_BUS_012_CompositeUsersRouteEquivalentToEmbedding(t *testing.T)
 		Claims:  map[string]any{"email": "alice@example.test"},
 	})
 
-	tk := testkit.NewProvider(t, testkit.WithOptions(op.WithStore(routed)))
+	tk := testkit.NewProvider(t, testkit.WithOptions(op.WithStore(routed), op.WithUserStore(rec)))
 
 	pkce := scenariokit.NewPKCEPair("")
 	flow := scenariokit.RunCodeFlow(t, tk, busSubject, scenariokit.AuthorizeParams{
@@ -700,6 +676,6 @@ func TestScenario_BUS_012_CompositeUsersRouteEquivalentToEmbedding(t *testing.T)
 		t.Errorf("/userinfo email=%v want alice@example.test", body["email"])
 	}
 	if rec.calls.Load() == 0 {
-		t.Error("composite-routed Users() never called")
+		t.Error("WithUserStore value never called")
 	}
 }

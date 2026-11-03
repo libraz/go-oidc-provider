@@ -431,6 +431,7 @@ func TestIntegration_UserInfo_CustomScopeClaimsAreWired(t *testing.T) {
 	provider, err := op.New(
 		op.WithIssuer(validIssuer),
 		op.WithStore(st),
+		op.WithUserStore(st.Users()),
 		op.WithKeyset(op.Keyset{signKey}),
 		op.WithCookieKeys(newRandomCookieKey(t)),
 		fixtureAuthenticator(),
@@ -663,6 +664,7 @@ func TestIntegration_Discovery_DCREnabled_AdvertisesRegistrationEndpoint(t *test
 	provider, err := op.New(
 		op.WithIssuer(validIssuer),
 		op.WithStore(inmem.New()),
+		op.WithUserStore(inmem.New().Users()),
 		op.WithKeyset(validKeyset(t)),
 		op.WithCookieKeys(newRandomCookieKey(t)),
 		fixtureAuthenticator(),

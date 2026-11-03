@@ -52,16 +52,6 @@ type Endpoints struct {
 	// "/interaction".
 	Interaction string
 
-	// Session overrides the SPA session prefix. Default: "/session".
-	//
-	// Deprecated: the [Provider] mounts no handler under this prefix
-	// and the discovery document does not advertise it. The path is
-	// validated and reserved against the OP's other endpoint paths, so
-	// overriding it only changes which paths [New] reports as
-	// colliding. Session state is served under Interaction — or, when
-	// [WithSPAUI] is configured, under [SPAUI.LoginMount].
-	Session string
-
 	// Register overrides the RFC 7591 Dynamic Client Registration
 	// endpoint. Default: "/register". Only mounted when the
 	// DynamicRegistration feature is enabled via
@@ -138,7 +128,6 @@ func defaultEndpoints() Endpoints {
 		Revoke:              "/revoke",
 		PAR:                 "/par",
 		Interaction:         "/interaction",
-		Session:             "/session",
 		Register:            "/register",
 		DeviceAuthorization: "/device_authorization",
 		Backchannel:         "/bc-authorize",
@@ -164,7 +153,6 @@ func (e Endpoints) merge(override Endpoints) Endpoints {
 		Revoke:              pickEndpoint(override.Revoke, e.Revoke),
 		PAR:                 pickEndpoint(override.PAR, e.PAR),
 		Interaction:         pickEndpoint(override.Interaction, e.Interaction),
-		Session:             pickEndpoint(override.Session, e.Session),
 		Register:            pickEndpoint(override.Register, e.Register),
 		DeviceAuthorization: pickEndpoint(override.DeviceAuthorization, e.DeviceAuthorization),
 		Backchannel:         pickEndpoint(override.Backchannel, e.Backchannel),
@@ -195,7 +183,6 @@ func (e *Endpoints) fields() []endpointField {
 		{"Revoke", &e.Revoke},
 		{"PAR", &e.PAR},
 		{"Interaction", &e.Interaction},
-		{"Session", &e.Session},
 		{"Register", &e.Register},
 		{"DeviceAuthorization", &e.DeviceAuthorization},
 		{"Backchannel", &e.Backchannel},

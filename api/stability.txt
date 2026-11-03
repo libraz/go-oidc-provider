@@ -187,7 +187,6 @@ github.com/libraz/go-oidc-provider/op	WithAllowPrivateNetworkSharedSignals	v1.5
 github.com/libraz/go-oidc-provider/op	WithAuditLogger	v1.0
 github.com/libraz/go-oidc-provider/op	WithAuthnLockoutStore	v1.0
 github.com/libraz/go-oidc-provider/op	WithAuthorizationDetailTypes	v1.0
-github.com/libraz/go-oidc-provider/op	WithBackchannelAllowPrivateNetwork	v1.0
 github.com/libraz/go-oidc-provider/op	WithBackchannelFanOutBudget	v1.1
 github.com/libraz/go-oidc-provider/op	WithBackchannelLogoutHTTPClient	v1.0
 github.com/libraz/go-oidc-provider/op	WithBackchannelLogoutTimeout	v1.0
@@ -281,6 +280,7 @@ github.com/libraz/go-oidc-provider/op/interaction	PromptTypeChooseFactor	v1.5
 github.com/libraz/go-oidc-provider/op/passkeykit	*	v1.0
 github.com/libraz/go-oidc-provider/op/profile	MaxRequestObjectAge	v1.1
 github.com/libraz/go-oidc-provider/op/profile	OAuth21	v1.5
+github.com/libraz/go-oidc-provider/op/profile	OIDCCore	v1.5
 github.com/libraz/go-oidc-provider/op/recoverykit	*	v1.0
 github.com/libraz/go-oidc-provider/op/recoverykit	Clock	v1.1
 github.com/libraz/go-oidc-provider/op/recoverykit	Kit	v1.1

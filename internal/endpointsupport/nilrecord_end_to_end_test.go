@@ -209,8 +209,10 @@ func newNilRecordFixture(t *testing.T, broken brokenSubstores, extra ...op.Optio
 	clock := nilRecordClock{}
 	backing := inmem.New(inmem.WithClock(clock))
 	usersGone := &atomic.Bool{}
+	decorated := nilRecordStore{Store: backing, broken: broken, usersGone: usersGone}
 	opts := append([]op.Option{
-		op.WithStore(nilRecordStore{Store: backing, broken: broken, usersGone: usersGone}),
+		op.WithStore(decorated),
+		op.WithUserStore(decorated.Users()),
 		op.WithClock(clock),
 	}, extra...)
 	provider, err := op.New(testkit.MinimalOptions(t, opts...)...)

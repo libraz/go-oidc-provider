@@ -56,6 +56,7 @@ func TestStoreContract(t *testing.T) {
 		s.now = func() time.Time { return contract.Reference }
 		return contract.Backend{
 			Store: s,
+			Users: s.users,
 			Now:   s.now,
 		}
 	})
@@ -671,10 +672,7 @@ func TestUsers(t *testing.T) {
 	if err := seedUser(ctx, db); err != nil {
 		t.Fatalf("seedUser: %v", err)
 	}
-	us, ok := s.Users().(store.UserPasswordStore)
-	if !ok {
-		t.Fatal("Users() does not implement store.UserPasswordStore")
-	}
+	var us store.UserPasswordStore = s.users
 	byName, err := us.FindByUsername(ctx, demoUsername)
 	if err != nil {
 		t.Fatalf("FindByUsername: %v", err)

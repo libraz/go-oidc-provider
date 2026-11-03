@@ -142,9 +142,8 @@ func captureStartupProfile(t *testing.T, extra ...op.Option) startupRecord {
 }
 
 // TestAuditStartupProfile_UnprofiledDeployment pins the record an OP
-// with no declared profile emits. The permissive answers are the
-// interesting part: this is exactly the configuration whose posture
-// could not previously be read off the audit stream.
+// with no declared profile emits: the implicit OAuth 2.1 default reads
+// exactly like an explicit declaration.
 func TestAuditStartupProfile_UnprofiledDeployment(t *testing.T) {
 	t.Parallel()
 
@@ -152,9 +151,9 @@ func TestAuditStartupProfile_UnprofiledDeployment(t *testing.T) {
 	if rec.Audit != "true" {
 		t.Errorf("audit=%q want \"true\" so shippers can route the record", rec.Audit)
 	}
-	assertStrings(t, rec, "profiles", nil)
+	assertStrings(t, rec, "profiles", []string{"baseline"})
 	assertStrings(t, rec, "grants", []string{"authorization_code", "refresh_token"})
-	assertBool(t, rec, "pkce_required", false)
+	assertBool(t, rec, "pkce_required", true)
 	assertBool(t, rec, "par_required", false)
 	if got := rec.Extras["sender_constrained"]; got != "" {
 		t.Errorf("sender_constrained=%v want empty (bearer tokens are legal)", got)
@@ -339,42 +338,40 @@ func assertBool(t *testing.T, rec startupRecord, key string, want bool) {
 	}
 }
 
-// TestNew_WarnsWhenNoProfileRequiresPKCE pins the one start-up warning an
-// unprofiled authorization-code OP owes: a confidential client may redeem a
-// code without PKCE, and nothing else in the option list says so.
-func TestNew_WarnsWhenNoProfileRequiresPKCE(t *testing.T) {
+// TestAuditStartupProfile_OIDCCoreDeclaration pins that the explicit
+// opt-out reports its own name and no PKCE mandate.
+func TestAuditStartupProfile_OIDCCoreDeclaration(t *testing.T) {
 	t.Parallel()
 
-	const msg = "no security profile requires PKCE"
-	for _, tc := range []struct {
-		name string
-		opts []op.Option
-		want bool
-	}{
-		{"no profile", nil, true},
-		{"baseline", []op.Option{op.WithProfile(profile.OAuth21)}, false},
-		{"client_credentials only", []op.Option{op.WithGrants(grant.ClientCredentials)}, false},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
+	rec := captureStartupProfile(t, op.WithProfile(profile.OIDCCore))
+	assertStrings(t, rec, "profiles", []string{"oidc-core"})
+	assertBool(t, rec, "pkce_required", false)
+}
+
+// TestNew_OIDCCoreRejectsCompanionProfile pins that OIDCCore stands alone.
+func TestNew_OIDCCoreRejectsCompanionProfile(t *testing.T) {
+	t.Parallel()
+
+	for _, other := range []profile.Profile{profile.OAuth21, profile.FAPI2Baseline} {
+		t.Run(other.String(), func(t *testing.T) {
 			t.Parallel()
-			var buf bytes.Buffer
-			opts := append(validBaseOptsWithInmem(t), op.WithLogger(slog.New(slog.NewJSONHandler(&buf, nil))))
-			if _, err := op.New(append(opts, tc.opts...)...); err != nil {
-				t.Fatalf("op.New: %v", err)
+			_, err := op.New(append(validBaseOptsWithInmem(t),
+				op.WithProfile(profile.OIDCCore), op.WithProfile(other))...)
+			if err == nil {
+				t.Fatal("op.New accepted OIDCCore with another profile")
 			}
-			var found bool
-			for _, line := range bytes.Split(bytes.TrimSpace(buf.Bytes()), []byte("\n")) {
-				var rec map[string]any
-				if json.Unmarshal(line, &rec) == nil && strings.Contains(rec["msg"].(string), msg) {
-					found = true
-					if rec["level"] != "WARN" {
-						t.Fatalf("level = %v, want WARN", rec["level"])
-					}
+			for _, want := range []string{"profile.OIDCCore", profileOptionLabel(other)} {
+				if !strings.Contains(err.Error(), want) {
+					t.Errorf("error %q does not name %s", err, want)
 				}
-			}
-			if found != tc.want {
-				t.Fatalf("warning present = %v, want %v; log:\n%s", found, tc.want, buf.String())
 			}
 		})
 	}
+}
+
+func profileOptionLabel(p profile.Profile) string {
+	if p == profile.OAuth21 {
+		return "profile.OAuth21"
+	}
+	return "profile.FAPI2Baseline"
 }

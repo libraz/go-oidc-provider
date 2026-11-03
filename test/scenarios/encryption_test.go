@@ -1624,9 +1624,11 @@ func TestScenario_ENC_140_KidDisjointSigEncSeparation(t *testing.T) {
 	disjointEnc := scenariokit.NewOPEncryptionKey(t, "enc-disjoint")
 
 	baseOpts := func(sigKID string) []op.Option {
+		st := inmem.New()
 		return []op.Option{
 			op.WithIssuer(testkit.DefaultIssuer),
-			op.WithStore(inmem.New()),
+			op.WithStore(st),
+			op.WithUserStore(st.Users()),
 			op.WithKeyset(op.Keyset{testkit.NewSigningKey(t, sigKID)}),
 			op.WithCookieKeys(testkit.NewCookieKey(t)),
 			op.WithInteractionDriver(testkit.AutoConsentDriver{}),

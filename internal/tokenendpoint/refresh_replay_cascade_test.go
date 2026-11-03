@@ -113,6 +113,7 @@ func newReplayCascadeFixture(tb testing.TB, now *time.Time) *replayCascadeFixtur
 		testkit.WithClock(clock),
 		testkit.WithOptions(
 			op.WithStore(decorated),
+			op.WithUserStore(backing.Users()),
 			op.WithAuditLogger(capture.logger()),
 		),
 	)

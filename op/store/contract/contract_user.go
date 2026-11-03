@@ -15,7 +15,9 @@ import (
 // the write path through their own admin plane — so everything past the
 // absent-subject case needs a directory entry the harness cannot create
 // on its own. [Backend.SeedUser] is that hook; the sub-tests that need
-// it skip when a backend does not supply one.
+// it skip when a backend does not supply one. The user store is not part
+// of [store.Store]; a backend passes it as [Backend.Users] and every case
+// here skips when it is nil.
 
 //nolint:gochecknoglobals // sub-test table; declared once so [Run] can iterate.
 var userStoreCases = []subtest{
@@ -31,9 +33,20 @@ var userStoreCases = []subtest{
 	{"UpdatePasswordHashUnchanged", userPasswordUpdateHashUnchanged},
 }
 
-func userStoreFindMissing(t *testing.T, f Factory) {
+// usersBackend builds the backend and skips when it supplies no user
+// store.
+func usersBackend(t *testing.T, f Factory) Backend {
+	t.Helper()
 	b := f(t)
-	_, err := b.Store.Users().FindBySubject(context.Background(), "contract-absent-subject")
+	if b.Users == nil {
+		t.Skip("backend supplies no Users store")
+	}
+	return b
+}
+
+func userStoreFindMissing(t *testing.T, f Factory) {
+	b := usersBackend(t, f)
+	_, err := b.Users.FindBySubject(context.Background(), "contract-absent-subject")
 	if !errors.Is(err, store.ErrNotFound) {
 		t.Fatalf("FindBySubject missing: want ErrNotFound, got %v", err)
 	}
@@ -43,7 +56,7 @@ func userStoreFindMissing(t *testing.T, f Factory) {
 // backend alongside it, skipping when the backend cannot seed.
 func seededUserBackend(t *testing.T, f Factory) (Backend, *store.User, string, []byte) {
 	t.Helper()
-	b := f(t)
+	b := usersBackend(t, f)
 	if b.SeedUser == nil {
 		t.Skip("backend supplies no SeedUser hook")
 	}
@@ -60,7 +73,7 @@ func seededUserBackend(t *testing.T, f Factory) (Backend, *store.User, string, [
 
 func userStoreFindBySubject(t *testing.T, f Factory) {
 	b, want, _, _ := seededUserBackend(t, f)
-	got, err := b.Store.Users().FindBySubject(context.Background(), want.Subject)
+	got, err := b.Users.FindBySubject(context.Background(), want.Subject)
 	if err != nil {
 		t.Fatalf("FindBySubject: %v", err)
 	}
@@ -75,9 +88,9 @@ func userStoreFindBySubject(t *testing.T, f Factory) {
 	}
 }
 
-func requireUserPasswords(t *testing.T, s store.Store) store.UserPasswordStore {
+func requireUserPasswords(t *testing.T, users store.UserStore) store.UserPasswordStore {
 	t.Helper()
-	return requireCapability[store.UserPasswordStore](t, s.Users())
+	return requireCapability[store.UserPasswordStore](t, users)
 }
 
 // userPasswordFindByUsername pins the invariant that matters most in
@@ -86,7 +99,7 @@ func requireUserPasswords(t *testing.T, s store.Store) store.UserPasswordStore {
 // identifier and issue tokens under another.
 func userPasswordFindByUsername(t *testing.T, f Factory) {
 	b, want, username, _ := seededUserBackend(t, f)
-	passwords := requireUserPasswords(t, b.Store)
+	passwords := requireUserPasswords(t, b.Users)
 
 	got, err := passwords.FindByUsername(context.Background(), username)
 	if err != nil {
@@ -111,11 +124,11 @@ func userPasswordFindByUsername(t *testing.T, f Factory) {
 // provisioning the second fails with a duplicate key on that engine
 // alone.
 func userPasswordFindByUsernameVerbatim(t *testing.T, f Factory) {
-	b := f(t)
+	b := usersBackend(t, f)
 	if b.SeedUser == nil {
 		t.Skip("backend supplies no SeedUser hook")
 	}
-	passwords := requireUserPasswords(t, b.Store)
+	passwords := requireUserPasswords(t, b.Users)
 	ctx := context.Background()
 	hash := []byte("$argon2id$v=19$m=65536,t=3,p=4$c29tZXNhbHQ$Y29udHJhY3RoYXNo")
 
@@ -154,7 +167,7 @@ func userPasswordFindByUsernameVerbatim(t *testing.T, f Factory) {
 
 func userPasswordFindByUsernameMissing(t *testing.T, f Factory) {
 	b, _, _, _ := seededUserBackend(t, f)
-	passwords := requireUserPasswords(t, b.Store)
+	passwords := requireUserPasswords(t, b.Users)
 
 	// An unknown username must not resolve to a placeholder: the
 	// orchestrator distinguishes "unknown user" from "wrong password"
@@ -167,7 +180,7 @@ func userPasswordFindByUsernameMissing(t *testing.T, f Factory) {
 
 func userPasswordReadHash(t *testing.T, f Factory) {
 	b, user, _, want := seededUserBackend(t, f)
-	passwords := requireUserPasswords(t, b.Store)
+	passwords := requireUserPasswords(t, b.Users)
 
 	got, err := passwords.ReadPasswordHash(context.Background(), user.Subject)
 	if err != nil {
@@ -182,7 +195,7 @@ func userPasswordReadHash(t *testing.T, f Factory) {
 
 func userPasswordReadHashMissing(t *testing.T, f Factory) {
 	b, _, _, _ := seededUserBackend(t, f)
-	passwords := requireUserPasswords(t, b.Store)
+	passwords := requireUserPasswords(t, b.Users)
 
 	_, err := passwords.ReadPasswordHash(context.Background(), "contract-absent-subject")
 	if !errors.Is(err, store.ErrNotFound) {
@@ -192,9 +205,9 @@ func userPasswordReadHashMissing(t *testing.T, f Factory) {
 
 // requirePasswordHashUpdater skips the current test when the user store
 // does not implement [store.UserPasswordHashUpdater].
-func requirePasswordHashUpdater(t *testing.T, s store.Store) store.UserPasswordHashUpdater {
+func requirePasswordHashUpdater(t *testing.T, users store.UserStore) store.UserPasswordHashUpdater {
 	t.Helper()
-	return requireCapability[store.UserPasswordHashUpdater](t, s.Users())
+	return requireCapability[store.UserPasswordHashUpdater](t, users)
 }
 
 // rehashedPassword is the replacement hash the updater cases write.
@@ -205,8 +218,8 @@ const rehashedPassword = "$argon2id$v=19$m=65536,t=3,p=4$bmV3c2FsdA$cmVoYXNoZWQ"
 // login verifies against argon2id rather than the legacy scheme.
 func userPasswordUpdateHash(t *testing.T, f Factory) {
 	b, user, _, _ := seededUserBackend(t, f)
-	updater := requirePasswordHashUpdater(t, b.Store)
-	passwords := requireUserPasswords(t, b.Store)
+	updater := requirePasswordHashUpdater(t, b.Users)
+	passwords := requireUserPasswords(t, b.Users)
 	ctx := context.Background()
 
 	if err := updater.UpdatePasswordHash(ctx, user.Subject, []byte(rehashedPassword)); err != nil {
@@ -225,8 +238,8 @@ func userPasswordUpdateHash(t *testing.T, f Factory) {
 // an unknown subject, which must not create a credential.
 func userPasswordUpdateHashMissing(t *testing.T, f Factory) {
 	b, _, _, _ := seededUserBackend(t, f)
-	updater := requirePasswordHashUpdater(t, b.Store)
-	passwords := requireUserPasswords(t, b.Store)
+	updater := requirePasswordHashUpdater(t, b.Users)
+	passwords := requireUserPasswords(t, b.Users)
 	ctx := context.Background()
 
 	err := updater.UpdatePasswordHash(ctx, "contract-absent-subject", []byte(rehashedPassword))
@@ -244,7 +257,7 @@ func userPasswordUpdateHashMissing(t *testing.T, f Factory) {
 // matched rows.
 func userPasswordUpdateHashUnchanged(t *testing.T, f Factory) {
 	b, user, _, hash := seededUserBackend(t, f)
-	updater := requirePasswordHashUpdater(t, b.Store)
+	updater := requirePasswordHashUpdater(t, b.Users)
 
 	if err := updater.UpdatePasswordHash(context.Background(), user.Subject, hash); err != nil {
 		t.Fatalf("UpdatePasswordHash with the stored hash: %v", err)

@@ -6,7 +6,6 @@ import (
 	"html/template"
 	"log/slog"
 	"net/http"
-	"net/http/httptest"
 	"strings"
 	"testing"
 
@@ -394,48 +393,6 @@ func TestWithSPAUI_AcceptsExistingStaticDir(t *testing.T) {
 	}
 	if provider == nil {
 		t.Fatal("expected non-nil Provider")
-	}
-}
-
-// TestWithSPAUI_ConsentAndLogoutMountsAreInert pins what the deprecation
-// notes on SPAUI.ConsentMount / SPAUI.LogoutMount state: the two fields
-// are validated and then dropped. Nothing is mounted at either path, and
-// neither reserves a route — a value that would collide with a protocol
-// endpoint if it were reserved still boots. The pin exists so the fields
-// cannot quietly acquire behaviour that contradicts their documentation,
-// in either direction.
-func TestWithSPAUI_ConsentAndLogoutMountsAreInert(t *testing.T) {
-	t.Parallel()
-
-	provider, err := op.New(append(validBaseOpts(t),
-		op.WithSPAUI(op.SPAUI{
-			LoginMount:   "/login",
-			ConsentMount: "/consent",
-			LogoutMount:  "/logout",
-		}),
-	)...)
-	if err != nil {
-		t.Fatalf("op.New with consent / logout mounts: %v", err)
-	}
-	for _, path := range []string{"/consent", "/logout"} {
-		req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, path, http.NoBody)
-		rec := httptest.NewRecorder()
-		provider.ServeHTTP(rec, req)
-		if rec.Code != http.StatusNotFound {
-			t.Errorf("GET %s = %d, want 404: no handler is mounted for the deprecated mount", path, rec.Code)
-		}
-	}
-
-	// The token endpoint's path proves the absence of a route
-	// reservation: WithSPAUI.LoginMount would be rejected for the same
-	// value.
-	if _, err := op.New(append(validBaseOpts(t),
-		op.WithSPAUI(op.SPAUI{
-			LoginMount:   "/login",
-			ConsentMount: "/oidc/token",
-		}),
-	)...); err != nil {
-		t.Errorf("op.New with ConsentMount on a protocol endpoint path: %v; the field reserves no route", err)
 	}
 }
 

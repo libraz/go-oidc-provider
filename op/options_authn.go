@@ -136,17 +136,8 @@ const mfaEncryptionKeyLen = 32
 // Automatic wiring — when this option is not set and the [WithStore]
 // value implements [store.AuthnLockoutProvider] (an AuthnLockouts()
 // [store.AuthnLockoutStore] method; the in-memory, SQL and DynamoDB
-// adapters do, and composite.Store forwards its Users backend's), that
+// adapters do, and composite.Store forwards the backend routed for its AuthnLockouts kind), that
 // store is used. An explicit option always wins.
-//
-// The attachment is to the [Step], not to the factor. An authenticator
-// built directly — [NewEmailOTPAuthenticator] with an
-// [EmailOTPConfig] — and wrapped in [ExternalStep] does NOT inherit the
-// counter from this option, because the option never sees it. Set [EmailOTPConfig.LockoutStore] to the same store to close
-// that gap. Leaving it nil is a silent hole rather than an error: the
-// factor still enforces its own per-record FailedCount, so it looks
-// rate-limited under test while an attacker who has exhausted their
-// TOTP budget pivots to email OTP for a fresh one.
 //
 // Backends MUST implement the versioned atomic-transition contract on
 // [store.AuthnLockoutStore.CompareAndSwap]. The library uses that one
@@ -265,9 +256,7 @@ func WithInteractions(i ...Interaction) Option {
 // server (restyle them with [WithLogoutUI]), and front-channel logout
 // and session management iframes are out of scope, so [SPAUI] does not
 // carry mounts for those surfaces.
-// LoginMount is the only field that affects routing; see the
-// deprecation notes on ConsentMount and LogoutMount. Embedders SHOULD
-// construct [SPAUI] with named field initialisation so optional fields
+// Embedders SHOULD construct [SPAUI] with named field initialisation so optional fields
 // added in a minor release remain source-compatible.
 //
 // Stable since v1.5.
@@ -326,25 +315,6 @@ type SPAUI struct {
 	// with "/"; an empty value rejects [WithSPAUI] at the option
 	// site so the misconfiguration surfaces at construction time.
 	LoginMount string
-
-	// ConsentMount is the URL path the consent screen renders under.
-	//
-	// Deprecated: no handler reads this field. The consent ceremony is
-	// served through the same LoginMount routes as every other prompt,
-	// discriminated by the state envelope's prompt type, whether
-	// ConsentMount is set or empty. The value is still validated — when
-	// non-empty it MUST start with "/" — but it reserves no route and
-	// changes no routing.
-	ConsentMount string
-
-	// LogoutMount is the URL path the RP-Initiated Logout confirmation
-	// screen renders under.
-	//
-	// Deprecated: no handler reads this field. To change the logout
-	// confirmation and signed-out pages, use [WithLogoutUI]. The value is
-	// still validated — when non-empty it MUST start with "/" — but it
-	// reserves no route and changes no routing.
-	LogoutMount string
 
 	// StaticDir is the on-disk directory the [Provider] serves
 	// the SPA's static assets from. Empty means the embedder
@@ -516,10 +486,7 @@ func checkLoginFlowRuleKinds(flow LoginFlow) error {
 // under "State-route contract" on [SPAUI].
 //
 // Validation:
-//   - LoginMount MUST be non-empty and MUST start with "/". It is the
-//     only mount the router acts on.
-//   - ConsentMount and LogoutMount MAY be empty; when set they MUST
-//     start with "/". Both are deprecated and affect no route.
+//   - LoginMount MUST be non-empty and MUST start with "/".
 //   - StaticDir MAY be empty; when set the directory MUST exist at
 //     construction time (an [os.Stat] check) so a typo fails [New]
 //     rather than the first request.
@@ -578,25 +545,14 @@ func normalizeUICSP(option, policy string) (string, error) {
 	return normalized, nil
 }
 
-// validateSPAUIMounts enforces the LoginMount-required and
-// "every mount path begins with /" rules. The error message names the
-// offending field so an embedder fixes the right line in their boot
-// sequence.
+// validateSPAUIMounts enforces that LoginMount is non-empty and begins
+// with "/".
 func validateSPAUIMounts(ui SPAUI) error {
 	if ui.LoginMount == "" {
 		return newConfigurationError("WithSPAUI: LoginMount must not be empty", nil)
 	}
-	for _, m := range []struct{ name, value string }{
-		{"LoginMount", ui.LoginMount},
-		{"ConsentMount", ui.ConsentMount},
-		{"LogoutMount", ui.LogoutMount},
-	} {
-		if m.value == "" {
-			continue
-		}
-		if !strings.HasPrefix(m.value, "/") {
-			return newConfigurationError("WithSPAUI: "+m.name+" must start with \"/\"", nil)
-		}
+	if !strings.HasPrefix(ui.LoginMount, "/") {
+		return newConfigurationError("WithSPAUI: LoginMount must start with \"/\"", nil)
 	}
 	return nil
 }

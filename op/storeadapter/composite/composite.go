@@ -38,14 +38,17 @@
 // [ErrKindNotRouted] if any Kind is left unrouted, and [ErrInvalidKind] if a
 // registration names a Kind outside the enumeration.
 //
-// [SSFStreams] and [SSFEvents] are the one exception: left unrouted with no
-// [WithDefault], they resolve to the backend routed for [Clients] instead of
-// returning [ErrKindNotRouted], so configurations written before those Kinds
-// existed keep starting. Both MUST resolve to the same backend, because a
+// [SSFStreams], [SSFEvents] and [AuthnLockouts] are the exception: left
+// unrouted with no [WithDefault], they resolve to the backend routed for
+// [Clients] instead of returning [ErrKindNotRouted], so configurations
+// written before those Kinds existed keep starting. Both MUST resolve to the same backend, because a
 // stream update or deletion acts on the stream and its queued events at
 // once; [New] returns [ErrSSFSplit] otherwise. [Store.SSFStreams] and
 // [Store.SSFEvents] return nil when the resolved backend does not
-// implement [store.SharedSignalsStore].
+// implement [store.SharedSignalsStore]. [Store.AuthnLockouts] returns nil
+// when the backend routed for [AuthnLockouts] does not implement
+// [store.AuthnLockoutProvider]; lockout counters are keyed by subject, so
+// route them to a durable backend.
 //
 // # Client write capabilities
 //
@@ -119,10 +122,6 @@ const (
 	// atomic-routing cluster.
 	ConsumedJTIs
 
-	// Users routes [store.UserStore] calls. Outside the transactional
-	// cluster.
-	Users
-
 	// InitialAccessTokens routes [store.InitialAccessTokenStore] calls.
 	// Used by the RFC 7591 dynamic-client-registration endpoint. Outside
 	// the atomic-routing cluster.
@@ -190,6 +189,12 @@ const (
 	// [SSFStreams] resolves to. When neither this Kind nor [WithDefault]
 	// routes it, it falls back to the backend routed for [Clients].
 	SSFEvents
+
+	// AuthnLockouts routes [store.AuthnLockoutProvider.AuthnLockouts] calls.
+	// Outside the atomic-routing cluster. When neither this Kind nor
+	// [WithDefault] routes it, it falls back to the backend routed for
+	// [Clients].
+	AuthnLockouts
 )
 
 // kindNames maps each [Kind] to its unqualified name. Indexed by Kind value
@@ -206,7 +211,6 @@ var kindNames = map[Kind]string{
 	PushedAuthRequests:       "PushedAuthRequests",
 	Interactions:             "Interactions",
 	ConsumedJTIs:             "ConsumedJTIs",
-	Users:                    "Users",
 	InitialAccessTokens:      "InitialAccessTokens",
 	RegistrationAccessTokens: "RegistrationAccessTokens",
 	AccessTokens:             "AccessTokens",
@@ -217,6 +221,7 @@ var kindNames = map[Kind]string{
 	CIBARequests:             "CIBARequests",
 	SSFStreams:               "SSFStreams",
 	SSFEvents:                "SSFEvents",
+	AuthnLockouts:            "AuthnLockouts",
 }
 
 // String returns the unqualified name of the Kind, suitable for error
@@ -242,7 +247,6 @@ var allKinds = []Kind{
 	PushedAuthRequests,
 	Interactions,
 	ConsumedJTIs,
-	Users,
 	InitialAccessTokens,
 	RegistrationAccessTokens,
 	AccessTokens,
@@ -253,6 +257,7 @@ var allKinds = []Kind{
 	CIBARequests,
 	SSFStreams,
 	SSFEvents,
+	AuthnLockouts,
 }
 
 // TxClusterKinds is the closed set of [Kind] values that must share a single
@@ -390,15 +395,16 @@ type Store struct {
 	// multi-record reconciliation boundary.
 	staticReconciler store.StaticClientReconciler
 
-	// authnLockouts is the [store.AuthnLockoutStore] exposed by the Users
-	// backend when it has an AuthnLockouts method. nil otherwise.
-	authnLockouts store.AuthnLockoutStore
-
 	// ssfStreams and ssfEvents are the substores of the one backend routed
 	// for [SSFStreams] and [SSFEvents] when it implements
 	// [store.SharedSignalsStore]. nil otherwise.
 	ssfStreams store.SSFStreamStore
 	ssfEvents  store.SSFEventStore
+
+	// authnLockouts is the lockout substore of the backend routed for
+	// [AuthnLockouts] when it implements [store.AuthnLockoutProvider]. nil
+	// otherwise.
+	authnLockouts store.AuthnLockoutStore
 }
 
 // New builds a composite [Store] from the supplied options. The validation
@@ -442,12 +448,6 @@ func New(opts ...Option) (*Store, error) {
 	}
 	registry, _ := routes[Clients].(store.ClientRegistry)
 	staticReconciler, _ := routes[Clients].(store.StaticClientReconciler)
-	var authnLockouts store.AuthnLockoutStore
-	if p, ok := routes[Users].(interface {
-		AuthnLockouts() store.AuthnLockoutStore
-	}); ok {
-		authnLockouts = p.AuthnLockouts()
-	}
 	txAnchor, ok := anchor.(store.Transactional)
 	if !ok {
 		return nil, fmt.Errorf(
@@ -464,7 +464,7 @@ func New(opts ...Option) (*Store, error) {
 		txAnchor:         txAnchor,
 		registry:         registry,
 		staticReconciler: staticReconciler,
-		authnLockouts:    authnLockouts,
+		authnLockouts:    resolveAuthnLockouts(routes),
 		ssfStreams:       ssfStreams,
 		ssfEvents:        ssfEvents,
 	}, nil
@@ -501,7 +501,7 @@ func buildRoutes(cfg *config) (map[Kind]store.Store, error) {
 	for _, k := range allKinds {
 		s, err := resolveKind(cfg, k)
 		if err != nil {
-			if !isSSFKind(k) {
+			if !isOptionalKind(k) {
 				return nil, err
 			}
 			s = out[Clients]
@@ -511,10 +511,10 @@ func buildRoutes(cfg *config) (map[Kind]store.Store, error) {
 	return out, nil
 }
 
-// isSSFKind reports whether k is one of the Shared Signals Kinds, which fall
-// back to the Clients backend when unrouted.
-func isSSFKind(k Kind) bool {
-	return k == SSFStreams || k == SSFEvents
+// isOptionalKind reports whether k is a Kind that falls back to the Clients
+// backend when unrouted: the Shared Signals Kinds and [AuthnLockouts].
+func isOptionalKind(k Kind) bool {
+	return k == SSFStreams || k == SSFEvents || k == AuthnLockouts
 }
 
 // resolveKind returns the backend that should serve k, or [ErrKindNotRouted]
@@ -554,6 +554,16 @@ func resolveAnchor(routes map[Kind]store.Store) (store.Store, error) {
 		}
 	}
 	return anchor, nil
+}
+
+// resolveAuthnLockouts returns the lockout substore of the backend routed for
+// [AuthnLockouts], nil when it does not implement
+// [store.AuthnLockoutProvider].
+func resolveAuthnLockouts(routes map[Kind]store.Store) store.AuthnLockoutStore {
+	if p, ok := routes[AuthnLockouts].(store.AuthnLockoutProvider); ok {
+		return p.AuthnLockouts()
+	}
+	return nil
 }
 
 // resolveSSF returns the substores of the one backend [SSFStreams] and
@@ -633,11 +643,6 @@ func (s *Store) Interactions() store.InteractionStore {
 // ConsumedJTIs implements [store.Store].
 func (s *Store) ConsumedJTIs() store.ConsumedJTIStore {
 	return s.routes[ConsumedJTIs].ConsumedJTIs()
-}
-
-// Users implements [store.Store].
-func (s *Store) Users() store.UserStore {
-	return s.routes[Users].Users()
 }
 
 // InitialAccessTokens implements [store.Store]. The returned substore is
@@ -766,31 +771,12 @@ func (s *Store) StaticClientReconciler() (store.StaticClientReconciler, bool) {
 	return s.staticReconciler, true
 }
 
-// AuthnLockouts returns the [store.AuthnLockoutStore] of the backend routed
-// for [Users], or nil when that backend has no AuthnLockouts method. Lockout
-// records are keyed by subject, so they must live and stay durable alongside
-// the users they protect. A nil result means the OP falls back to whatever
-// op.WithAuthnLockoutStore configures; with neither, op.New refuses a login
-// flow that counts failures (op.ErrAuthnLockoutStoreRequired).
-func (s *Store) AuthnLockouts() store.AuthnLockoutStore {
-	return s.authnLockouts
-}
-
-// UpdatePasswordHash implements [store.UserPasswordHashUpdater] by forwarding
-// to the backend routed for [Users]. The OP resolves the updater from
-// PrimaryPassword.Store, so pass the Users backend's UserPasswords() there.
-// It returns
-// [store.ErrPasswordHashUpdateUnsupported] when that backend's user store
-// cannot persist a replacement hash.
-func (s *Store) UpdatePasswordHash(ctx context.Context, subject string, encoded []byte) error {
-	u, ok := s.routes[Users].Users().(store.UserPasswordHashUpdater)
-	if !ok {
-		return store.ErrPasswordHashUpdateUnsupported
-	}
-	return u.UpdatePasswordHash(ctx, subject, encoded)
-}
-
-var _ store.UserPasswordHashUpdater = (*Store)(nil)
+// AuthnLockouts implements [store.AuthnLockoutProvider] by returning the
+// lockout substore of the backend routed for [AuthnLockouts], or nil when that
+// backend has none. A nil result means the OP falls back to
+// op.WithAuthnLockoutStore; with neither, op.New refuses a login flow that
+// counts failures (op.ErrAuthnLockoutStoreRequired).
+func (s *Store) AuthnLockouts() store.AuthnLockoutStore { return s.authnLockouts }
 
 // SSFStreams returns the stream substore of the backend routed for
 // [SSFStreams], or nil when that backend does not implement

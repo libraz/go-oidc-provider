@@ -36,7 +36,7 @@ func RequiredFeatures(p Profile) []feature.Flag {
 		return []feature.Flag{feature.PAR, feature.JAR, feature.JARM}
 	case FAPICIBA:
 		return []feature.Flag{feature.JAR}
-	case OAuth21, profileUnspecified:
+	case OAuth21, OIDCCore, profileUnspecified:
 		return nil
 	default:
 		return nil
@@ -69,7 +69,7 @@ func RequiredGrants(p Profile) []grant.Type {
 	switch p {
 	case FAPICIBA:
 		return []grant.Type{grant.CIBA}
-	case OAuth21, FAPI2Baseline, FAPI2MessageSigning, profileUnspecified:
+	case OAuth21, OIDCCore, FAPI2Baseline, FAPI2MessageSigning, profileUnspecified:
 		return nil
 	default:
 		return nil
@@ -160,16 +160,14 @@ func PARLifetimeCeiling(p Profile) time.Duration {
 // code request carries a code_challenge. The library's overall posture
 // is OAuth 2.1 / RFC 9700 — PKCE is good practice on every flow — but
 // the OpenID Connect Basic certification suite drives the OP without
-// PKCE because OIDC Core 1.0 predates RFC 7636 and the certified
-// shape stays compatible with that vintage. Treating PKCE as
-// profile-conditional resolves the conflict: OIDC vanilla deployments
-// (and the Basic certification run) accept the spec-compliant non-
-// PKCE path, while every FAPI 2.0 deployment keeps the stronger MUST
-// the profile mandates (FAPI 2.0 §2.1.1, citing RFC 7636).
+// PKCE because OIDC Core 1.0 predates RFC 7636. Treating PKCE as
+// profile-conditional resolves the conflict: [OIDCCore] accepts the
+// spec-compliant non-PKCE path, while OAuth 2.1 and every FAPI 2.0
+// deployment keep the stronger MUST (FAPI 2.0 §2.1.1, citing RFC 7636).
 //
 // [OAuth21] returns true: mandatory PKCE is the one requirement that
-// profile carries, and it is what separates an explicit OAuth 2.1
-// declaration from the permissive default.
+// profile carries, and it is the library default. [OIDCCore] returns
+// false: it is the explicit opt-out for legacy clients.
 //
 // [FAPICIBA] returns false because the CIBA flow has no /authorize
 // redirect — the client posts directly to /bc-authorize and there is
@@ -180,7 +178,7 @@ func RequiresPKCE(p Profile) bool {
 	switch p {
 	case OAuth21, FAPI2Baseline, FAPI2MessageSigning:
 		return true
-	case FAPICIBA, profileUnspecified:
+	case FAPICIBA, OIDCCore, profileUnspecified:
 		return false
 	default:
 		return false
@@ -213,7 +211,7 @@ func RequiresPKCE(p Profile) bool {
 // redirect — there is no nonce parameter on the wire.
 func RequiresNonce(p Profile) bool {
 	switch p {
-	case OAuth21, FAPICIBA, profileUnspecified, FAPI2Baseline, FAPI2MessageSigning:
+	case OAuth21, OIDCCore, FAPICIBA, profileUnspecified, FAPI2Baseline, FAPI2MessageSigning:
 		return false
 	default:
 		return false
@@ -237,7 +235,7 @@ func RequiresStateOrNonce(p Profile) bool {
 	switch p {
 	case FAPI2Baseline, FAPI2MessageSigning:
 		return true
-	case OAuth21, FAPICIBA, profileUnspecified:
+	case OAuth21, OIDCCore, FAPICIBA, profileUnspecified:
 		return false
 	default:
 		return false
@@ -262,7 +260,7 @@ func RequiresPAR(p Profile) bool {
 	switch p {
 	case FAPI2Baseline, FAPI2MessageSigning:
 		return true
-	case OAuth21, FAPICIBA, profileUnspecified:
+	case OAuth21, OIDCCore, FAPICIBA, profileUnspecified:
 		return false
 	default:
 		return false

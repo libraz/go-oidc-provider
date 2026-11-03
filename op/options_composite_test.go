@@ -54,6 +54,7 @@ func TestWithStaticClients_AcceptsCompositeStore(t *testing.T) {
 	if _, err := op.New(
 		op.WithIssuer(validIssuer),
 		op.WithStore(storage),
+		op.WithUserStore(durable.Users()),
 		op.WithKeyset(validKeyset(t)),
 		op.WithCookieKeys(newRandomCookieKey(t)),
 		fixtureAuthenticator(),
@@ -100,6 +101,7 @@ func TestWithStaticClients_RejectsCompositeWithReadOnlyClients(t *testing.T) {
 	_, err = op.New(
 		op.WithIssuer(validIssuer),
 		op.WithStore(storage),
+		op.WithUserStore(tx.Users()),
 		op.WithKeyset(validKeyset(t)),
 		op.WithCookieKeys(newRandomCookieKey(t)),
 		fixtureAuthenticator(),
@@ -150,6 +152,7 @@ func TestWithDynamicRegistration_AcceptsCompositeStore(t *testing.T) {
 	provider, err := op.New(
 		op.WithIssuer(validIssuer),
 		op.WithStore(storage),
+		op.WithUserStore(durable.Users()),
 		op.WithKeyset(validKeyset(t)),
 		op.WithCookieKeys(newRandomCookieKey(t)),
 		fixtureAuthenticator(),

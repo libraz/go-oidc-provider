@@ -45,6 +45,10 @@ func (c *config) startupLog() *slog.Logger {
 
 // applyDefaults fills in optional fields with their library defaults.
 func (c *config) applyDefaults() {
+	// An undeclared profile runs the same path as an explicit one.
+	if len(c.profiles) == 0 {
+		c.profiles = []profile.Profile{profile.OAuth21}
+	}
 	if c.clock == nil {
 		c.clock = timex.SystemClock
 	}
@@ -319,7 +323,7 @@ func (c *config) emitPartialWiringWarnings() {
 		log.Warn(
 			"WithFeature(feature.PKCE) has no effect: PKCE with S256 is always "+
 				"available, and PKCE for confidential clients is required only "+
-				"through WithProfile(profile.OAuth21) or a FAPI profile",
+				"by default (OAuth 2.1) and by FAPI profiles; WithProfile(profile.OIDCCore) opts out",
 			"option", "WithFeature",
 		)
 	}
@@ -329,25 +333,9 @@ func (c *config) emitPartialWiringWarnings() {
 	c.warnCaptchaOnScriptlessUI()
 	c.warnMTLSOptionsWithoutFeature()
 	c.warnEncryptionKidlessTrialCap()
-	c.warnPKCENotRequired()
 	c.warnNoLogger()
 	c.warnUnenabledSeedGrants()
 	c.logPrivateNetworkReach()
-}
-
-// warnPKCENotRequired reports an authorization-code OP that declared no
-// profile requiring PKCE: a confidential client may then redeem a code
-// without one, the OpenID Connect Core 1.0 shape.
-func (c *config) warnPKCENotRequired() {
-	if c.requirePKCE() || !slices.Contains(c.grants, grant.AuthorizationCode) {
-		return
-	}
-	c.startupLog().Warn(
-		"no security profile requires PKCE, so a confidential client may "+
-			"redeem an authorization code without one; declare "+
-			"op.WithProfile(profile.OAuth21) unless legacy clients need this",
-		"option", "WithProfile",
-	)
 }
 
 // warnSessionDurabilityMismatch reports an explicit Durable posture on a

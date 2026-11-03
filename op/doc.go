@@ -75,7 +75,8 @@
 //     users table, and the claims come from the same store.
 //   - [WithStaticClients]: the relying parties known at deploy time.
 //   - [WithProfile]: the security profile, checked against everything else;
-//     without one, New warns that a confidential client may skip PKCE.
+//     without one, New applies profile.OAuth21 (PKCE on every code request),
+//     and profile.OIDCCore declares the PKCE-optional OIDC Core shape.
 //   - [WithLogger]: where operational logs go; without it, construction-time
 //     diagnostics go to [slog.Default] and request-time logs and audit records
 //     are discarded, which New warns about ([WithAuditLogger] keeps the audit
@@ -85,9 +86,13 @@
 //   - [WithSPAUI] or [WithConsentUI]: your own login and consent pages in
 //     place of the built-in ones.
 //
-// [WithUserStore] is needed only when claims come from records other than
-// the ones [PrimaryPassword] authenticates against. [NewReloadable] replaces
-// [New] when keys or options change without a restart.
+// End-user records come from [PrimaryPassword]'s Store or from
+// [WithUserStore]; [WithStore] holds only the OP's own records. Set
+// [WithUserStore] when claims live apart from the credentials, or when no
+// [PrimaryPassword] resolves users (passkey-only, device code, CIBA); [New]
+// refuses a configuration that can resolve a user but has neither.
+// [NewReloadable] replaces [New] when keys or options change without a
+// restart.
 //
 // # Option groups
 //

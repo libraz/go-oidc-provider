@@ -37,8 +37,8 @@ const (
 	FAPICIBA
 
 	// OAuth21 selects the OAuth 2.1 / RFC 9700 posture on top of
-	// OpenID Connect Core 1.0. Its single MUST beyond the library
-	// default is PKCE on every authorization-code request
+	// OpenID Connect Core 1.0. Its single MUST beyond OpenID
+	// Connect Core 1.0 is PKCE on every authorization-code request
 	// (see [RequiresPKCE]). It is unrelated to FAPI 2.0 Baseline, which
 	// is [FAPI2Baseline].
 	//
@@ -48,28 +48,30 @@ const (
 	// folding them in here would leave a profile no deployment could
 	// adopt without also being financial-grade.
 	//
-	// The distinction OAuth21 draws is against the *unspecified*
-	// configuration, not against FAPI. With no profile configured the
-	// OP accepts an authorization-code request without a
-	// code_challenge — the spec-compliant OIDC Core 1.0 shape the
-	// OpenID Connect Basic certification suite drives. That default
-	// cannot tell "we admit legacy relying parties on purpose" apart
-	// from "we never considered it"; OAuth21 is how a deployment
-	// says the former in the type system.
+	// OAuth21 is the default: an OP built without [op.WithProfile]
+	// behaves as if it were declared. A deployment that must admit
+	// confidential clients without PKCE (legacy relying parties, the
+	// OpenID Connect Basic certification suite) opts out with
+	// [OIDCCore].
 	//
-	// Declared last so the numeric values of the FAPI constants stay
+	// Declared after the FAPI constants so their numeric values stay
 	// put; the wire form is [Profile.String], never the ordinal, and
 	// stays "baseline".
 	//
 	// Stable since v1.5.
 	OAuth21
-)
 
-// Baseline is the earlier name of [OAuth21] and is the same value.
-//
-// Deprecated: use [OAuth21]. The name read as FAPI 2.0 Baseline, which
-// is [FAPI2Baseline].
-const Baseline = OAuth21
+	// OIDCCore selects the OpenID Connect Core 1.0 shape explicitly:
+	// PKCE stays optional for confidential clients and no other
+	// requirement is added. It is for legacy relying parties and the
+	// OpenID Connect Basic certification suite.
+	//
+	// It cannot be combined with any other profile; [op.New] rejects
+	// the combination. String returns "oidc-core".
+	//
+	// Stable since v1.5.
+	OIDCCore
+)
 
 // String returns the canonical lower-case identifier used in discovery
 // metadata and audit events. The values match the conformance suite test
@@ -78,6 +80,8 @@ func (p Profile) String() string {
 	switch p {
 	case OAuth21:
 		return "baseline"
+	case OIDCCore:
+		return "oidc-core"
 	case FAPI2Baseline:
 		return "fapi2-baseline"
 	case FAPI2MessageSigning:
@@ -94,7 +98,7 @@ func (p Profile) String() string {
 // IsValid reports whether p is one of the recognised exported constants.
 func (p Profile) IsValid() bool {
 	switch p {
-	case OAuth21, FAPI2Baseline, FAPI2MessageSigning, FAPICIBA:
+	case OAuth21, OIDCCore, FAPI2Baseline, FAPI2MessageSigning, FAPICIBA:
 		return true
 	case profileUnspecified:
 		return false
@@ -127,7 +131,7 @@ func IsFAPI(p Profile) bool {
 	switch p {
 	case FAPI2Baseline, FAPI2MessageSigning, FAPICIBA:
 		return true
-	case OAuth21, profileUnspecified:
+	case OAuth21, OIDCCore, profileUnspecified:
 		return false
 	}
 	return false

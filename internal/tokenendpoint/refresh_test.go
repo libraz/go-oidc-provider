@@ -513,6 +513,7 @@ func TestRefresh_AuthorizationDetailsGrantLookupFaultAndTxBarrierDoNotConsume(t 
 		}
 	}
 	provider, err := op.New(testkit.MinimalOptions(t,
+		op.WithUserStore(backing.Users()),
 		op.WithStore(grantFindFailsOnceStore{
 			Store:         backing,
 			grants:        faultingGrants,
@@ -1519,6 +1520,7 @@ func TestRefresh_OpaqueRevokeFailureDoesNotMintFreshAT(t *testing.T) {
 	capture := newAuditCapture()
 	provider, err := op.New(testkit.MinimalOptions(t,
 		op.WithStore(opaqueRevokeFailStore{Store: backing}),
+		op.WithUserStore(backing.Users()),
 		op.WithClock(clock),
 		op.WithAuditLogger(capture.logger()),
 		// Exercise the non-transactional fault decorator. Enabling the
@@ -1629,6 +1631,7 @@ func TestRefresh_OpaqueRevokeFailureInTxIsRetryable(t *testing.T) {
 	backing := inmem.New(inmem.WithClock(clock))
 	capture := newAuditCapture()
 	provider, err := op.New(testkit.MinimalOptions(t,
+		op.WithUserStore(backing.Users()),
 		op.WithStore(opaqueRevokeFailTransactionalStore{
 			Store:         backing,
 			transactional: backing,

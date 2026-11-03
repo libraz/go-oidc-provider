@@ -118,7 +118,7 @@ func TestWithJWTBearerGrant_RejectsMissingUserStore(t *testing.T) {
 
 	_, err := op.New(
 		op.WithIssuer(validIssuer),
-		op.WithStore(noUsersStore{}),
+		op.WithStore(stubStore{}),
 		op.WithKeyset(validKeyset(t)),
 		op.WithCookieKeys(newRandomCookieKey(t)),
 		fixtureAuthenticator(),

@@ -8,7 +8,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/libraz/go-oidc-provider/internal/audit"
 	"github.com/libraz/go-oidc-provider/internal/devicecode"
 	"github.com/libraz/go-oidc-provider/internal/redact"
 	"github.com/libraz/go-oidc-provider/op/devicecodekit"
@@ -88,7 +87,7 @@ func TestRevoke_CascadeTalliesSurviveToSlogSink(t *testing.T) {
 		RefreshTokens:      s.RefreshTokens(),
 		AccessTokenTTL:     15 * time.Minute,
 		Clock:              fixedClock{now: now},
-		Audit:              audit.Slog(logger),
+		AuditLogger:        logger,
 	}
 	if err := devicecodekit.Revoke(ctx, deps, deviceCode, devicecodekit.DenyReasonUserRevokedDevice); err != nil {
 		t.Fatalf("Revoke: %v", err)

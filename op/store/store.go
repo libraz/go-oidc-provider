@@ -1,7 +1,9 @@
 package store
 
-// Store is the aggregate interface that bundles every substore an OP backend
-// exposes to the library. A backend implements Store directly when it owns
+// Store is the aggregate interface that bundles every OAuth/OIDC record
+// substore an OP backend exposes to the library. End-user records are not
+// part of it: they come from the login flow's PrimaryPassword.Store or
+// op.WithUserStore. A backend implements Store directly when it owns
 // every record kind, or it composes several backends through the composite
 // adapter ([github.com/libraz/go-oidc-provider/op/storeadapter/composite])
 // to route record kinds to different physical stores. Either way, the
@@ -48,10 +50,6 @@ type Store interface {
 	// ConsumedJTIs returns the [ConsumedJTIStore] for this backend.
 	// Outside the atomic-routing cluster.
 	ConsumedJTIs() ConsumedJTIStore
-
-	// Users returns the [UserStore] for this backend. Read-only from
-	// the library's perspective; outside the atomic-routing cluster.
-	Users() UserStore
 
 	// InitialAccessTokens returns the [InitialAccessTokenStore] for
 	// this backend. Backends without RFC 7591 Dynamic Client

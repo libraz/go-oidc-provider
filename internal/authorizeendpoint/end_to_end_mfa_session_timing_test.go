@@ -124,6 +124,7 @@ func TestEndToEnd_MFAWithholdsSessionUntilSecondFactorCompletes(t *testing.T) {
 	provider, err := op.New(
 		op.WithIssuer(testkit.DefaultIssuer),
 		op.WithStore(st),
+		op.WithUserStore(inner.Users()),
 		op.WithKeyset(op.Keyset{newFlowSigningKey(t)}),
 		op.WithCookieKeys(newFlowCookieKey(t)),
 		op.WithInteractionDriver(testkit.AutoConsentDriver{}),

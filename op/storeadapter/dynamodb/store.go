@@ -228,7 +228,9 @@ func (s *Store) Interactions() store.InteractionStore { return s.interactionsImp
 // ConsumedJTIs implements [store.Store].
 func (s *Store) ConsumedJTIs() store.ConsumedJTIStore { return s.jtisImpl }
 
-// Users implements [store.Store].
+// Users returns the [store.UserStore] handle. It is not part of
+// [store.Store]; pass it to op.WithUserStore (or use [Store.UserPasswords]
+// for PrimaryPassword.Store).
 func (s *Store) Users() store.UserStore { return s.usersImpl }
 
 // InitialAccessTokens implements [store.Store].

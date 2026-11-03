@@ -14,6 +14,7 @@ import (
 
 	"github.com/libraz/go-oidc-provider/internal/tokens"
 	"github.com/libraz/go-oidc-provider/op"
+	"github.com/libraz/go-oidc-provider/op/grant"
 	"github.com/libraz/go-oidc-provider/op/store"
 	"github.com/libraz/go-oidc-provider/op/storeadapter/inmem"
 )
@@ -134,33 +135,67 @@ func TestWithUserStore_ServesClaimsFromTheSuppliedStore(t *testing.T) {
 	}
 }
 
-// TestWithUserStore_OmittedKeepsTheBackendUsers pins the other half of
-// the contract: without the option nothing moves, so an embedder using
-// the bundled adapter sees no behaviour change.
-func TestWithUserStore_OmittedKeepsTheBackendUsers(t *testing.T) {
+// noUserStoreOpts is a configuration with no user store source: the
+// backend is passed to WithStore only, and the login flow carries no
+// PrimaryPassword store.
+func noUserStoreOpts(tb testing.TB, extra ...op.Option) []op.Option {
+	tb.Helper()
+	return append([]op.Option{
+		op.WithIssuer(validIssuer),
+		op.WithStore(inmem.New()),
+		op.WithKeyset(validKeyset(tb)),
+		op.WithCookieKeys(newRandomCookieKey(tb)),
+		fixtureAuthenticator(),
+	}, extra...)
+}
+
+// TestNew_RejectsMissingUserStore pins that the aggregate store is not a
+// claim source: a grant that resolves end-user subjects with neither
+// WithUserStore nor PrimaryPassword.Store is refused, and the message
+// names both ways out.
+func TestNew_RejectsMissingUserStore(t *testing.T) {
 	t.Parallel()
 
-	signKey := newTestKey(t, "userstore-default")
-	backend := inmem.New()
-	backend.PutUser(context.Background(), &store.User{
-		Subject: "user-1",
-		Claims:  map[string]any{"email": "from-backend@example.com"},
-	})
-
-	provider, err := op.New(
-		op.WithIssuer(validIssuer),
-		op.WithStore(backend),
-		op.WithKeyset(op.Keyset{signKey}),
-		op.WithCookieKeys(newRandomCookieKey(t)),
-		fixtureAuthenticator(),
-		userInfoTokenClient(),
-	)
-	if err != nil {
-		t.Fatalf("op.New: %v", err)
+	for _, tc := range []struct {
+		name  string
+		extra []op.Option
+	}{
+		{"default grants", nil},
+		{"authorization_code only", []op.Option{op.WithGrants(grant.AuthorizationCode)}},
+		{"client_credentials and refresh_token", []op.Option{op.WithGrants(grant.ClientCredentials, grant.RefreshToken)}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			_, err := op.New(noUserStoreOpts(t, tc.extra...)...)
+			if err == nil {
+				t.Fatal("op.New accepted a subject-resolving grant with no user store")
+			}
+			if !op.IsServerError(err) {
+				t.Errorf("err = %v, want a server configuration error", err)
+			}
+			for _, want := range []string{"PrimaryPassword.Store", "op.WithUserStore", "st.Users()"} {
+				if !strings.Contains(err.Error(), want) {
+					t.Errorf("err = %v, want it to mention %q", err, want)
+				}
+			}
+		})
 	}
+}
 
-	if got := userInfoEmail(t, provider, signKey, "user-1"); got != "from-backend@example.com" {
-		t.Fatalf("email=%v want the backend value", got)
+// TestNew_ClientCredentialsOnlyNeedsNoUserStore pins that a deployment
+// that never redeems for an end-user builds without a user store.
+func TestNew_ClientCredentialsOnlyNeedsNoUserStore(t *testing.T) {
+	t.Parallel()
+
+	opts := []op.Option{
+		op.WithIssuer(validIssuer),
+		op.WithStore(inmem.New()),
+		op.WithKeyset(validKeyset(t)),
+		op.WithCookieKeys(newRandomCookieKey(t)),
+		op.WithGrants(grant.ClientCredentials),
+	}
+	if _, err := op.New(opts...); err != nil {
+		t.Fatalf("op.New: %v", err)
 	}
 }
 

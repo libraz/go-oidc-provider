@@ -146,6 +146,7 @@ func newUCFixture(t *testing.T, ui ucUI, flow func(f *ucFixture) op.LoginFlow, e
 	opts := []op.Option{
 		op.WithIssuer(testkit.DefaultIssuer),
 		op.WithStore(f.st),
+		op.WithUserStore(f.st.Users()),
 		op.WithKeyset(op.Keyset{testkit.NewSigningKey(t, "uc")}),
 		op.WithCookieKeys(testkit.NewCookieKey(t)),
 		op.WithClock(clock),

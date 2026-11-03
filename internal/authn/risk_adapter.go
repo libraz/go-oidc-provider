@@ -36,7 +36,6 @@ func (a riskAssessorAdapter) Assess(ctx context.Context, in risk.Input) (risk.Ou
 		Decision:        riskDecisionToPkg(out.Decision),
 		RequiredFactors: factorTypesToStrings(out.RequiredFactors),
 		Score:           riskScoreToPkg(out.Score),
-		MinAAL:          aalToPkg(out.MinAAL),
 		NewDevice:       out.NewDevice,
 	}, nil
 }
@@ -111,21 +110,6 @@ func riskScoreFromPkg(s risk.Score) RiskScore {
 		return RiskScoreHigh
 	}
 	return RiskScoreNone
-}
-
-// aalToPkg maps authn.AAL onto the risk sub-package's AAL. The ladders
-// are identical so the mapping is a pure rename per level.
-func aalToPkg(l AAL) risk.AAL {
-	switch l {
-	case AAL1:
-		return risk.AAL1
-	case AAL2:
-		return risk.AAL2
-	case AAL3:
-		return risk.AAL3
-	default:
-		return risk.AAL0
-	}
 }
 
 // factorTypesToStrings copies a FactorType slice into a string slice

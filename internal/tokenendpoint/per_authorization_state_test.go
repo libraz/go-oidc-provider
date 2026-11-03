@@ -344,7 +344,7 @@ func newGrantFindFaultFixture(t *testing.T, decorated store.Store, backing *inme
 	t.Helper()
 	prov := testkit.NewProvider(t,
 		testkit.WithClock(clock),
-		testkit.WithOptions(append([]op.Option{op.WithStore(decorated)}, opts...)...),
+		testkit.WithOptions(append([]op.Option{op.WithStore(decorated), op.WithUserStore(backing.Users())}, opts...)...),
 	)
 	prov.Store = backing
 	return &fixture{

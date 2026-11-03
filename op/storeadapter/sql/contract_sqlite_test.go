@@ -64,6 +64,7 @@ func newSQLiteFactory(t *testing.T) contract.Factory {
 		}
 		return contract.Backend{
 			Store: s,
+			Users: s.Users(),
 			Now:   clock.Now,
 			Advance: func(delta time.Duration) {
 				clock.now = clock.now.Add(delta)

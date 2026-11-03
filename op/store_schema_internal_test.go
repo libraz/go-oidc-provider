@@ -108,10 +108,6 @@ type (
 		store.AuthnLockoutStore
 		*schemaProbe
 	}
-	probeUsers struct {
-		store.UserStore
-		*schemaProbe
-	}
 	probeUserPasswords struct {
 		store.UserPasswordStore
 		*schemaProbe
@@ -146,7 +142,6 @@ type schemaFakeStore struct {
 	ssfStreams    store.SSFStreamStore
 	ssfEvents     store.SSFEventStore
 	lockouts      store.AuthnLockoutStore
-	users         store.UserStore
 	userPasswords store.UserPasswordStore
 	probes        map[string]*schemaProbe
 	log           *[]string
@@ -189,7 +184,6 @@ func (s *schemaFakeStore) CIBARequests() store.CIBARequestStore   { return s.cib
 func (s *schemaFakeStore) SSFStreams() store.SSFStreamStore       { return s.ssfStreams }
 func (s *schemaFakeStore) SSFEvents() store.SSFEventStore         { return s.ssfEvents }
 func (s *schemaFakeStore) AuthnLockouts() store.AuthnLockoutStore { return s.lockouts }
-func (s *schemaFakeStore) Users() store.UserStore                 { return s.users }
 func (s *schemaFakeStore) UserPasswords() store.UserPasswordStore { return s.userPasswords }
 
 func newSchemaFakeStore() *schemaFakeStore {
@@ -220,7 +214,6 @@ func newSchemaFakeStore() *schemaFakeStore {
 	f.ssfStreams = &probeSSFStreams{in.SSFStreams(), p("SSFStreams")}
 	f.ssfEvents = &probeSSFEvents{in.SSFEvents(), p("SSFEvents")}
 	f.lockouts = &probeLockouts{in.AuthnLockouts(), p("AuthnLockouts")}
-	f.users = &probeUsers{in.Users(), p("Users")}
 	f.userPasswords = &probeUserPasswords{in.UserPasswords(), p("user store")}
 	return f
 }
@@ -271,7 +264,7 @@ func TestStoreSchema_ClientCredentialsOnly(t *testing.T) {
 	if err := runStoreSchema(t, f, WithGrants(grant.ClientCredentials)); err != nil {
 		t.Fatalf("validateStoreSchema: %v", err)
 	}
-	assertSchemaLog(t, f, slices.Concat(schemaAlways, []string{"Users"}))
+	assertSchemaLog(t, f, schemaAlways)
 }
 
 func TestStoreSchema_FeaturesAddTheirStores(t *testing.T) {

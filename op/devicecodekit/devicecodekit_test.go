@@ -197,9 +197,9 @@ func TestVerifyUserCodeByAttemptKeyAuditsMalformedAndUnknown(t *testing.T) {
 	emitter := &captureEmitter{}
 	deps := &devicecodekit.Deps{
 		DeviceCodes:    ds,
-		Audit:          emitter,
 		AttemptLimiter: devicecodekit.NewAttemptLimiter(int(devicecodekit.MaxUserCodeStrikes)),
 	}
+	deps.SetAuditEmitter(emitter)
 
 	if _, err := devicecodekit.VerifyUserCodeByAttemptKey(ctx, deps, "browser-session-audit", "??"); !errors.Is(err, devicecodekit.ErrUnknownDeviceCode) {
 		t.Fatalf("malformed attempt err=%v want ErrUnknownDeviceCode", err)
@@ -592,9 +592,9 @@ func TestRevoke_StateTable(t *testing.T) {
 			emitter := &captureEmitter{}
 			deps := &devicecodekit.Deps{
 				DeviceCodes:        ds,
-				Audit:              emitter,
 				RevocationStrategy: store.RevocationStrategyNone,
 			}
+			deps.SetAuditEmitter(emitter)
 			err := devicecodekit.Revoke(ctx, deps, id, devicecodekit.DenyReasonUserRevokedDevice)
 			if !errors.Is(err, tt.wantErr) {
 				t.Fatalf("Revoke error = %v, want %v", err, tt.wantErr)
@@ -643,7 +643,8 @@ func TestRevoke_UnknownDeviceCodeReturnsSentinel(t *testing.T) {
 	ctx := context.Background()
 	s := inmem.New()
 	emitter := &captureEmitter{}
-	deps := &devicecodekit.Deps{DeviceCodes: s.DeviceCodes(), Audit: emitter}
+	deps := &devicecodekit.Deps{DeviceCodes: s.DeviceCodes()}
+	deps.SetAuditEmitter(emitter)
 	err := devicecodekit.Revoke(ctx, deps, "no-such-device", "user_revoked_device")
 	if !errors.Is(err, devicecodekit.ErrUnknownDeviceCode) {
 		t.Fatalf("err = %v, want ErrUnknownDeviceCode", err)
@@ -703,8 +704,8 @@ func TestRevoke_CascadesJTIRegistryAccessTokens(t *testing.T) {
 		DeviceCodes:        ds,
 		AccessTokens:       reg,
 		RevocationStrategy: store.RevocationStrategyJTIRegistry,
-		Audit:              emitter,
 	}
+	deps.SetAuditEmitter(emitter)
 	if err := devicecodekit.Revoke(ctx, deps, "dev-casc-1", devicecodekit.DenyReasonUserRevokedDevice); err != nil {
 		t.Fatalf("Revoke: %v", err)
 	}
@@ -897,13 +898,14 @@ func TestRevoke_MissingJWTBackendFailsClosed(t *testing.T) {
 			}
 
 			emitter := &captureEmitter{}
-			err := devicecodekit.Revoke(ctx, &devicecodekit.Deps{
+			deps := &devicecodekit.Deps{
 				DeviceCodes:        ds,
-				Audit:              emitter,
 				OpaqueAccessTokens: s.OpaqueAccessTokens(),
 				RefreshTokens:      s.RefreshTokens(),
 				RevocationStrategy: tt.strategy,
-			}, id, devicecodekit.DenyReasonUserRevokedDevice)
+			}
+			deps.SetAuditEmitter(emitter)
+			err := devicecodekit.Revoke(ctx, deps, id, devicecodekit.DenyReasonUserRevokedDevice)
 			if !errors.Is(err, devicecodekit.ErrMissingRevocationBackend) {
 				t.Fatalf("Revoke error = %v, want ErrMissingRevocationBackend", err)
 			}
@@ -948,9 +950,9 @@ func TestRevoke_ExplicitNoneSkipsJWTCascade(t *testing.T) {
 	emitter := &captureEmitter{}
 	deps := &devicecodekit.Deps{
 		DeviceCodes:        ds,
-		Audit:              emitter,
 		RevocationStrategy: store.RevocationStrategyNone,
 	}
+	deps.SetAuditEmitter(emitter)
 	if err := devicecodekit.Revoke(ctx, deps, "dev-casc-nil", devicecodekit.DenyReasonUserRevokedDevice); err != nil {
 		t.Fatalf("Revoke: %v", err)
 	}

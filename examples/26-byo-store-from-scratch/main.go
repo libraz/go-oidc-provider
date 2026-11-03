@@ -26,8 +26,6 @@
 //     *sql.Tx through a small querier interface, exactly like the
 //     bundled adapter)
 //   - Sessions, Interactions, ConsumedJTIs
-//   - Users (store.UserPasswordStore: FindBySubject / FindByUsername /
-//     ReadPasswordHash)
 //   - AccessTokens (store.AccessTokenRegistry)
 //   - Metadata (store.MetadataStore — so op.New does not emit the
 //     pairwise-immutability startup warning)

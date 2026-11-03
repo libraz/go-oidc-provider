@@ -151,35 +151,6 @@ func TestDeps_AuditLoggerRecordsCarryTheirEvidence(t *testing.T) {
 	}
 }
 
-// TestDeps_AuditEmitterPrefersTheInternalSink keeps the precedence
-// documented on the deprecated field honest: a library caller that
-// still sets Audit keeps its sink, and the logger is not written twice.
-func TestDeps_AuditEmitterPrefersTheInternalSink(t *testing.T) {
-	t.Parallel()
-
-	ctx := context.Background()
-	s := newVerificationStore()
-	newPendingDeviceCode(t, s, "dev-logger-precedence", "FGHJKMNP")
-
-	var buf bytes.Buffer
-	emitter := &captureEmitter{}
-	deps := &devicecodekit.Deps{
-		DeviceCodes: s.DeviceCodes(),
-		Audit:       emitter,
-		AuditLogger: slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug})),
-	}
-	if err := devicecodekit.ApproveUserCode(ctx, deps, "FGHJKMNP", "user-1", verificationNow); err != nil {
-		t.Fatalf("ApproveUserCode: %v", err)
-	}
-
-	if !emitter.containsName("device_code.verification.approved") {
-		t.Errorf("the configured Emitter received nothing: %v", emitter.names())
-	}
-	if buf.Len() != 0 {
-		t.Errorf("the same event was also written to AuditLogger, duplicating the record:\n%s", buf.String())
-	}
-}
-
 // TestDeps_NoAuditSinkStaysSilent keeps the documented default: a Deps
 // with neither sink set drops records instead of panicking, so the
 // helpers remain safe to call before observability is wired.

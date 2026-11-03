@@ -500,11 +500,6 @@ func (s *Store) SSFEvents() store.SSFEventStore { return s.ssfEventsImpl }
 // is active without a backing substore.
 func (s *Store) PushedAuthRequests() store.PushedAuthRequestStore { return nil }
 
-// Users implements [store.Store]; out-of-scope on Redis. Returns
-// nil; op.New rejects the config when an authenticator that needs
-// the substore is wired without a backing implementation.
-func (s *Store) Users() store.UserStore { return nil }
-
 // InitialAccessTokens returns nil. See the accessor block doc.
 func (s *Store) InitialAccessTokens() store.InitialAccessTokenStore { return nil }
 

@@ -16,16 +16,6 @@ const (
 	// receives at chain start.
 	RiskAuthorizeEntry = authn.RiskAuthorizeEntry
 
-	// RiskPreFactor is the stage before each factor's Begin.
-	//
-	// Deprecated: no consult point passes this phase; LoginFlow consults the assessor at RiskAuthorizeEntry only.
-	RiskPreFactor = authn.RiskPreFactor
-
-	// RiskPostFactor is the stage after each factor's Continue.
-	//
-	// Deprecated: no consult point passes this phase; LoginFlow consults the assessor at RiskAuthorizeEntry only.
-	RiskPostFactor = authn.RiskPostFactor
-
 	// RiskTokenExchange is reserved and never raised: the /token endpoint
 	// does not consult the [RiskAssessor].
 	RiskTokenExchange = authn.RiskTokenExchange

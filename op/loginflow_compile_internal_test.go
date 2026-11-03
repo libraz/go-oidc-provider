@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -81,6 +82,130 @@ func TestProjectBuiltinStep_ThreadsWithClockToFactor(t *testing.T) {
 	}
 	if rec.SentAt.Year() != 2020 {
 		t.Fatalf("SentAt=%v: WithClock was not threaded to the email-OTP verifier (want a 2020-stamped time)", rec.SentAt)
+	}
+}
+
+// movableTestClock is a clock a test advances by hand. The mutex guards
+// the in-memory store's own reads of it.
+type movableTestClock struct {
+	mu sync.Mutex
+	t  time.Time
+}
+
+func (c *movableTestClock) Now() time.Time {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.t
+}
+
+func (c *movableTestClock) advance(d time.Duration) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.t = c.t.Add(d)
+}
+
+// emailOTPHarness compiles a StepEmailOTP for subject and captures the
+// codes its sender delivers.
+func emailOTPHarness(t *testing.T, cfg *config, st *inmem.Store, subject string) (authn.Authenticator, <-chan string) { //nolint:ireturn // the compiled step is only reachable as the orchestrator interface.
+	t.Helper()
+	st.PutUser(context.Background(), &store.User{
+		Subject: subject,
+		Claims:  map[string]any{"email": "alice@example.com"},
+	})
+	codes := make(chan string, 4)
+	lfStep, err := projectBuiltinStep("rule", StepEmailOTP{
+		Store: st.EmailOTPs(),
+		Sender: testEmailDeliveryFunc(func(_ context.Context, _, code string) error {
+			codes <- code
+			return nil
+		}),
+		Users:          st.Users(),
+		SendLatencyPad: -1,
+	}, cfg)
+	if err != nil {
+		t.Fatalf("projectBuiltinStep: %v", err)
+	}
+	return lfStep.Authenticator, codes
+}
+
+func emailOTPSend(t *testing.T, auth authn.Authenticator, subject string) authn.ContinueInput {
+	t.Helper()
+	sent, err := auth.Continue(context.Background(), authn.ContinueInput{
+		Subject: subject,
+		Submission: interaction.FormSubmission{Values: map[string]string{
+			emailotp.EmailFieldName: "alice@example.com",
+		}},
+	})
+	if err != nil {
+		t.Fatalf("send step: %v", err)
+	}
+	return authn.ContinueInput{Subject: subject, Scratch: sent.Scratch}
+}
+
+// TestStepEmailOTP_RecordsFailuresOnTheSharedCounter pins that a wrong
+// code submitted to the compiled step advances the per-subject counter
+// every other factor reads, not only the per-challenge counter.
+func TestStepEmailOTP_RecordsFailuresOnTheSharedCounter(t *testing.T) {
+	t.Parallel()
+
+	const subject = "sub-guess"
+	st := inmem.New()
+	auth, codes := emailOTPHarness(t, &config{authnLockoutStore: st.AuthnLockouts()}, st, subject)
+	in := emailOTPSend(t, auth, subject)
+
+	wrong := "000000"
+	if issued := <-codes; issued == wrong {
+		wrong = "111111"
+	}
+	in.Submission = interaction.FormSubmission{Values: map[string]string{emailotp.CodeFieldName: wrong}}
+	if _, err := auth.Continue(context.Background(), in); err == nil {
+		t.Fatal("verify accepted a wrong code")
+	}
+	rec, err := st.AuthnLockouts().Get(context.Background(), subject)
+	if err != nil {
+		t.Fatalf("read the shared counter: %v", err)
+	}
+	if rec.FailedCount != 1 {
+		t.Errorf("shared FailedCount = %d, want 1", rec.FailedCount)
+	}
+}
+
+// TestStepEmailOTP_ConfiguredClockGatesCodeExpiry pins that the clock
+// handed to the compiled step decides when a code expires: the same code
+// verifies inside the window and is refused once the clock moves past it.
+func TestStepEmailOTP_ConfiguredClockGatesCodeExpiry(t *testing.T) {
+	t.Parallel()
+
+	start := time.Date(2026, 4, 27, 12, 0, 0, 0, time.UTC)
+	for _, tc := range []struct {
+		name    string
+		advance time.Duration
+		wantOK  bool
+	}{
+		{"inside the window", emailotp.DefaultCodeTTL - time.Minute, true},
+		{"past the window", emailotp.DefaultCodeTTL + time.Minute, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			clock := &movableTestClock{t: start}
+			st := inmem.New(inmem.WithClock(clock))
+			auth, codes := emailOTPHarness(t, &config{clock: clock}, st, "sub-expiry")
+			in := emailOTPSend(t, auth, "sub-expiry")
+			code := <-codes
+
+			clock.advance(tc.advance)
+			in.Submission = interaction.FormSubmission{Values: map[string]string{emailotp.CodeFieldName: code}}
+			step, err := auth.Continue(context.Background(), in)
+			if tc.wantOK {
+				if err != nil || step.Result == nil {
+					t.Fatalf("verify inside the window: step=%+v err=%v", step, err)
+				}
+				return
+			}
+			if err == nil || step.Result != nil {
+				t.Fatalf("verify accepted an expired code: step=%+v err=%v", step, err)
+			}
+		})
 	}
 }
 

@@ -246,7 +246,6 @@ func (fakeStore) Sessions() store.SessionStore                     { return fake
 func (fakeStore) PushedAuthRequests() store.PushedAuthRequestStore { return fakePARStore{} }
 func (fakeStore) Interactions() store.InteractionStore             { return fakeInteractionStore{} }
 func (fakeStore) ConsumedJTIs() store.ConsumedJTIStore             { return fakeJTIStore{} }
-func (fakeStore) Users() store.UserStore                           { return fakeUserStore{} }
 func (fakeStore) InitialAccessTokens() store.InitialAccessTokenStore {
 	return fakeInitialAccessTokenStore{}
 }

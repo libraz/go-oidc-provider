@@ -111,6 +111,7 @@ func newACRStrictFixture(t *testing.T, rules func(totp store.TOTPStore, key []by
 	opts := append([]op.Option{
 		op.WithIssuer(testkit.DefaultIssuer),
 		op.WithStore(st),
+		op.WithUserStore(st.Users()),
 		op.WithKeyset(op.Keyset{newFlowSigningKey(t)}),
 		op.WithCookieKeys(newFlowCookieKey(t)),
 		op.WithInteractionDriver(testkit.AutoConsentDriver{}),

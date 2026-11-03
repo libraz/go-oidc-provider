@@ -1021,30 +1021,28 @@ func WithStore(s store.Store) Option {
 	})
 }
 
-// WithUserStore replaces the source of end-user records the OP reads claims
-// from, leaving every other substore of the [store.Store] given to [WithStore]
-// exactly as it is.
+// WithUserStore sets the source of end-user records the OP reads claims
+// from.
 //
 // Projecting an application's own users table onto OIDC is the ordinary case,
 // and this is the seam for it: implement [store.UserStore] over whatever
-// schema already exists and pass it here. Without the option the same effect
-// requires a wrapper type that shadows Users() on the backend store, which is
-// easy to get subtly wrong — a wrapper that embeds the [store.Store] interface
-// instead of the concrete backend silently drops every optional capability the
-// backend implemented, and the features built on those capabilities disable
-// themselves. Nothing is wrapped here, so nothing can be dropped.
+// schema already exists and pass it here. A bundled adapter's concrete
+// Users() can be passed directly, e.g. WithUserStore(st.Users()).
 //
 // The store is read-only from the library's perspective: it supplies the
 // claims released through the ID Token and /userinfo, projected by the scopes
 // the grant carries. A standard claim whose value is not the JSON type
-// OpenID Connect Core §5.1 gives it is left out, with one WARN per claim name. Authentication is a separate wiring — [PrimaryPassword]
-// carries its own store — and the two are meant to be the same records.
+// OpenID Connect Core §5.1 gives it is left out, with one WARN per claim name.
+// Authentication is a separate wiring — [PrimaryPassword] carries its own
+// store — and the two are meant to be the same records.
 //
-// Omitting the option, claims are read from the Store of the [LoginFlow]
-// Primary when it is a [PrimaryPassword] (or the first [PrimaryPassword]
-// inside a Primary [StepOneOf]), and from [store.Store.Users] otherwise. [New]
-// logs the resolved source as one INFO line (claim_source), noting when
-// Store.Users() goes unread. An explicit value overrides the inference; [New] then
+// There are exactly two sources, in this order: the value given here, then
+// the Store of the [LoginFlow] Primary when it is a [PrimaryPassword] (or the
+// first [PrimaryPassword] inside a Primary [StepOneOf]). The [store.Store]
+// given to [WithStore] is never consulted. [New] fails when an enabled grant
+// resolves end-user subjects and neither source is set; a client_credentials-only
+// OP needs none. [New] logs the resolved source as one INFO line
+// (claim_source). An explicit value overrides the inference; [New] then
 // warns when a [PrimaryPassword] or [StepEmailOTP] authenticates against
 // different records, because a login that resolves a subject from one set of
 // records and then serves claims from another fails silently. Stores whose

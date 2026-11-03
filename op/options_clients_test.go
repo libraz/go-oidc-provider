@@ -125,6 +125,7 @@ func TestWithStaticClients_PersistsToStore(t *testing.T) {
 	if _, err := op.New(
 		op.WithIssuer(validIssuer),
 		op.WithStore(st),
+		op.WithUserStore(st.Users()),
 		op.WithKeyset(validKeyset(t)),
 		op.WithCookieKeys(newRandomCookieKey(t)),
 		fixtureAuthenticator(),

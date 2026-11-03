@@ -104,25 +104,15 @@ func TestDeciderAdapter_RequireCarriesOnlyTheKind(t *testing.T) {
 // TestDenyReason_ReachesTheSinkVerbatim pins the property [Deny.Reason]
 // documents: the value is not masked on its way to a log sink. The
 // redactor matches a closed catalogue of credential-bearing attribute
-// keys, and neither the "reason" attribute the orchestrator writes nor
-// the reserved [AuditDenyReasonKey] is in it. The test exists because
+// keys, and the "reason" attribute the orchestrator writes is not in it. The test exists because
 // the field's godoc previously promised the opposite; an embedder
 // reading it decides what is safe to put in Reason, so the real
 // handling has to be pinned rather than assumed either way.
-//
-// The test lives in the internal test package because
-// [AuditDenyReasonKey] is deprecated and the external test package
-// cannot reference it without a lint suppression.
 func TestDenyReason_ReachesTheSinkVerbatim(t *testing.T) {
 	t.Parallel()
 
-	if AuditDenyReasonKey != "audit.deny.reason" {
-		t.Errorf("AuditDenyReasonKey = %q; the documented value is frozen", AuditDenyReasonKey)
-	}
-	for _, key := range []string{"reason", AuditDenyReasonKey} {
-		if redact.IsSensitive(key) {
-			t.Errorf("redact.IsSensitive(%q) = true, want false: Deny.Reason is documented as reaching the sink unmasked", key)
-		}
+	if redact.IsSensitive("reason") {
+		t.Error(`redact.IsSensitive("reason") = true, want false: Deny.Reason is documented as reaching the sink unmasked`)
 	}
 
 	var buf bytes.Buffer

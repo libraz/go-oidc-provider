@@ -146,6 +146,7 @@ func TestWithKeyset_AcceptsRetiredEntryBehindLiveActive(t *testing.T) {
 	if _, err := op.New(
 		op.WithIssuer(validIssuer),
 		op.WithStore(stubStore{}),
+		op.WithUserStore(stubUserStore{}),
 		op.WithKeyset(op.Keyset{active, retiring}),
 		op.WithCookieKeys(newRandomCookieKey(t)),
 		fixtureAuthenticator(),

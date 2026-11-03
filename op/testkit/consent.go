@@ -15,15 +15,6 @@ import (
 	"github.com/libraz/go-oidc-provider/op/interaction"
 )
 
-// ApproveAllScopes is the empty approved-scopes payload.
-//
-// Deprecated: an empty submission records an approval of nothing, not
-// an approval of everything — a consent screen the user answered by
-// clearing every box is a decision the OP honours. Use
-// [ApprovedScopesFrom] to build the payload that approves what the
-// screen actually presented.
-const ApproveAllScopes = ""
-
 // ApprovedScopesFrom returns the approved-scopes payload that approves
 // every scope the consent prompt presented, read out of the envelope
 // [IsConsentPrompt] returned.
@@ -96,8 +87,8 @@ func IsConsentPrompt(resp *http.Response) (consent bool, envelope map[string]any
 //
 // approved is the space-delimited approved-scope string. An empty
 // string approves no scope (the chain rejects the submission unless
-// no required scope was requested); pass [ApproveAllScopes] for the
-// canonical "approve everything in the request" wire payload.
+// no required scope was requested); use [ApprovedScopesFrom] to approve
+// everything the prompt presented.
 func PostConsentApproval(
 	tb testing.TB,
 	client *http.Client,

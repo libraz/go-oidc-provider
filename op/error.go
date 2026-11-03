@@ -202,9 +202,8 @@ var ErrStoreRequired = &Error{
 }
 
 // ErrUserStoreRequired is returned by [New] when [WithUserStore] receives a
-// nil store. The option exists to redirect claim reads somewhere specific;
-// passing nothing would silently leave them on the [WithStore] backend, which
-// is what omitting the option already does.
+// nil store: the option names a source, so a nil value is a wiring mistake
+// rather than a way to leave it unset.
 var ErrUserStoreRequired = &Error{
 	Code:        codeConfiguration,
 	Description: "WithUserStore requires a non-nil store.UserStore",

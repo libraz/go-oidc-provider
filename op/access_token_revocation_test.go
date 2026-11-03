@@ -176,7 +176,6 @@ func (s storeWithoutGrantRevocations) DeviceCodes() store.DeviceCodeStore {
 func (s storeWithoutGrantRevocations) CIBARequests() store.CIBARequestStore {
 	return s.inner.CIBARequests()
 }
-func (s storeWithoutGrantRevocations) Users() store.UserStore { return s.inner.Users() }
 
 type storeWithoutAccessTokens struct{ inner stubStore }
 
@@ -225,7 +224,6 @@ func (s storeWithoutAccessTokens) DeviceCodes() store.DeviceCodeStore {
 func (s storeWithoutAccessTokens) CIBARequests() store.CIBARequestStore {
 	return s.inner.CIBARequests()
 }
-func (s storeWithoutAccessTokens) Users() store.UserStore { return s.inner.Users() }
 
 func TestWithAccessTokenRevocationStrategy_RejectsUnknownValue(t *testing.T) {
 	t.Parallel()

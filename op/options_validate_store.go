@@ -82,12 +82,6 @@ func (c *config) nilSubstoreErrors() []error {
 		because string
 	}{
 		{
-			need:    true,
-			got:     c.effectiveUserStore(),
-			desc:    "UserStore",
-			because: "the always-mounted /userinfo endpoint resolves every subject through it (supply WithUserStore to source users elsewhere)",
-		},
-		{
 			need:    c.grantEnabled(grant.RefreshToken),
 			got:     c.store.RefreshTokens(),
 			desc:    "RefreshTokenStore",
@@ -108,7 +102,23 @@ func (c *config) nilSubstoreErrors() []error {
 				check.because, nil))
 		}
 	}
+	if grantsResolveEndUser(c.grants) && nilcheck.IsNil(c.effectiveUserStore()) {
+		errs = append(errs, newConfigurationError(errUserStoreUnresolved, nil))
+	}
 	return errs
+}
+
+// errUserStoreUnresolved is the description reported when a grant that
+// resolves end-user subjects is enabled and no user store is configured.
+const errUserStoreUnresolved = "no end-user store is configured but an enabled grant resolves end-user " +
+	"subjects (token redemption, /userinfo and ID Token claims read it); set PrimaryPassword.Store " +
+	"in WithLoginFlow or pass op.WithUserStore, e.g. op.WithUserStore(st.Users()) with a bundled " +
+	"adapter's concrete Users()"
+
+// grantsResolveEndUser reports whether any enabled grant redeems for an
+// end-user subject. client_credentials is the only grant that never does.
+func grantsResolveEndUser(grants []grant.Type) bool {
+	return slices.ContainsFunc(grants, func(g grant.Type) bool { return g != grant.ClientCredentials })
 }
 
 // validateRefreshRetryStoreCapability enforces [store.RefreshRetryResponseStore]

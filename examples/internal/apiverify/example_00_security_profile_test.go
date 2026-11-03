@@ -12,15 +12,15 @@ import (
 
 // 00's deliverable is the contrast between two OPs that differ by one
 // option. The same authorization request — a confidential client, no
-// code_challenge — is admitted by the OP that declares no profile and
-// refused by the one that declares profile.OAuth21. Asserting both
+// code_challenge — is admitted by the OP that declares profile.OIDCCore
+// and refused by the one that declares profile.OAuth21. Asserting both
 // halves is the point: a smoke that only checked the refusal would
 // still pass if the profile stopped being conditional and every OP
 // started demanding PKCE.
 func TestExample00SecurityProfile(t *testing.T) {
 	const (
-		unprofiled = "http://127.0.0.1:8080"
-		baseline   = "http://127.0.0.1:8081"
+		oidcCore = "http://127.0.0.1:8080"
+		baseline = "http://127.0.0.1:8081"
 	)
 	authz := url.Values{
 		"client_id":     {"profile-demo-rp"},
@@ -33,17 +33,17 @@ func TestExample00SecurityProfile(t *testing.T) {
 	p := buildAndStart(t, "../../00-security-profile")
 	defer p.kill()
 
-	waitDiscovery(t, p, unprofiled)
+	waitDiscovery(t, p, oidcCore)
 	waitDiscovery(t, p, baseline)
 
-	// No profile: OIDC Core 1.0 admits the request, so the OP moves the
+	// profile.OIDCCore: OIDC Core 1.0 admits the request, so the OP moves the
 	// browser on to its own login prompt rather than bouncing it back.
-	admitted := authorizeLocation(t, unprofiled+"/oidc/auth?"+authz)
+	admitted := authorizeLocation(t, oidcCore+"/oidc/auth?"+authz)
 	if strings.Contains(admitted, "error=") {
-		t.Fatalf("unprofiled OP rejected a non-PKCE confidential request: Location=%s", admitted)
+		t.Fatalf("oidcCore OP rejected a non-PKCE confidential request: Location=%s", admitted)
 	}
 	if !strings.Contains(admitted, "/oidc/interaction") {
-		t.Fatalf("unprofiled OP Location=%s, want the login prompt", admitted)
+		t.Fatalf("oidcCore OP Location=%s, want the login prompt", admitted)
 	}
 
 	// profile.OAuth21: the same request is refused redirect-safely,
@@ -66,6 +66,7 @@ func TestExample00SecurityProfile(t *testing.T) {
 		`"event":"startup.profile"`,
 		`"pkce_required":false`,
 		`"pkce_required":true`,
+		`"profiles":["oidc-core"]`,
 		`"profiles":["baseline"]`,
 	} {
 		if !strings.Contains(logs, want) {

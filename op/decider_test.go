@@ -12,8 +12,3 @@ var (
 	_ op.Decision = op.Require{}
 	_ op.Decision = op.Deny{}
 )
-
-// The value of op.AuditDenyReasonKey and the unmasked handling of
-// op.Deny.Reason are pinned in decider_internal_test.go: the constant
-// is deprecated, and referencing a deprecated identifier from the
-// external test package would be reported by the linter.

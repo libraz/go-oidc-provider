@@ -222,6 +222,25 @@ must implement `AuthnLockouts()` or be paired with
 
 ### Changed
 
+- **BREAKING:** an OP built without `op.WithProfile` now runs
+  `profile.OAuth21`, so every authorization-code request needs PKCE. The
+  start-up warning about the PKCE-optional default is gone with it. A
+  deployment that admits relying parties unable to send PKCE declares
+  `op.WithProfile(profile.OIDCCore)`, which keeps the OpenID Connect Core 1.0
+  shape and cannot be combined with another profile.
+
+- **BREAKING:** `store.Store` no longer has `Users()`. End-user records come
+  from `PrimaryPassword.Store` in `op.WithLoginFlow` or from
+  `op.WithUserStore`, and `op.New` refuses a configuration that can resolve an
+  end user (any grant other than `client_credentials`) when neither is set.
+  The bundled adapters keep `Users()` and `UserPasswords()` on their concrete
+  types, so a deployment that relied on the store's own user table passes it
+  explicitly: `op.WithUserStore(st.Users())` or
+  `op.PrimaryPassword{Store: st.UserPasswords()}`. A bring-your-own store
+  drops the method; `op/store/contract` takes the user store in the new
+  `Backend.Users` field. The composite adapter loses its `Users` kind, and the
+  start-up `claim_source` line has two values.
+
 - Construction errors name profiles by their Go identifier
   (`profile.OAuth21`, `profile.FAPI2Baseline` and so on) instead of the wire
   slug. Several hints were corrected: the CIBA and device-code substore
@@ -229,9 +248,9 @@ must implement `AuthnLockouts()` or be paired with
   registration substore, and the FAPI DPoP requirement.
 
 - When more than one of the core and grant-gated substores is missing
-  (Clients, ConsumedJTIs, Users, AuthorizationCodes, RefreshTokens, Grants,
-  DeviceCodes, CIBARequests, PushedAuthRequests and the authorize-endpoint
-  capabilities), `op.New` reports them together in one joined error instead of
+  (Clients, ConsumedJTIs, AuthorizationCodes, RefreshTokens, Grants,
+  DeviceCodes, CIBARequests, PushedAuthRequests, the user store and the
+  authorize-endpoint capabilities), `op.New` reports them together in one joined error instead of
   stopping at the first.
 
 - The warning that forwarded headers arrived while `op.WithTrustedProxies`
@@ -279,7 +298,7 @@ must implement `AuthnLockouts()` or be paired with
 
 - `op.New` now warns at construction when `feature.PKCE` is passed to
   `op.WithFeature`, which has no effect (PKCE for confidential clients is
-  required by `op.WithProfile(profile.OAuth21)` or a FAPI profile), and when
+  required unless `op.WithProfile(profile.OIDCCore)` is declared), and when
   `op.WithAllowLocalhostLoopback` is set.
 
 - The sentinel errors for missing required options now carry a remedy in
@@ -327,11 +346,6 @@ must implement `AuthnLockouts()` or be paired with
   original column started and then failed its first request with a 500.
   Columns an embedder added are still allowed. When a table is missing, the
   error ends with one line saying how to create it.
-
-- An authorization-code OP that declares no profile requiring PKCE logs one
-  warning at `op.New`: a confidential client may then redeem a code without
-  PKCE. `op.WithProfile(profile.OAuth21)` silences it; behaviour is
-  unchanged.
 
 - An invalid issuer is reported with the value and the rule it broke, such as
   `issuer "https://idp.example.com/": must not end with a trailing slash`.
@@ -548,13 +562,21 @@ must implement `AuthnLockouts()` or be paired with
 
 ### Added
 
+- `profile.OIDCCore` declares the OpenID Connect Core 1.0 shape explicitly:
+  PKCE stays optional for confidential clients, for relying parties that
+  cannot send it and for the OpenID Connect Basic certification plan.
+
+- The composite adapter routes `store.AuthnLockoutProvider` through a new
+  `AuthnLockouts` kind. Unrouted, it follows `WithDefault`, then the
+  `Clients` backend, like the Shared Signals kinds.
+
 - `oidcsql.WithTablePrefix` prefixes every table the SQL adapter creates and
   queries, mirroring the DynamoDB adapter's option, so the OP's tables can
   sit beside an application's in one schema.
 
 - `profile.OAuth21` names the OAuth 2.1 profile: PKCE on every
-  authorization-code request. It has the value `profile.Baseline` had, and
-  its wire string is unchanged.
+  authorization-code request, and the profile an OP runs when it declares
+  none. Its wire string is `baseline`, as before.
 
 - `store.AuthnLockoutProvider`, the optional interface a store implements to
   expose its lockout store (`AuthnLockouts() store.AuthnLockoutStore`), and the
@@ -1094,25 +1116,31 @@ covered by the SemVer promise.
 - `Reloadable.Reload` shuts down a candidate provider it rejects because its
   route set differs from the running one, instead of leaving it running.
 
-### Deprecated
-
-- `profile.Baseline`. Use `profile.OAuth21`, the same value; the old name read
-  as FAPI 2.0 Baseline, which is `profile.FAPI2Baseline`.
-- `op.RiskPreFactor` and `op.RiskPostFactor`. No consult point passes
-  either phase any more; a login flow consults its `Risk` assessor at
-  `op.RiskAuthorizeEntry` only.
-- `RiskOutcome.MinAAL`. Its only consumer was the removed pre-factor
-  consult.
-- `op.NewEmailOTPAuthenticator`. Use `op.StepEmailOTP` in a `LoginFlow`.
-- Passing `op.WithDeviceVerificationURI`, `op.WithDeviceCodeExpiry` or
-  `op.WithDeviceCodePollInterval` straight to `op.New`. Pass them to
-  `op.WithDeviceCodeGrant`; on their own they set a value without enabling the
-  grant.
-- `op.WithBackchannelAllowPrivateNetwork(bool)`. Use
-  `op.WithAllowPrivateNetworkBackchannel()`. Supplying both is refused as a
-  conflict.
-
 ### Removed
+
+Every symbol that carried a `Deprecated:` marker is gone. Each entry names
+its replacement.
+
+- **BREAKING:** `profile.Baseline`. Use `profile.OAuth21`, the same value.
+- **BREAKING:** `op.WithBackchannelAllowPrivateNetwork(bool)`. Use
+  `op.WithAllowPrivateNetworkBackchannel()`.
+- **BREAKING:** `op.NewEmailOTPAuthenticator`, with `op.EmailOTPConfig`,
+  `op.Mailer`, `op.MailerFunc`, `op.EmailOTPMessage` and
+  `op.DefaultEmailOTPCodeTTL`. Use `op.StepEmailOTP` in a `LoginFlow`.
+- **BREAKING:** `op.RiskPreFactor`, `op.RiskPostFactor` and
+  `RiskOutcome.MinAAL`. A login flow consults its `Risk` assessor at
+  `op.RiskAuthorizeEntry` only, and no code read the floor.
+- **BREAKING:** `op.AuditDenyReasonKey`. A denied login is logged under the
+  plain `reason` attribute.
+- **BREAKING:** `SPAUI.ConsentMount`, `SPAUI.LogoutMount` and
+  `Endpoints.Session`. None of them routed anything; use `op.WithLogoutUI`
+  for the logout pages.
+- **BREAKING:** `testkit.ApproveAllScopes`. Use `testkit.ApprovedScopesFrom`.
+- **BREAKING:** `devicecodekit.Deps.Audit`. Use `Deps.AuditLogger`.
+- **BREAKING:** a `DeviceCodeOption` is no longer an `op.Option`.
+  `op.WithDeviceVerificationURI`, `op.WithDeviceCodeExpiry` and
+  `op.WithDeviceCodePollInterval` go inside `op.WithDeviceCodeGrant`, the
+  same shape as the CIBA options.
 
 These three options were experimental. Each has a direct `op.WithLoginFlow`
 equivalent.

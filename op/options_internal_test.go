@@ -313,32 +313,6 @@ func TestEffectiveDeviceCodePollInterval_DefaultsAndOverride(t *testing.T) {
 	}
 }
 
-// TestDeviceCodeOption_BothFormsSetTheSameField pins that a
-// [DeviceCodeOption] applies identically nested under
-// [WithDeviceCodeGrant] and in the deprecated form passed straight to
-// [New], so the deprecation cannot change behaviour for a caller still on
-// the old form.
-func TestDeviceCodeOption_BothFormsSetTheSameField(t *testing.T) {
-	t.Parallel()
-
-	nested := &config{}
-	if err := WithDeviceCodeGrant(WithDeviceCodePollInterval(15 * time.Second)).apply(nested); err != nil {
-		t.Fatalf("nested apply: %v", err)
-	}
-	direct := &config{}
-	if err := WithDeviceCodePollInterval(15 * time.Second).apply(direct); err != nil {
-		t.Fatalf("direct apply: %v", err)
-	}
-	if nested.deviceCodePollInterval != 15*time.Second || direct.deviceCodePollInterval != 15*time.Second {
-		t.Fatalf("poll interval nested=%v direct=%v, want 15s for both",
-			nested.deviceCodePollInterval, direct.deviceCodePollInterval)
-	}
-	if !nested.deviceCodeGrantEnabled || direct.deviceCodeGrantEnabled {
-		t.Fatalf("grant enabled nested=%v direct=%v, want only the nested form to enable it",
-			nested.deviceCodeGrantEnabled, direct.deviceCodeGrantEnabled)
-	}
-}
-
 // TestEffectiveCIBADefaultExpiresIn_ClampedByMax pins that a configured cap
 // also bounds the lifetime applied when the client omits requested_expiry.
 // Without the clamp an operator who lowers only the cap still hands out

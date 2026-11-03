@@ -434,6 +434,13 @@ func WithACRPolicy(p ACRPolicy) Option {
 // WithProfile activates an industry security profile. Profiles compose
 // multiplicatively: enabling FAPI2Baseline implies its underlying features
 // and policies. Repeated profiles are rejected.
+//
+// When WithProfile is never called the OP runs as if
+// [profile.OAuth21] were declared, so PKCE is required on every
+// authorization-code request. [profile.OIDCCore] opts out of that
+// default (PKCE optional for confidential clients) and cannot be
+// combined with any other profile; [New] rejects the combination.
+//
 // WithProfile auto-enables every flag returned by
 // [profile.RequiredFeatures] for the supplied profile. The auto-enable is
 // idempotent: a flag already present in the configured feature set is

@@ -649,6 +649,7 @@ func TestLoadKeyset_AcceptedByNew(t *testing.T) {
 	provider, err := op.New(
 		op.WithIssuer(validIssuer),
 		op.WithStore(stubStore{}),
+		op.WithUserStore(stubUserStore{}),
 		op.WithKeyset(ks),
 		op.WithCookieKeys(cookies...),
 		fixtureAuthenticator(),

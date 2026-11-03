@@ -33,7 +33,7 @@ var checkedWhen = map[string]string{
 	"grant:device_code":        "The `device_code` grant is enabled or `op.WithDeviceCodeGrant` is set",
 	"grant:ciba":               "The CIBA grant is enabled or `op.WithCIBA` is set",
 	"ssf":                      "`op.WithSharedSignals` is set",
-	"userstore-fallback":       "The user store is this adapter's: neither `op.WithUserStore` nor `PrimaryPassword.Store` names another",
+	"userstore":                "The adapter's `Users()` is passed to `PrimaryPassword.Store`, `StepEmailOTP.Users` or `op.WithUserStore`",
 	"factor:totp":              "The login flow has an `op.StepTOTP` backed by `Store.TOTPs()`",
 	"factor:passkey":           "The login flow has a passkey step backed by `Store.Passkeys()`",
 	"factor:recovery":          "The login flow has an `op.StepRecoveryCode` backed by `Store.RecoveryCodes()`",
@@ -148,7 +148,7 @@ var tableCatalog = []tableInfo{
 	},
 	{
 		"users", "Users", "The adapter's own user records: subject, claims, optional username and password hash.",
-		"Read only when neither `op.WithUserStore` nor `PrimaryPassword.Store` supplies another user store; with your own user store it stays empty. The OP writes it only to rehash a legacy password when it is `PrimaryPassword.Store`.", "userstore-fallback",
+		"Only through your own writes, plus the OP's rehash of a legacy password when the adapter's `Users()` is `PrimaryPassword.Store`.", "userstore",
 	},
 	{
 		"initial_access_tokens", "InitialAccessTokens", "Initial access tokens that authorize dynamic client registration.",

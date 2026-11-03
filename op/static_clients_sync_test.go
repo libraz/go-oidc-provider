@@ -76,6 +76,7 @@ func syncProviderOpts(tb testing.TB, st store.Store, seeds ...op.ClientSeed) []o
 	return []op.Option{
 		op.WithIssuer(validIssuer),
 		op.WithStore(st),
+		withUsersOf(st),
 		op.WithKeyset(validKeyset(tb)),
 		op.WithCookieKeys(newRandomCookieKey(tb)),
 		fixtureAuthenticator(),

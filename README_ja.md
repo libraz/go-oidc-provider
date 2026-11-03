@@ -34,15 +34,18 @@ go get github.com/libraz/go-oidc-provider/op/storeadapter/dynamodb@v1.4.0
 ## クイックスタート
 
 ```go
+db, _ := sql.Open("mysql", dsn)          // 既存のデータベース
+st, err := oidcsql.New(db, oidcsql.MySQL()) // op/storeadapter/sql
+// st.Migrations() を手元の migration ツールで適用する（開発中は st.Migrate）。
+
 handler, err := op.New(
     op.WithIssuer("https://idp.example.com"),
     op.WithStore(st),
     op.WithKeyset(op.Keyset{{KeyID: "k1", Signer: priv}}),
     op.WithCookieKeys(cookieKey), // 32 バイト, AES-256-GCM
     op.WithLoginFlow(op.LoginFlow{
-        Primary: op.PrimaryPassword{Store: users},
+        Primary: op.PrimaryPassword{Store: users{db}},
     }),
-    op.WithProfile(profile.OAuth21), // 認可コード要求すべてに PKCE を必須にする
 )
 if err != nil {
     log.Fatal(err)
@@ -50,17 +53,27 @@ if err != nil {
 log.Fatal(http.ListenAndServe(":8080", handler))
 ```
 
-`st` は OP 自身のレコード（クライアント、コード、トークン、セッション）を保存します。`op.New` は、構成が使う SQL アダプタのテーブルを構築時に検査し、足りないテーブルがあれば名前を挙げて止まります。どのテーブルが対象になるかは [`TABLES.md`](op/storeadapter/sql/schema/TABLES.md) にまとめてあります。`users` は既存のユーザテーブルを `store.UserPasswordStore` として渡したもので、実装するのは読み取りメソッド 3 つで、レガシーハッシュ（bcrypt など）を `PrimaryPassword.LegacySchemes` で再ハッシュする場合に限り、ハッシュの書き戻しメソッドも任意で実装できます。一度だけ割り当てられ再利用されない不透明な識別子（自動採番の id やメールアドレスは不可）の列がすでにあれば、列を足す必要はありません。詳しくは [Bring your own user store](https://go-oidc-provider.libraz.net/ja/use-cases/byo-userstore) を参照してください。
+`users` は既存のユーザテーブルで、OP は `store.UserPasswordStore` の 3 メソッドを通して読みます。どれも未知のユーザには `store.ErrNotFound` を返します。
+
+```go
+func (u users) FindBySubject(ctx context.Context, sub string) (*store.User, error)
+func (u users) FindByUsername(ctx context.Context, login string) (*store.User, error)
+func (u users) ReadPasswordHash(ctx context.Context, sub string) ([]byte, error) // PHC 形式の argon2id
+```
+
+一度だけ割り当てられ再利用されない不透明な識別子（自動採番の id やメールアドレスは不可）の列がすでにあれば、テーブルに列を足す必要はありません。ID トークンと `/userinfo` のクレームも同じストアから読みます。クレームを別の場所に持つ場合だけ `op.WithUserStore` を使います。bcrypt などのレガシーハッシュは `PrimaryPassword.LegacySchemes` で検証できます。詳しくは [Bring your own user store](https://go-oidc-provider.libraz.net/ja/use-cases/byo-userstore) を参照してください。
+
+`st` は OP 自身のレコード（クライアント、コード、トークン、セッション）を、利用者のテーブルと並ぶ `oidc_*` テーブルに保存します。`op.New` は構成が使うテーブルを構築時に検査し、足りないものを 1 つのエラーですべて挙げます。対象のテーブルは [`TABLES.md`](op/storeadapter/sql/schema/TABLES.md) にまとめてあります。
 
 `Issuer` / `Store` / `Keyset` は常に必須です。認可コード（`authorization_code`）による認可は既定で有効になっており、これを使う場合は `CookieKeys` と `LoginFlow` も必須です。`op.New` は安全でない構成のままでは起動せずにエラーを返すので、不完全な設定は構築時に弾かれます。
 
 エンドポイントは `/oidc` の下にマウントされます（`op.WithMountPrefix` で変更できます）。discovery ドキュメントは issuer 直下の `/.well-known/openid-configuration` に置かれるので、最初はこの URL を取得してください。
 
-セキュリティプロファイルはオプション 1 つで宣言できます。宣言したプロファイルと他の設定が食い違う場合、コンストラクタは起動を拒否します。プロファイルを宣言しないと OpenID Connect Core の形のままになり、confidential client は PKCE なしでコードを交換できます。その場合 `op.New` は警告をログに出します（`WithLogger` 未設定なら `slog.Default()` へ）。
+セキュリティプロファイルはオプション 1 つで宣言できます。宣言したプロファイルと他の設定が食い違う場合、コンストラクタは起動を拒否します。宣言しなければ OP は `profile.OAuth21` で動き、認可コード要求のすべてに PKCE を求めます。PKCE を送れないリライングパーティには OpenID Connect Core の形が必要で、これは既定ではなく明示的に宣言します。
 
 ```go
-op.WithProfile(profile.OAuth21)      // OAuth 2.1: code 要求すべてに PKCE 必須
 op.WithProfile(profile.FAPI2Baseline) // PAR + JAR + DPoP, ES256 署名, alg ロック
+op.WithProfile(profile.OIDCCore)      // confidential client の PKCE を任意にする
 ```
 
 `profile.OAuth21` は OAuth 2.1 の構えであり、FAPI 2.0 Baseline ではありません。FAPI のプロファイルは `profile.FAPI2Baseline` と `profile.FAPI2MessageSigning` です。

@@ -40,6 +40,8 @@ func buildProvider(issuer string) (*op.Provider, error) {
 		// listener this example opens.
 		op.WithIssuer(issuer),
 		op.WithStore(st),
+		// No PrimaryPassword store here, so the demo user's directory is named.
+		op.WithUserStore(st.Users()),
 		op.WithKeyset(keys.Keyset()),
 		op.WithCookieKeys(keys.CookieKey),
 		// SubjectAuthenticator + AutoConsentDriver let the example

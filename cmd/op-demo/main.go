@@ -190,7 +190,7 @@ func mainErr() error {
 		// design. Override either flag to reseed at startup.
 		confClientID  = flag.String("confidential-client-id", "demo-confidential", "client_id of the confidential seed client (client_secret_basic auth). Empty disables the confidential seed.")
 		confClientSec = flag.String("confidential-client-secret", "demo-confidential-secret-32-bytes-min", "client_secret for the confidential seed client. Empty disables the confidential seed. The default is sized at 36 bytes (>= 32) so OFCS modules that derive an HS256-signed JWT from the secret (e.g. oidcc-rp-initiated-logout-bad-id-token-hint, which signs an id_token_hint with HS256) can satisfy RFC 7518 §3.2's 256-bit key requirement.")
-		profileFlag   = flag.String("profile", "", "security profile to activate. One of: \"\" (no profile, vanilla OIDC Core), \"baseline\" (OAuth 2.1, PKCE required), \"fapi2-baseline\", \"fapi2-message-signing\", \"fapi-ciba\". Profiles auto-enable the features they require (PAR, DPoP, JAR).")
+		profileFlag   = flag.String("profile", "", "security profile to activate. One of: \"\" (basic: OIDC Core, PKCE optional), \"baseline\" (OAuth 2.1, PKCE required), \"fapi2-baseline\", \"fapi2-message-signing\", \"fapi-ciba\". Profiles auto-enable the features they require (PAR, DPoP, JAR).")
 		// FAPI test client JWKS paths. Each file holds the PUBLIC
 		// half (kty/crv/x/y/kid only — "d" is stripped if present)
 		// of one OFCS test client. The matching private halves live
@@ -652,12 +652,13 @@ const (
 )
 
 // profileOptions dispatches to the per-profile helper that returns the
-// options that profile activates. Returns nil for the empty / "basic"
-// profile (the common base IS the basic configuration).
+// options that profile activates. The empty / "basic" profile declares
+// [profile.OIDCCore] explicitly: the OIDC Basic conformance plan drives
+// the code flow without PKCE, which the OAuth 2.1 default would reject.
 func profileOptions(ctx context.Context, cfg runConfig, logger *slog.Logger) ([]op.Option, error) {
 	switch cfg.profile {
 	case "", profileNameBasic:
-		return nil, nil
+		return []op.Option{op.WithProfile(profile.OIDCCore)}, nil
 	case profileNameBaseline:
 		// The OAuth 2.1 posture needs no supporting wiring: its only
 		// mandate is PKCE on every authorization-code request, which

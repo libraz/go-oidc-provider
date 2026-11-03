@@ -18,10 +18,8 @@ description: |
   transactional-cluster isolation that lets the store be routed
   independently of authorization-code / refresh-token storage.
 
-  The contract makes the embedding pattern (a wrapper struct that
-  embeds a base store.Store and overrides Users()) and the composite
-  pattern (composite.With(Users, ...)) interchangeable from the OP's
-  perspective.
+  The user store is supplied through op.WithUserStore or
+  PrimaryPassword.Store, never through the aggregate store.Store.
 
 rows:
   - id: BUS-001
@@ -31,7 +29,7 @@ rows:
       When a request hits the UserInfo endpoint with a valid bearer
       token, the OP MUST resolve end-user claims by calling
       store.UserStore.FindBySubject(ctx, sub) on the value passed to
-      op.WithStore. No internal claim cache short-circuits the call.
+      op.WithUserStore. No internal claim cache short-circuits the call.
     status: active
 
   - id: BUS-002
@@ -42,7 +40,7 @@ rows:
       token endpoint needs to project an OIDC Core 1.0 §5.5 "claims"
       request payload addressed to the id_token, the OP MUST resolve
       end-user claims by calling store.UserStore.FindBySubject(ctx, sub)
-      on the value passed to op.WithStore. Standard id_token claims
+      on the value passed to op.WithUserStore. Standard id_token claims
       (sub / iss / aud / iat / exp / auth_time / nonce / acr / amr /
       azp / at_hash / c_hash / sid) are emitted by the library
       directly and do not solicit the user store.
@@ -52,11 +50,10 @@ rows:
     severity: P1
     spec: implementation contract
     behaviour: |
-      When a wrapper struct embeds a base store.Store implementation
-      and defines its own Users() store.UserStore method, the OP
-      always observes the wrapper's override at every call site that
-      reads end-user claims. The embedded base's Users() is never
-      reached.
+      The store.UserStore passed to op.WithUserStore is the one the OP
+      reads at every call site that reads end-user claims, whatever
+      the aggregate store passed to op.WithStore holds. The
+      aggregate's own users are never reached.
     status: active
 
   - id: BUS-004
@@ -120,8 +117,8 @@ rows:
     behaviour: |
       The transactional store.Tx interface does NOT expose a
       Users() accessor; the OP cannot solicit a UserStore inside a
-      token-endpoint transaction. Consequently embedders MAY route
-      Users to a backend that does not implement
+      token-endpoint transaction. Consequently embedders MAY back
+      the user store with a backend that does not implement
       store.Transactional without breaking authorization-code
       exchange or refresh-token rotation atomicity.
     cross_refs:
@@ -134,8 +131,8 @@ rows:
     behaviour: |
       The PrimaryPassword Step receives its store.UserPasswordStore
       directly via op.PrimaryPassword{Store: ...}. The library does
-      NOT require this value to be the same instance as
-      store.Store.Users(); two equivalent stores (one for password
+      NOT require this value to be the same instance as the
+      op.WithUserStore value; two equivalent stores (one for password
       verification, one for claim assembly) are accepted as long as
       both honour the contract for their own subject space.
     status: active
@@ -154,11 +151,9 @@ rows:
     severity: P1
     spec: implementation contract
     behaviour: |
-      When the embedder routes Users via composite.With(Users, b)
-      where b implements store.Store, the OP reads end-user claims
-      from b.Users() at every call site listed in BUS-001 / BUS-002.
-      Composite routing and the embedding-wrapper pattern are
-      observationally equivalent from the OP's perspective.
+      When the aggregate store is a composite, which routes no user
+      records, the OP reads end-user claims from the op.WithUserStore
+      value at every call site listed in BUS-001 / BUS-002.
     cross_refs:
       - byo_userstore#BUS-003
     status: active

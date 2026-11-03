@@ -56,7 +56,9 @@ type User struct {
 	UpdatedAt time.Time
 }
 
-// UserStore is the substore for end-user records. It is read-only from
+// UserStore is the substore for end-user records, supplied through the
+// login flow's PrimaryPassword.Store or op.WithUserStore rather than the
+// [Store] aggregate. It is read-only from
 // the library's perspective, except for the optional rehash write-back of
 // a legacy password hash ([UserPasswordHashUpdater]): all other write
 // paths live in the embedding application. The OP queries it at:

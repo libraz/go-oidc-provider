@@ -21,6 +21,7 @@ func TestWithStaticClients_IsIdempotentAcrossProviderConstruction(t *testing.T) 
 		_, err := op.New(
 			op.WithIssuer(validIssuer),
 			op.WithStore(st),
+			op.WithUserStore(st.Users()),
 			op.WithKeyset(validKeyset(t)),
 			op.WithCookieKeys(newRandomCookieKey(t)),
 			fixtureAuthenticator(),
@@ -60,6 +61,7 @@ func TestWithStaticClients_DifferentStoredRecordConflicts(t *testing.T) {
 		_, err := op.New(
 			op.WithIssuer(validIssuer),
 			op.WithStore(st),
+			op.WithUserStore(st.Users()),
 			op.WithKeyset(validKeyset(t)),
 			op.WithCookieKeys(newRandomCookieKey(t)),
 			fixtureAuthenticator(),
@@ -108,6 +110,7 @@ func TestWithStaticClients_NonStaticStoredRecordConflicts(t *testing.T) {
 	_, err := op.New(
 		op.WithIssuer(validIssuer),
 		op.WithStore(st),
+		op.WithUserStore(st.Users()),
 		op.WithKeyset(validKeyset(t)),
 		op.WithCookieKeys(newRandomCookieKey(t)),
 		fixtureAuthenticator(),
@@ -138,6 +141,7 @@ func TestWithStaticClients_DifferentSecretConflicts(t *testing.T) {
 		_, err := op.New(
 			op.WithIssuer(validIssuer),
 			op.WithStore(st),
+			op.WithUserStore(st.Users()),
 			op.WithKeyset(validKeyset(t)),
 			op.WithCookieKeys(newRandomCookieKey(t)),
 			fixtureAuthenticator(),
@@ -231,6 +235,7 @@ func TestWithStaticClients_RemovedSeedIsNotDeleted(t *testing.T) {
 	base := []op.Option{
 		op.WithIssuer(validIssuer),
 		op.WithStore(st),
+		op.WithUserStore(st.Users()),
 		op.WithKeyset(validKeyset(t)),
 		op.WithCookieKeys(newRandomCookieKey(t)),
 		fixtureAuthenticator(),
@@ -299,6 +304,7 @@ func TestWithStaticClients_NthBatchFailureLeavesStoreUntouched(t *testing.T) {
 	_, err := op.New(
 		op.WithIssuer(validIssuer),
 		op.WithStore(st),
+		op.WithUserStore(backend.Users()),
 		op.WithKeyset(validKeyset(t)),
 		op.WithCookieKeys(newRandomCookieKey(t)),
 		fixtureAuthenticator(),
@@ -332,6 +338,7 @@ func TestWithStaticClients_NthBatchFailureLeavesStoreUntouched(t *testing.T) {
 	if _, retryErr := op.New(
 		op.WithIssuer(validIssuer),
 		op.WithStore(st),
+		op.WithUserStore(backend.Users()),
 		op.WithKeyset(validKeyset(t)),
 		op.WithCookieKeys(newRandomCookieKey(t)),
 		fixtureAuthenticator(),

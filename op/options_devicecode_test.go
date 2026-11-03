@@ -84,21 +84,6 @@ func TestWithDeviceCodeGrant_RejectsNilOption(t *testing.T) {
 	}
 }
 
-// TestDeviceCodeOption_SingleValuedAcrossForms pins that a setting passed
-// both nested and, in the deprecated form, straight to op.New is refused
-// as a duplicate rather than resolved by option order.
-func TestDeviceCodeOption_SingleValuedAcrossForms(t *testing.T) {
-	t.Parallel()
-
-	_, err := op.New(append(validBaseOptsWithInmem(t),
-		op.WithDeviceCodeGrant(op.WithDeviceCodePollInterval(5*time.Second)),
-		op.WithDeviceCodePollInterval(10*time.Second),
-	)...)
-	if err == nil || !strings.Contains(err.Error(), "at most once") {
-		t.Fatalf("err = %v, want a duplicate-setting error", err)
-	}
-}
-
 // TestWithDeviceCodeExpiry_RejectsNonPositive pins the option-site
 // validation: zero and negative durations are rejected so a
 // misconfiguration surfaces at construction time.
@@ -166,6 +151,7 @@ func TestWithDeviceCodeExpiry_IndependentOfShortAccessTokenTTL(t *testing.T) {
 	provider, err := op.New(
 		op.WithIssuer(validIssuer),
 		op.WithStore(s),
+		op.WithUserStore(s.Users()),
 		op.WithKeyset(validKeyset(t)),
 		op.WithCookieKeys(newRandomCookieKey(t)),
 		fixtureAuthenticator(),

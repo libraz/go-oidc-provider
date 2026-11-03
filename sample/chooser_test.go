@@ -85,9 +85,7 @@ func TestSelectAccountRendersChooserAndCompletes(t *testing.T) {
 // TestUserInfoResolvesFromTheApplicationsOwnStore pins the wiring main.go
 // depends on: op.WithUserStore(members) is what makes /userinfo (and
 // every ID-token claim) read from the store the login flow authenticated
-// against, when that store is not the one passed to WithStore. Dropping
-// the option would leave effectiveUserStore() resolving against the
-// backend's own Users(), which this member's account never touches.
+// against, not from the one passed to WithStore.
 func TestUserInfoResolvesFromTheApplicationsOwnStore(t *testing.T) {
 	t.Parallel()
 

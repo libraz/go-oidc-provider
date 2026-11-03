@@ -333,7 +333,7 @@ func TestScenario_UI_008_ClientGoneReturnsInvalidToken(t *testing.T) {
 	}
 }
 
-// uiMissingSubjectStore wraps an inmem.Store and shadows Users() so
+// uiMissingSubjectStore wraps an inmem.Store and carries a Users() whose
 // FindBySubject returns store.ErrNotFound once gone is set. UI-009 uses
 // this to drive the "account gone after issuance" branch without
 // poking at the inmem internals: we mint a token with the real
@@ -367,7 +367,7 @@ func TestScenario_UI_009_AccountGoneReturnsInvalidToken(t *testing.T) {
 	base := inmem.New()
 	hybrid := &uiMissingSubjectStore{Store: base}
 
-	tk := testkit.NewProvider(t, testkit.WithOptions(op.WithStore(hybrid)))
+	tk := testkit.NewProvider(t, testkit.WithOptions(op.WithStore(hybrid), op.WithUserStore(hybrid.Users())))
 
 	hash, err := op.HashClientSecret(uiTestClientSecret)
 	if err != nil {

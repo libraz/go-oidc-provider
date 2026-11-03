@@ -21,6 +21,8 @@ func profileOptionName(p profile.Profile) string {
 	switch p {
 	case profile.OAuth21:
 		return "profile.OAuth21"
+	case profile.OIDCCore:
+		return "profile.OIDCCore"
 	case profile.FAPI2Baseline:
 		return "profile.FAPI2Baseline"
 	case profile.FAPI2MessageSigning:
@@ -44,7 +46,7 @@ func isFAPI2Profile(p profile.Profile) bool {
 	switch p {
 	case profile.FAPI2Baseline, profile.FAPI2MessageSigning:
 		return true
-	case profile.OAuth21, profile.FAPICIBA:
+	case profile.OAuth21, profile.OIDCCore, profile.FAPICIBA:
 		return false
 	}
 	return false
@@ -104,8 +106,8 @@ func profileWithoutNoneAuth(profiles []profile.Profile, allowed func(profile.Pro
 // regression as a configuration_error rather than letting the
 // runtime emit a profile-non-conformant response.
 func (c *config) validateProfiles() error {
-	if len(c.profiles) == 0 {
-		return nil
+	if err := c.validateOIDCCoreAlone(); err != nil {
+		return err
 	}
 	enabled := make(map[feature.Flag]struct{}, len(c.features))
 	for _, f := range c.features {
@@ -114,6 +116,23 @@ func (c *config) validateProfiles() error {
 	for _, p := range c.profiles {
 		if err := c.validateProfile(p, enabled); err != nil {
 			return err
+		}
+	}
+	return nil
+}
+
+// validateOIDCCoreAlone rejects [profile.OIDCCore] declared next to any
+// other profile: it is the explicit absence of a mandate, so pairing it
+// with one is either contradictory or void.
+func (c *config) validateOIDCCoreAlone() error {
+	if !slices.Contains(c.profiles, profile.OIDCCore) {
+		return nil
+	}
+	for _, p := range c.profiles {
+		if p != profile.OIDCCore {
+			return newConfigurationError(withProfileName(profile.OIDCCore)+
+				" cannot be combined with "+withProfileName(p)+
+				"; it is the explicit absence of a profile requirement", nil)
 		}
 	}
 	return nil
@@ -273,7 +292,7 @@ func profileForcesDPoPNonce(p profile.Profile) bool {
 	switch p {
 	case profile.FAPI2MessageSigning, profile.FAPICIBA:
 		return true
-	case profile.OAuth21, profile.FAPI2Baseline:
+	case profile.OAuth21, profile.OIDCCore, profile.FAPI2Baseline:
 		return false
 	}
 	return false
