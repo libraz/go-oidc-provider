@@ -246,6 +246,32 @@ must implement `AuthnLockouts()` or be paired with
   `Backend.Users` field. The composite adapter loses its `Users` kind, and the
   start-up `claim_source` line has two values.
 
+- **BREAKING:** `op.New` refuses a browser sign-in option set explicitly while
+  the grant set has no `authorization_code`: `op.WithLoginFlow`,
+  `op.WithInteractions`, `op.WithSPAUI`, `op.WithConsentUI`,
+  `op.WithChooserUI` and `op.WithFirstPartyClients`. `op.WithGrants` replaces
+  the defaults, so these options used to be dropped without a trace. Options
+  that arrive through `op.WithDefaults` are not counted, and neither is a
+  login flow that only serves as the claim source of `device_code` or CIBA.
+  Fix it by listing `grant.AuthorizationCode` in `op.WithGrants` or by
+  removing the options. The error wraps `op.ErrAuthorizationCodeGrantRequired`.
+
+- The SQL adapter's sessions table gets `idx_oidc_sessions_subject` on
+  `subject`, so deleting a subject's sessions does not scan the table. It is
+  in migration `000006_v1.5.0` and in `v1.sql`. On MySQL an existing table
+  needs the `ALTER TABLE` from the migration file, because `Store.Migrate`
+  cannot add it, and `op.New` names the index when it is missing.
+
+- The DynamoDB sessions table gains a `by_subject` global secondary index.
+  A table managed outside the adapter must add it; `Store.CreateTables` adds
+  it automatically, and `Store.ValidateSchema` refuses a sessions table
+  without it.
+
+- The Redis adapter keeps a set of session ids per subject. A session written
+  before the upgrade joins that set, and the DynamoDB index, on its next
+  `Touch`; one never touched again stays out of `ForgetSubject`'s reach and
+  expires at its normal time.
+
 - Construction errors name profiles by their Go identifier
   (`profile.OAuth21`, `profile.FAPI2Baseline` and so on) instead of the wire
   slug. Several hints were corrected: the CIBA and device-code substore
@@ -566,6 +592,25 @@ must implement `AuthnLockouts()` or be paired with
   subject mapping to `op.WithJWTBearerGrant`.
 
 ### Added
+
+- `Provider.ForgetSubject` erases an end user: it revokes the subject's
+  grants and tokens as `RevokeSubject` does, then deletes the browser
+  sessions, the sign-in lockout record and the passkey, TOTP, recovery-code
+  and email-OTP records. It refuses to run while a configured user store
+  still resolves the subject, so the lookup must return `store.ErrNotFound`
+  first. The user record itself and a relying party's own copy are not
+  touched, and no Back-Channel Logout is sent.
+
+- `store.SessionSubjectDeleter` (`DeleteBySubject`) and
+  `store.AuthnLockoutDeleter` (`Delete`) are optional extensions of the
+  session and lockout stores that `ForgetSubject` calls. They are checked at
+  that call, before anything is deleted; a bring-your-own store that never
+  calls `ForgetSubject` need not implement them. The bundled adapters do, and
+  `op/store/contract` covers both.
+
+- `op.ErrAuthorizationCodeGrantRequired` is the sentinel `op.New` wraps when a
+  browser sign-in option is set without the `authorization_code` grant; match
+  it with `errors.Is`.
 
 - `profile.OIDCCore` declares the OpenID Connect Core 1.0 shape explicitly:
   PKCE stays optional for confidential clients, for relying parties that
