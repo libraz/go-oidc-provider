@@ -59,6 +59,23 @@ func (s *authnLockoutStore) Get(ctx context.Context, subject string) (*store.Aut
 	return cloneAuthnLockoutRecord(rec), nil
 }
 
+var _ store.AuthnLockoutDeleter = (*authnLockoutStore)(nil)
+
+// Delete implements [store.AuthnLockoutDeleter]. It returns
+// [store.ErrNotFound] when no record exists for subject.
+func (s *authnLockoutStore) Delete(ctx context.Context, subject string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, ok := s.m[subject]; !ok {
+		return store.ErrNotFound
+	}
+	delete(s.m, subject)
+	return nil
+}
+
 // CompareAndSwap implements [store.AuthnLockoutStore].
 func (s *authnLockoutStore) CompareAndSwap(ctx context.Context, expectedVersion uint64, next *store.AuthnLockoutRecord) (bool, error) {
 	if err := ctx.Err(); err != nil {

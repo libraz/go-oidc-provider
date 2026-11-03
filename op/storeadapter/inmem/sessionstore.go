@@ -18,14 +18,18 @@ type sessionStore struct {
 	clock        Clock
 	m            map[string]*store.Session
 	byGroup      map[string]map[string]struct{} // ChooserGroupID -> session ids
+	bySubject    map[string]map[string]struct{} // Subject -> session ids
 	savesSinceGC sweeper
 }
 
+var _ store.SessionSubjectDeleter = (*sessionStore)(nil)
+
 func newSessionStore(c Clock) *sessionStore {
 	return &sessionStore{
-		clock:   c,
-		m:       make(map[string]*store.Session),
-		byGroup: make(map[string]map[string]struct{}),
+		clock:     c,
+		m:         make(map[string]*store.Session),
+		byGroup:   make(map[string]map[string]struct{}),
+		bySubject: make(map[string]map[string]struct{}),
 	}
 }
 
@@ -45,11 +49,41 @@ func (s *sessionStore) Save(_ context.Context, sess *store.Session) error {
 		s.byGroup[stored.ChooserGroupID] = ids
 	}
 	ids[sess.ID] = struct{}{}
+	subIDs := s.bySubject[stored.Subject]
+	if subIDs == nil {
+		subIDs = make(map[string]struct{})
+		s.bySubject[stored.Subject] = subIDs
+	}
+	subIDs[sess.ID] = struct{}{}
+	return nil
+}
+
+// DeleteBySubject implements [store.SessionSubjectDeleter]. It removes
+// every session of subject, expired or not, and returns nil when there
+// is none.
+func (s *sessionStore) DeleteBySubject(ctx context.Context, subject string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if subject == "" {
+		return errors.New("inmem: empty subject")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	// dropLocked mutates the index set, so snapshot the ids first.
+	ids := make([]string, 0, len(s.bySubject[subject]))
+	for id := range s.bySubject[subject] {
+		ids = append(ids, id)
+	}
+	for _, id := range ids {
+		s.dropLocked(id)
+	}
 	return nil
 }
 
 // dropLocked removes the session id from the primary map and from the
-// chooser-group index. The caller must hold sessionStore.mu for writing.
+// chooser-group and subject indexes. The caller must hold sessionStore.mu
+// for writing.
 func (s *sessionStore) dropLocked(id string) {
 	rec, ok := s.m[id]
 	if !ok {
@@ -60,6 +94,12 @@ func (s *sessionStore) dropLocked(id string) {
 		delete(ids, id)
 		if len(ids) == 0 {
 			delete(s.byGroup, rec.ChooserGroupID)
+		}
+	}
+	if ids := s.bySubject[rec.Subject]; ids != nil {
+		delete(ids, id)
+		if len(ids) == 0 {
+			delete(s.bySubject, rec.Subject)
 		}
 	}
 }
