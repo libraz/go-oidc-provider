@@ -7,7 +7,6 @@
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE)
 [![Go](https://img.shields.io/badge/Go-1.26%2B-00ADD8?logo=go&logoColor=white)](go.mod)
 [![Docs](https://img.shields.io/badge/docs-go--oidc--provider.libraz.net-2563eb)](https://go-oidc-provider.libraz.net)
-[![Go Report Card](https://goreportcard.com/badge/github.com/libraz/go-oidc-provider)](https://goreportcard.com/report/github.com/libraz/go-oidc-provider)
 
 OpenID Connect Provider (Authorization Server) library for Go. `op.New(...)`
 returns a `*op.Provider`, an `http.Handler` with a `Shutdown` method, that
@@ -156,8 +155,8 @@ their own opt-in. Documented under
   registry. The library does not mount `/metrics`, install request-duration
   middleware, or wrap your router; that is the embedder's responsibility.
 
-Deliberately out of scope: an IdP (the library has no user table, no password
-hashing and no email delivery), a generic OAuth2 framework, and a UI kit. See
+Deliberately out of scope: an IdP (the library does not own your user records
+and has no email delivery), a generic OAuth2 framework, and a UI kit. See
 [Why this library](https://go-oidc-provider.libraz.net/why).
 
 ## Standards

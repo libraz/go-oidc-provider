@@ -7,7 +7,6 @@
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE)
 [![Go](https://img.shields.io/badge/Go-1.26%2B-00ADD8?logo=go&logoColor=white)](go.mod)
 [![Docs](https://img.shields.io/badge/docs-go--oidc--provider.libraz.net-2563eb)](https://go-oidc-provider.libraz.net/ja/)
-[![Go Report Card](https://goreportcard.com/badge/github.com/libraz/go-oidc-provider)](https://goreportcard.com/report/github.com/libraz/go-oidc-provider)
 
 Go 向けの OpenID Connect Provider（Authorization Server）ライブラリです。`op.New(...)` が返すのは `*op.Provider` です。`Shutdown` を備えた `http.Handler` なので、`net/http` / `chi` / `gin` など任意のルータにマウントできます。フレームワークに依存せず、グローバルな状態も持ちません。対象プロファイルは FAPI 2.0 Baseline と Message Signing です。
 
@@ -91,7 +90,7 @@ op.WithProfile(profile.OIDCCore)      // confidential client の PKCE を任意�
 - **対話ドライバはヘッドレスです**。`op.WithSPAUI` でログインと同意を SPA に委譲でき、`op.WithConsentUI` で独自テンプレートに差し替えることもできます。ログアウトの確認画面とサインアウト完了画面は既定では OP 組み込みの（ロケール対応済みの）ページで、`op.WithLogoutUI` を使えば独自テンプレートに差し替えられます。
 - **観測性は監査を起点にします**。業務イベントは `audit.Emitter` を通じて集約され、`op.WithPrometheus(reg)` は厳選したカウンタ群を利用者のレジストリに登録します。`/metrics` の公開、リクエスト所要時間を測るミドルウェアの導入、ルータのラップはライブラリ側では**行いません**。これらは組み込み側の責務です。
 
-次のものは意図的にスコープ外です。IdP ではありません（ユーザテーブル・パスワードハッシュ・メール送信を持ちません）。汎用の OAuth2 フレームワークでも、UI フレームワークでもありません。詳しくは [Why this library](https://go-oidc-provider.libraz.net/ja/why) を参照してください。
+次のものは意図的にスコープ外です。IdP ではありません（ユーザのレコードを所有せず、メール送信も持ちません）。汎用の OAuth2 フレームワークでも、UI フレームワークでもありません。詳しくは [Why this library](https://go-oidc-provider.libraz.net/ja/why) を参照してください。
 
 ## 準拠する仕様
 
