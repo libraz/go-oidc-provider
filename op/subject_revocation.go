@@ -29,8 +29,8 @@ import (
 // credentials are retired here too; a poll redeeming while the call runs
 // is refused and its credentials retired. A device code or CIBA request
 // approved but not yet redeemed records no grant and is not reached: its
-// redemption is refused once the UserStore no longer knows the subject,
-// as for browser sessions below. Credentials issued without a grant
+// redemption is refused once the UserStore no longer knows the subject.
+// Credentials issued without a grant
 // record are NOT reached: those a [CustomGrantHandler] issues, whose
 // subject the handler rather than a grant record vouches for, and the
 // access tokens of the jwt-bearer grant ([WithJWTBearerGrant]), ID-JAG
@@ -38,10 +38,9 @@ import (
 // individually; for jwt-bearer, the next redemption is refused once the
 // subject resolver or the UserStore no longer knows the subject.
 //
-// Browser sessions are not touched: the session store has no subject
-// index. A session left behind cannot mint tokens once its grants are
-// gone, and after the user record is removed the next /authorize
-// re-authenticates.
+// Browser sessions, lockout counters and factor records are not
+// touched. To erase a deleted user's data including its sessions, call
+// [Provider.ForgetSubject], which runs RevokeSubject first.
 //
 // Under [WithSharedSignals] a CAEP session-revoked SET is queued for
 // every receiver the subject holds a grant with, before the grants are
