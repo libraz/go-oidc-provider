@@ -29,7 +29,9 @@ now enforce the Final specification's issuer-only client assertion audience
 and non-rotating refresh tokens, and DPoP proofs are checked against the
 endpoint URL the OP advertises. Options that did the same job under several
 names are folded into one (`op.WithAllowPrivateNetwork`,
-`op.WithBackchannelLogout`, `op.WithMTLSProxy(op.MTLSProxy{...})` and others).
+`op.WithBackchannelLogout`, `op.WithMTLSProxy(op.MTLSProxy{...})` and others),
+every grant takes one struct through `op.With<Name>Grant`, and the audit event
+constants move to the `op/audit` package.
 Its `Changed` and `Removed` sections list each one with its replacement.
 
 The main module and the storage-adapter sub-modules
@@ -273,9 +275,45 @@ Before upgrading, check each item that applies to the deployment:
   Fix it by listing `grant.AuthorizationCode` in `op.WithGrants` or by
   removing the options. The error wraps `op.ErrAuthorizationCodeGrantRequired`.
 
-- **BREAKING:** `op.RegisterTokenExchange` is renamed `op.WithTokenExchange`,
-  the one `op.Option` constructor that lacked the `With` prefix. The signature
-  and behaviour are unchanged; the call site changes its name only.
+- **BREAKING:** every grant is configured the same way, one struct passed to
+  `op.With<Name>Grant`, as `op.WithJWTBearerGrant(op.JWTBearerGrant{...})`
+  already was:
+  - `op.WithCIBA(op.WithCIBAHintResolver(r), op.WithCIBAPollInterval(d), ...)`
+    becomes `op.WithCIBAGrant(op.CIBAGrant{HintResolver: r, PollInterval: d, ...})`.
+    `WithCIBADefaultExpiresIn` and `WithCIBAMaxExpiresIn` become the
+    `DefaultRequestTTL` and `MaxRequestTTL` fields; `op.CIBAOption` and the
+    `op.WithCIBA*` sub-options are gone.
+  - `op.WithDeviceCodeGrant(op.WithDeviceVerificationURI(u), op.WithDeviceCodeTTL(t), op.WithDeviceCodePollInterval(i))`
+    becomes `op.WithDeviceCodeGrant(op.DeviceCodeGrant{VerificationURI: u, TTL: t, PollInterval: i})`.
+    A zero `TTL` or `PollInterval` takes the default; a negative one is
+    refused. `op.DeviceCodeOption` and its three constructors are gone.
+  - `op.RegisterTokenExchange(policy)` becomes
+    `op.WithTokenExchangeGrant(op.TokenExchangeGrant{Policy: policy})`.
+
+- **BREAKING:** `op.RegistrationOption` is renamed `op.DynamicRegistration`,
+  and `op.WithLocale` is renamed `op.WithLocaleBundle` after the type it takes.
+
+- **BREAKING:** `feature.DynamicRegistration`, `feature.RAR` and
+  `feature.GrantManagement` are removed. `op.WithDynamicRegistration`,
+  `op.WithAuthorizationDetailTypes` and `op.WithGrantManagement` turn the
+  feature on, so there is no second way to enable it. The discovery and
+  start-up audit strings are unchanged.
+
+- **BREAKING:** the audit event catalogue moves to the new package
+  `op/audit`: `op.AuditEvent` becomes `audit.Event`, `op.AuditEventDefinition`
+  becomes `audit.EventDefinition`, `op.AuditEventCatalog()` becomes
+  `audit.Catalog()`, and each `op.AuditXxx` constant becomes `audit.Xxx`
+  (`op.AuditLoginSuccess` is `audit.LoginSuccess`). The event strings written
+  to the log are unchanged.
+
+- **BREAKING:** `profile.OAuth21.String()` returns `"oauth21"`, which the
+  discovery metadata, the start-up audit record and the startup log carry. It
+  returned `"baseline"`, which read as FAPI 2.0 Baseline.
+
+- The `op.New` error for a FAPI 2.0 Message Signing configuration using DPoP
+  without a nonce source names the fix: `op.WithDPoPNonceSource` with
+  `op.NewInMemoryDPoPNonceSource` on a single replica or a shared source, or
+  mTLS sender-constraining with `op.WithFeature(feature.MTLS)`.
 
 - Two `op.New` errors read more plainly. A static client whose stored record
   differs from its seed no longer ends with `store: concurrent modification`,
@@ -488,9 +526,9 @@ a later release records the release it was created at with that `INSERT` once.
   `op.WithIssuer` composed from several helpers could vanish. The options
   that already refused a repeat now report it in the same words.
   `op.WithEndpoints` may be repeated, but each path is single-valued, and so
-  is each key of an `op.WithLocale` locale. To layer overrides on a shared
+  is each key of an `op.WithLocaleBundle` locale. To layer overrides on a shared
   base list, wrap the base in `op.WithDefaults` (see `Added`).
-  `op.WithTokenExchange` still reports a repeat as
+  `op.WithTokenExchangeGrant` still reports a repeat as
   `op.ErrTokenExchangeDuplicate`.
 
 - `op.WithTrustedProxies` is additive: repeated calls accumulate CIDRs, as
@@ -750,8 +788,7 @@ a later release records the release it was created at with that `INSERT` once.
   `LegacySchemes: []op.PasswordHashScheme{op.BcryptHashScheme()}`.
 
 - The option index in `op/doc.go` is checked by a test against the exported
-  `op.With*` constructors. `op.WithTokenExchange` was missing from it and is
-  listed now.
+  `op.With*` constructors.
 
 ### Added
 
@@ -831,10 +868,10 @@ a later release records the release it was created at with that `INSERT` once.
 - `testkit.WithSigningAlgorithm` builds a test provider that signs with RS256,
   and `testkit.SignedJWT` signs with either algorithm.
 
-- `op.AuditRedirectURIMismatch` is emitted when `/authorize` receives an
+- `audit.RedirectURIMismatch` is emitted when `/authorize` receives an
   unregistered `redirect_uri` and when the token endpoint receives one that
   differs from the authorization request, with `endpoint` and the presented
-  `redirect_uri` in its extras. `op.AuditPKCEViolation` is emitted when a
+  `redirect_uri` in its extras. `audit.PKCEViolation` is emitted when a
   `code_verifier` fails at the token endpoint, with a `reason`. Both were
   reserved vocabulary the OP never emitted. The wire responses are unchanged.
 
@@ -906,7 +943,7 @@ a later release records the release it was created at with that `INSERT` once.
   an outage. `store.Client.PreviousSecretHash` and
   `store.Client.PreviousSecretExpiresAt` hold it, and `op.SyncStaticClients`
   carries the previous hash across a rotation. Authentication with the
-  previous secret emits `op.AuditClientAuthnPreviousSecret`
+  previous secret emits `audit.ClientAuthnPreviousSecret`
   (`client_authn.previous_secret`) so operators can find clients that have
   not switched.
 
@@ -932,7 +969,7 @@ a later release records the release it was created at with that `INSERT` once.
   authenticator can report a rejected credential (counted, prompt shown
   again) or a user-caused terminal failure (4xx). Any other error remains a
   server error.
-- `op.AuditLockoutEngaged` (`lockout.engaged`), emitted once with the
+- `audit.LockoutEngaged` (`lockout.engaged`), emitted once with the
   subject as ActorID when a failed attempt newly locks the account.
 - `composite.Store.AuthnLockouts`.
 - `SPAUI.ContentSecurityPolicy`, validated with the same rules as the
@@ -997,7 +1034,7 @@ a later release records the release it was created at with that `INSERT` once.
   `acr`, and `auth_time` when a session is reused). Rule predicates and an
   `op.ACRPolicy`'s `Resolve` see the same values.
 
-- `op.AuditStepBeginFailed` (`login.step_begin_failed`), emitted once when
+- `audit.StepBeginFailed` (`login.step_begin_failed`), emitted once when
   a login step cannot begin, with `step_kind` and a `reason` of
   `not_enrolled`, `aborted`, `locked`, `not_enrolled_skipped` or `error`.
 
@@ -1128,11 +1165,24 @@ a later release records the release it was created at with that `INSERT` once.
   feature is on. The CAEP Interoperability Profile's RS256 signing requirement
   (section 2.6) is met only by an OP configured with
   `op.WithSigningAlgorithm(op.AlgRS256)`.
-- `op.DeviceCodeOption`. `op.WithDeviceCodeGrant` now takes the device-code
-  settings the way `op.WithCIBA` takes its own:
-  `op.WithDeviceCodeGrant(op.WithDeviceCodeTTL(d), op.WithDeviceCodePollInterval(i))`.
-  `op.WithDeviceVerificationURI`, `op.WithDeviceCodeTTL` and
-  `op.WithDeviceCodePollInterval` return `op.DeviceCodeOption`.
+- `rs.IntrospectionConfig` authenticates to an OP running a FAPI 2.0
+  profile. Exactly one of `ClientSecret` (client_secret_basic), `PrivateKey`
+  with `KeyID` (private_key_jwt; the assertion's `aud` is the issuer) or
+  `TLSCertificate` (tls_client_auth and self_signed_tls_client_auth, sent to
+  the discovered `mtls_endpoint_aliases.introspection_endpoint` when
+  `Endpoint` is empty) is set, and `rs.New` refuses none or several. The
+  verifier asks for RFC 9701 JWT introspection responses and verifies their
+  signature, `typ`, `iss` and `aud` against the issuer's JWK Set; JSON
+  responses are still accepted. Under FAPI 2.0 Message Signing the OP answers
+  only in the JWT form, which `rs` could not read before.
+- `op-schema export --naming key=name`, repeatable, applies the same rewrites
+  as `oidcsql.WithNaming` to the generated migration files. `MIGRATIONS.md`
+  opens with a one-line-per-release upgrade checklist.
+- Examples: `38-native-app` (public client, PKCE, loopback `127.0.0.1`
+  redirect), `54-fapi2-message-signing` (PAR with a signed request object,
+  JARM, DPoP with the nonce challenge) and `55-mtls-proxy` (a TLS-terminating
+  proxy forwarding the client certificate, `tls_client_auth` and
+  certificate-bound access tokens).
 - When `op.WithLogger` is set, `op.New` logs one INFO line naming the optional
   store capabilities the configuration would use and the store does not
   implement, such as `store.IssuanceRevocationChecker` or, with dynamic
@@ -1412,17 +1462,19 @@ its replacement.
 - **BREAKING:** `op.RiskPreFactor`, `op.RiskPostFactor` and
   `RiskOutcome.MinAAL`. A login flow consults its `Risk` assessor at
   `op.RiskAuthorizeEntry` only, and no code read the floor.
-- **BREAKING:** `op.AuditDenyReasonKey`. A denied login is logged under the
+- **BREAKING:** `audit.DenyReasonKey`. A denied login is logged under the
   plain `reason` attribute.
 - **BREAKING:** `SPAUI.ConsentMount`, `SPAUI.LogoutMount` and
   `Endpoints.Session`. None of them routed anything; use `op.WithLogoutUI`
   for the logout pages.
 - **BREAKING:** `testkit.ApproveAllScopes`. Use `testkit.ApprovedScopesFrom`.
 - **BREAKING:** `devicecodekit.Deps.Audit`. Use `Deps.AuditLogger`.
-- **BREAKING:** a `DeviceCodeOption` is no longer an `op.Option`.
-  `op.WithDeviceVerificationURI`, `op.WithDeviceCodeTTL` and
-  `op.WithDeviceCodePollInterval` go inside `op.WithDeviceCodeGrant`, the
-  same shape as the CIBA options.
+- **BREAKING:** `op.CIBAOption`, `op.DeviceCodeOption`, `op.WithCIBA` and its
+  sub-options, `op.WithDeviceVerificationURI`, `op.WithDeviceCodeTTL`,
+  `op.WithDeviceCodePollInterval`, `op.WithTokenExchange`, `op.WithLocale`,
+  `op.RegistrationOption`, the `op.Audit*` constants and the
+  `feature.DynamicRegistration`, `feature.RAR` and `feature.GrantManagement`
+  flags. `Changed` names each replacement.
 
 These three options were experimental. Each has a direct `op.WithLoginFlow`
 equivalent.
