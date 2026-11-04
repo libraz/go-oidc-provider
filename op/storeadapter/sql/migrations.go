@@ -10,8 +10,10 @@ import (
 // [WithTablePrefix] and [WithNaming] applied. 000001_v1.0.0.up.sql creates the schema
 // v1.0.0 shipped and each later file applies one release's changes, so
 // applying every file in order to an empty database yields the schema
-// [Store.Schema] creates. The file names follow the golang-migrate
-// convention, which lets its iofs source read the result directly:
+// [Store.Schema] describes. [Store.Migrate] applies the same files itself;
+// use Migrations when a migration tool applies them instead. The file names
+// follow the golang-migrate convention, which lets its iofs source read the
+// result directly:
 //
 //	src, err := iofs.New(store.Migrations(), ".")
 //	if err != nil {
@@ -29,8 +31,9 @@ import (
 // A database created before adopting these files must first be recorded
 // at the last release it applied — `migrate force 4` for one at v1.3.0 —
 // so that only the later files run. Give the OP's files their own version
-// history, separate from the application's; schema/MIGRATIONS.md shows how
-// for each tool.
+// history, separate from the application's; with golang-migrate that is
+// x-migrations-table=oidc_schema_migrations, the table [Store.Migrate]
+// uses. schema/MIGRATIONS.md shows how for each tool.
 //
 // Stable since v1.5.
 func (s *Store) Migrations() fs.FS {

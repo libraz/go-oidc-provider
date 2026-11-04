@@ -1,7 +1,7 @@
 -- v1 schema for github.com/libraz/go-oidc-provider/op/storeadapter/sql
 -- when configured with oidcsql.Postgres(). Targets PostgreSQL 14+.
--- Complete current schema for a fresh database; existing databases apply
--- schema/migrations/postgres instead.
+-- Reference for the complete current schema. Databases are created and
+-- upgraded by Store.Migrate or the files under schema/migrations/postgres.
 --
 -- Conventions:
 --   * TEXT is used for opaque identifiers (no length cap; PostgreSQL
@@ -16,7 +16,6 @@
 --   * Column order follows the project convention:
 --     id > *_id (foreign keys) > data columns > notes >
 --     updated_at > created_at.
--- Apply once before opening the adapter.
 
 CREATE TABLE IF NOT EXISTS oidc_clients (
     id TEXT PRIMARY KEY,

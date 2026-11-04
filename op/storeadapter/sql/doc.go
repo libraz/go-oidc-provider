@@ -29,32 +29,33 @@
 //
 // # Schema
 //
-// Reference DDL ships under schema/{sqlite,mysql,postgres}/v1.sql and
-// is embedded via go:embed. [Store.Schema] returns the SQL for the
-// configured dialect so embedders can run it from migrations or shell
-// out to psql/mysql; [Store.Migrate] applies it to the live connection
-// for development convenience. Production deployments are expected to
-// run migrations through their existing tooling rather than hand
-// control to the adapter. op.New checks at construction, without creating
-// anything, that the tables and required columns the configuration uses
-// exist; [Store.ValidateSchema] checks every table, for a CI or deploy
-// gate.
-// Existing databases are not altered by Store.Migrate. The upgrade path is
-// the migration files under schema/migrations/<dialect>, one per release in
-// golang-migrate form, which [Store.Migrations] returns with any
-// [WithTablePrefix] and [WithNaming] applied; schema/MIGRATIONS.md explains each
-// release. A database created from v1.sql, [Store.Schema] or [Store.Migrate]
-// and later handed to a migration tool must first be recorded at the newest
-// migration (golang-migrate: "migrate force N" against the OP's own version
-// table, N being the number of the newest file); a deployment that will use
-// a migration tool from the start should create the database from
-// [Store.Migrations] instead of v1.sql. schema/TABLES.md lists what each table holds, when op.New checks
+// The schema is defined by the migration files under
+// schema/migrations/<dialect>, one per release in golang-migrate form.
+// [Store.Migrate] creates or upgrades the database by applying them in
+// order and recording the version in the table <prefix>schema_migrations
+// (oidc_schema_migrations by default), laid out as golang-migrate's own
+// version table. Call it from a deploy job with a context long enough
+// for the DDL. A team that runs golang-migrate instead applies the files
+// [Store.Migrations] returns, with any [WithTablePrefix] and [WithNaming]
+// applied, and can point x-migrations-table at the same table to continue
+// where Migrate stopped. A database that has the adapter's tables but no
+// version table is recorded automatically when it matches the current
+// release; otherwise Migrate changes nothing and the error gives the
+// INSERT that records its release. schema/MIGRATIONS.md covers recovery,
+// locking and each release's changes.
+//
+// [Store.Schema] and schema/{sqlite,mysql,postgres}/v1.sql are the
+// reference for the complete current schema, for diff review; they are not
+// a way to create a database. op.New checks at construction, without
+// creating anything, that the tables and required columns the configuration
+// uses exist; [Store.ValidateSchema] checks every table, for a CI or deploy
+// gate. schema/TABLES.md lists what each table holds, when op.New checks
 // it, and why a few tables must exist even while they stay empty. Run
 // against an empty database, op.New names every table the configuration
-// needs in one error. Create every table from the reference DDL, including
-// those a configuration never reaches; such a table stays empty. The
-// release migrations alter tables of optional features, so a database that
-// omitted them cannot apply later migrations.
+// needs in one error. Create every table, including those a configuration
+// never reaches; such a table stays empty. The release migrations alter
+// tables of optional features, so a database that omitted them cannot
+// apply later migrations.
 //
 // # Users
 //

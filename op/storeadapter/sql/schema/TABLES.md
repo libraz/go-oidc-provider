@@ -4,8 +4,9 @@
 
 Two things to do, whatever your configuration:
 
-- **Apply every file from `Store.Migrations()`.** It creates all the tables
-  below; the ones your configuration does not use stay empty.
+- **Run `Store.Migrate`, or apply every file from `Store.Migrations()` with
+  your migration tool.** Either creates all the tables below; the ones your
+  configuration does not use stay empty.
 - **Give your users table an opaque subject column, if it lacks one.** It is
   the only change to your own tables. An identifier assigned once and never
   reused already qualifies; an auto-increment id or an email address does not.

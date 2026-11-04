@@ -2,8 +2,8 @@
 -- when configured with oidcsql.MySQL(). Targets MySQL 8.0.20+ (so the
 -- INSERT ... AS new ON DUPLICATE KEY UPDATE alias is available) and
 -- MariaDB 10.5+.
--- Complete current schema for a fresh database; existing databases apply
--- schema/migrations/mysql instead.
+-- Reference for the complete current schema. Databases are created and
+-- upgraded by Store.Migrate or the files under schema/migrations/mysql.
 --
 -- Conventions:
 --   * VARCHAR(255) is used for opaque identifiers; fits in a UTF8MB4
@@ -19,7 +19,6 @@
 --     CHARACTER SET utf8mb4 COLLATE utf8mb4_bin: MySQL's default
 --     collation folds case and accents, and the other supported engines
 --     match these identifiers byte-exactly (see oidc_users below).
--- Apply once before opening the adapter.
 
 CREATE TABLE IF NOT EXISTS oidc_clients (
     id VARCHAR(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL PRIMARY KEY,
