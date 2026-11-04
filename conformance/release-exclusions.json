@@ -76,28 +76,28 @@
     },
     {
       "result": "REVIEW",
-      "module": "fapi2-security-profile-id2-par-attempt-*",
+      "module": "fapi2-security-profile-final-par-attempt-*",
       "reason": "PAR request_uri refusals: reuse, expiry, and cross-client presentation. The OP correctly refuses before redirecting, so there is no callback for the suite to assert on and it asks a human to confirm the rendered error instead. The refusals themselves are pinned by the library's own tests, so the REVIEW is about the page a user sees, not about whether the refusal happened.",
       "owner": "@libraz",
       "expires": "2027-01-31"
     },
     {
       "result": "REVIEW",
-      "module": "fapi2-security-profile-id2-ensure-*request-object*",
+      "module": "fapi2-security-profile-final-ensure-*request-object*",
       "reason": "JAR parameter-mismatch refusals: a state or nonce that differs inside and outside the request object, or is over-long. The OP refuses before redirecting, so as with the PAR family the suite can only ask a human to confirm the rendered error page.",
       "owner": "@libraz",
       "expires": "2027-01-31"
     },
     {
       "result": "REVIEW",
-      "module": "fapi2-security-profile-id2-state-only-outside-request-object-not-used",
+      "module": "fapi2-security-profile-final-state-only-outside-request-object-not-used",
       "reason": "Same shape as the request-object mismatch family: a state supplied only outside the request object must be ignored, the request refused pre-redirect, and the resulting error page reviewed by a human.",
       "owner": "@libraz",
       "expires": "2027-01-31"
     },
     {
       "result": "REVIEW",
-      "module": "fapi2-security-profile-id2-ensure-unsigned-authorization-request-without-using-par-fails",
+      "module": "fapi2-security-profile-final-ensure-unsigned-authorization-request-without-using-par-fails",
       "reason": "An unsigned bare-wire authorization request under a FAPI 2.0 profile is refused before redirect (PAR and JAR are both mandatory there), leaving an error page for a human to confirm.",
       "owner": "@libraz",
       "expires": "2027-01-31"

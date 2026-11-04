@@ -27,8 +27,8 @@ _PLAN_PROFILE: dict[str, str] = {
     "oidcc-formpost-basic-certification-test-plan": "basic",
     "oidcc-rp-initiated-logout-certification-test-plan": "basic",
     "oidcc-backchannel-rp-initiated-logout-certification-test-plan": "basic",
-    "fapi2-security-profile-id2-test-plan": "fapi2-baseline",
-    "fapi2-message-signing-id1-test-plan": "fapi2-message-signing",
+    "fapi2-security-profile-final-test-plan": "fapi2-baseline",
+    "fapi2-message-signing-final-test-plan": "fapi2-message-signing",
     "fapi-ciba-id1-test-plan": "fapi-ciba",
 }
 

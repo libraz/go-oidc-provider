@@ -60,8 +60,8 @@ def select(module: str, plan_id: str | None = None) -> str:
         v = cache.get(module)
         if v:
             return _encode(v)
-    if module.startswith("fapi2-security-profile-id2-") or module.startswith(
-        "fapi2-message-signing-id1-"
+    if module.startswith("fapi2-security-profile-final-") or module.startswith(
+        "fapi2-message-signing-final-"
     ):
         return _encode(_FAPI2_BASELINE)
     if module == "oidcc-server-client-secret-post":
