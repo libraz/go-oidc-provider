@@ -42,6 +42,10 @@ const (
 	DPoPRequired
 )
 
+// optInAllowPrivateNetwork is the setting a private-network refusal
+// names, spelled as the embedder writes it.
+const optInAllowPrivateNetwork = "rs.Config.AllowPrivateNetwork"
+
 // Config configures [New]. Issuer and Audience are required; every other
 // field has a working zero value.
 //
@@ -201,10 +205,12 @@ func New(cfg Config) (*Verifier, error) {
 		Clock:               clock,
 		Timeout:             timeout,
 		AllowPrivateNetwork: cfg.AllowPrivateNetwork,
+		OptIn:               optInAllowPrivateNetwork,
 		BaseTransport:       transport,
 	})
 	fetch := securefetch.NewClient(securefetch.Policy{
 		AllowPrivateNetwork: cfg.AllowPrivateNetwork,
+		OptIn:               optInAllowPrivateNetwork,
 		AllowedSchemes:      rule.schemes(),
 		AcceptContentTypes:  []string{"application/json"},
 		Timeout:             timeout,

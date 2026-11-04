@@ -567,3 +567,13 @@ func TestResolve_NegativeCacheRecoversAfterTTL(t *testing.T) {
 		t.Fatalf("upstream hits=%d want 2 after negative TTL", got)
 	}
 }
+
+func TestResolve_PrivateRefusalNamesOptIn(t *testing.T) {
+	t.Parallel()
+	const optIn = "op.WithAllowPrivateNetworkSector()"
+	r := New(WithOptIn(optIn))
+	_, err := r.Resolve(context.Background(), "https://10.0.0.1/sector.json", nil)
+	if !errors.Is(err, ErrSectorPrivateAddress) || !strings.Contains(err.Error(), optIn) {
+		t.Fatalf("err = %v, want ErrSectorPrivateAddress naming %s", err, optIn)
+	}
+}

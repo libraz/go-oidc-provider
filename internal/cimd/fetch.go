@@ -71,10 +71,11 @@ func validationCode(err error) string {
 // fetchPolicy returns the securefetch envelope for client_id URLs. The dev
 // opt-in widens the scheme set to http and lifts the private and loopback
 // deny-list together; cloud-metadata addresses stay refused either way.
-func fetchPolicy(allowPrivate bool, timeout time.Duration, lookup func(context.Context, string) ([]net.IPAddr, error)) securefetch.Policy {
+func fetchPolicy(allowPrivate bool, optIn string, timeout time.Duration, lookup func(context.Context, string) ([]net.IPAddr, error)) securefetch.Policy {
 	return securefetch.Policy{
 		AllowPrivateNetwork:  allowPrivate,
 		AllowLoopbackNetwork: allowPrivate,
+		OptIn:                optIn,
 		AllowedSchemes:       securefetch.Schemes(allowPrivate),
 		MaxBodyBytes:         maxDocumentBytes,
 		AcceptContentTypes:   acceptContentTypes,

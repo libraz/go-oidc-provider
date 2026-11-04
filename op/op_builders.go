@@ -81,6 +81,7 @@ func buildClientStore(cfg *config, scopes *scoperegistry.Registry) {
 		},
 		Allow:        cfg.cimd.Allow,
 		AllowPrivate: cfg.allowPrivateNetworkCIMD,
+		OptIn:        optInClientIDMetadata,
 		Audit:        cfg.effectiveAuditEmitter(),
 		Clock:        cfg.clock,
 		Resources:    resources,
@@ -592,6 +593,7 @@ func (c *config) relyingPartyJWKS() *rpjwks.Fetcher {
 		c.rpJWKS = rpjwks.New(rpjwks.Config{
 			Clock:               c.clock,
 			AllowPrivateNetwork: c.allowPrivateNetworkJWKS,
+			OptIn:               optInJWKS,
 			BaseTransport:       c.jwksHTTPTransport,
 		})
 	}
@@ -865,6 +867,7 @@ func buildBackchannelCoordinator(cfg *config, keySet *keys.Set) (*backchannel.Co
 	// space.
 	deliverer.AllowLoopbackNetwork = cfg.allowInsecureBackchannelLogoutForDev
 	deliverer.AllowPrivateNetwork = cfg.BackchannelAllowsPrivateNetwork()
+	deliverer.OptIn = optInBackchannel
 	coord, err := backchannel.NewCoordinator(backchannel.Config{
 		Issuer:                   cfg.issuer,
 		Signing:                  tokens.FromInternalEntry(active),

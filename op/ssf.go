@@ -63,6 +63,7 @@ func buildSharedSignals(cfg *config, keySet *keys.Set) error {
 		Sealer:              sealer,
 		SigningKey:          ssfActiveKey(keySet),
 		AllowPrivateNetwork: cfg.sharedSignalsAllowPrivateNetwork,
+		OptIn:               optInSharedSignals,
 		AllowInsecureForDev: cfg.allowInsecureSharedSignalsPushForDev,
 		Audit:               base,
 		Clock:               cfg.clock,

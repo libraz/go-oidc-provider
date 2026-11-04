@@ -1,12 +1,14 @@
 package rs_test
 
 import (
+	"bytes"
 	"context"
 	"crypto/elliptic"
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/base64"
 	"encoding/pem"
+	"log/slog"
 	"net/http"
 	"net/netip"
 	"net/url"
@@ -664,4 +666,23 @@ func TestVerifier_UnknownKidUnderLoadPressureIsInvalidToken(t *testing.T) { //no
 	raw := signJWS(t, josev4.ES256, other, "unknown-kid", "at+jwt", baseClaims())
 	_, err := v.Verify(newRequest(t, "Bearer", raw))
 	wantError(t, err, http.StatusUnauthorized, "invalid_token")
+}
+
+// TestVerifier_PrivateRefusalNamesConfigField pins that the JWK Set fetch
+// refusal logged for the operator names the setting that lifts it.
+func TestVerifier_PrivateRefusalNamesConfigField(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t)
+	var logs bytes.Buffer
+	v := f.verifier(t, func(c *rs.Config) {
+		c.AllowPrivateNetwork = false
+		c.JWKSURI = "https://10.0.0.1/jwks"
+		c.Logger = slog.New(slog.NewTextHandler(&logs, nil))
+	})
+	_, err := v.Verify(newRequest(t, "Bearer", f.token(t, nil)))
+	wantError(t, err, http.StatusServiceUnavailable, "")
+	if !strings.Contains(logs.String(), "rs.Config.AllowPrivateNetwork") {
+		t.Fatalf("log %q does not name rs.Config.AllowPrivateNetwork", logs.String())
+	}
 }

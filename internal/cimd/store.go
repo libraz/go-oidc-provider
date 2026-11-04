@@ -41,6 +41,10 @@ type Config struct {
 	// Dev and test only.
 	AllowPrivate bool
 
+	// OptIn spells the public option that sets AllowPrivate; a deny-list
+	// refusal names it.
+	OptIn string
+
 	// Audit receives the cimd.* events. nil discards them.
 	Audit audit.Emitter
 
@@ -84,7 +88,7 @@ func New(cfg Config) *Store {
 		cfg:    cfg,
 		audit:  emitter,
 		clock:  clock,
-		client: securefetch.NewClient(fetchPolicy(cfg.AllowPrivate, timeout, cfg.lookupHook)),
+		client: securefetch.NewClient(fetchPolicy(cfg.AllowPrivate, cfg.OptIn, timeout, cfg.lookupHook)),
 		cache: remotecache.New[*store.Client](remotecache.Config{
 			Clock:       clock,
 			TTL:         maxDocumentTTL,

@@ -266,6 +266,10 @@ func newJARRequestURICache(clock Clock) *remotecache.Cache[string] {
 	})
 }
 
+// jarPrivateNetworkOptIn is the public option that lifts the deny-list
+// for the request_uri fetch; a refusal names it.
+const jarPrivateNetworkOptIn = "op.WithAllowPrivateNetworkJAR()"
+
 // jarRequestURIPolicy returns the [securefetch.Policy] the JAR
 // request_uri fetcher runs under. The policy is the single source of
 // truth for the URL-time gate, the dial-time gate, and the response-side
@@ -284,6 +288,7 @@ func newJARRequestURICache(clock Clock) *remotecache.Cache[string] {
 func jarRequestURIPolicy(allowPrivate bool) securefetch.Policy {
 	return securefetch.Policy{
 		AllowPrivateNetwork: allowPrivate,
+		OptIn:               jarPrivateNetworkOptIn,
 		AllowedSchemes:      securefetch.Schemes(allowPrivate),
 		Timeout:             securefetch.DefaultTimeout,
 		MaxBodyBytes:        securefetch.DefaultMaxBody,

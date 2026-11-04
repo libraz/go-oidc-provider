@@ -176,6 +176,10 @@ type Config struct {
 	// addresses remain rejected even with this set.
 	AllowPrivateNetwork bool
 
+	// OptIn spells the public option that sets AllowPrivateNetwork; a
+	// deny-list refusal names it. See [netsec.Options.OptIn].
+	OptIn string
+
 	// BaseTransport overrides the [http.RoundTripper] the SSRF-hardened client
 	// is built on. Production callers leave it nil; a caller that needs a
 	// private CA (an internal CA-issued RP endpoint, a conformance harness with
@@ -229,6 +233,7 @@ type shared struct {
 	client     *securefetch.Client
 
 	allowPrivate  bool
+	optIn         string
 	baseTransport http.RoundTripper
 }
 
@@ -275,6 +280,7 @@ func New(cfg Config) *Fetcher {
 		maxBody:       cfg.MaxBodyBytes,
 		loads:         remotecache.SharedLoadGate(cfg.MaxInflight),
 		allowPrivate:  cfg.AllowPrivateNetwork,
+		optIn:         cfg.OptIn,
 		baseTransport: cfg.BaseTransport,
 	}}
 }
@@ -696,6 +702,7 @@ func (f *Fetcher) secureClient() *securefetch.Client {
 	f.clientOnce.Do(func() {
 		f.client = securefetch.NewClient(securefetch.Policy{
 			AllowPrivateNetwork: f.allowPrivate,
+			OptIn:               f.optIn,
 			MaxBodyBytes:        f.maxBody,
 			Timeout:             f.timeout,
 			BaseTransport:       f.baseTransport,

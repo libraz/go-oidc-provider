@@ -184,3 +184,16 @@ func TestHTTPDeliverer_DeliverResolvesOnce(t *testing.T) {
 		t.Errorf("Deliver dialed the resolver %d times, one gate costs %d", got, perGate)
 	}
 }
+
+// TestHTTPDeliverer_PrivateRefusalNamesOptIn pins that the configured
+// opt-in reaches the refusal text.
+func TestHTTPDeliverer_PrivateRefusalNamesOptIn(t *testing.T) {
+	t.Parallel()
+
+	const optIn = "op.WithAllowPrivateNetworkBackchannel()"
+	d := &HTTPDeliverer{Timeout: time.Second, OptIn: optIn}
+	err := requestGate(d, "http://10.0.0.1/logout")
+	if !errors.Is(err, ErrPrivateNetworkBlocked) || !strings.Contains(err.Error(), optIn) {
+		t.Fatalf("err=%v want ErrPrivateNetworkBlocked naming %s", err, optIn)
+	}
+}

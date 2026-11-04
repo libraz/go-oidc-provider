@@ -863,7 +863,7 @@ func transactionalStore(s store.Store) store.Transactional {
 // the resolver allocation, and the validator short-circuits on the
 // empty value.
 func buildSectorResolver(cfg *config) *sector.Resolver {
-	opts := []sector.Option{sector.WithClock(cfg.clock)}
+	opts := []sector.Option{sector.WithClock(cfg.clock), sector.WithOptIn(optInSector)}
 	if cfg.allowPrivateNetworkSector {
 		opts = append(opts, sector.AllowPrivateNetwork())
 	}

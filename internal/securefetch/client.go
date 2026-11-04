@@ -104,6 +104,11 @@ type Policy struct {
 	// [netsec.Options.AllowLoopback].
 	AllowLoopbackNetwork bool
 
+	// OptIn spells the public option that lifts the private-network
+	// deny-list for this fetch; a refusal names it. See
+	// [netsec.Options.OptIn].
+	OptIn string
+
 	// AllowedSchemes restricts the URL scheme allow-list. A nil /
 	// empty value falls back to {"http", "https"}; pass {"https"}
 	// to force TLS (the sector resolver uses this).
@@ -207,6 +212,7 @@ func (p Policy) netsecOptions() netsec.Options {
 	return netsec.Options{
 		AllowPrivate:    p.AllowPrivateNetwork,
 		AllowLoopback:   p.AllowLoopbackNetwork,
+		OptIn:           p.OptIn,
 		AllowedSchemes:  p.AllowedSchemes,
 		Timeout:         p.Timeout,
 		MaxRedirects:    p.MaxRedirects,

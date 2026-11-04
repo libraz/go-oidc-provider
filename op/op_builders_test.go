@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -255,5 +256,23 @@ func TestBuildProxyTrust_IssuerHostMatchesForwardedHost(t *testing.T) {
 				t.Errorf("resolved host=%q want %q (issuer host not allowlisted in forwarded form)", got, tc.xfh)
 			}
 		})
+	}
+}
+
+// TestPrivateNetworkRefusals_NameTheirOption pins which public option each
+// fetcher built by the op layer names when the deny-list refuses a target.
+func TestPrivateNetworkRefusals_NameTheirOption(t *testing.T) {
+	t.Parallel()
+
+	cfg := &config{clock: builderTestClock{now: time.Unix(1_700_000_000, 0)}}
+
+	_, err := cfg.relyingPartyJWKS().Fetch(context.Background(), "http://10.0.0.1/jwks")
+	if err == nil || !strings.Contains(err.Error(), "op.WithAllowPrivateNetworkJWKS()") {
+		t.Errorf("jwks err=%v want a hint naming op.WithAllowPrivateNetworkJWKS()", err)
+	}
+
+	_, err = buildSectorResolver(cfg).Resolve(context.Background(), "https://10.0.0.1/sector.json", nil)
+	if err == nil || !strings.Contains(err.Error(), "op.WithAllowPrivateNetworkSector()") {
+		t.Errorf("sector err=%v want a hint naming op.WithAllowPrivateNetworkSector()", err)
 	}
 }

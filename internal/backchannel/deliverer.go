@@ -113,6 +113,10 @@ type HTTPDeliverer struct {
 	// delivers exactly the destination set its godoc promises.
 	AllowLoopbackNetwork bool
 
+	// OptIn spells the public option that sets AllowPrivateNetwork; a
+	// deny-list refusal names it.
+	OptIn string
+
 	// Resolver overrides the DNS resolver consulted when the deny-list
 	// is engaged. The default nil value falls back to [net.DefaultResolver];
 	// tests inject a stub so the SSRF guard can be exercised without a
@@ -166,6 +170,7 @@ func (d *HTTPDeliverer) resolveClient() *securefetch.Client {
 		policy := securefetch.Policy{
 			AllowPrivateNetwork:  d.AllowPrivateNetwork,
 			AllowLoopbackNetwork: d.AllowLoopbackNetwork,
+			OptIn:                d.OptIn,
 			AllowedSchemes:       []string{"http", "https"},
 			MaxBodyBytes:         MaxResponseBytes,
 			Timeout:              d.timeoutOrDefault(),

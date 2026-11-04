@@ -1306,3 +1306,19 @@ func TestResolveForKID_RefetchesOnceOnKIDMiss(t *testing.T) {
 		t.Errorf("wrong key under a present kid: err = %v, want ErrSignatureInvalid", err)
 	}
 }
+
+// TestFetch_PrivateRefusalNamesOptIn confirms the configured opt-in reaches
+// the refusal text and stays out of it when none is configured.
+func TestFetch_PrivateRefusalNamesOptIn(t *testing.T) {
+	t.Parallel()
+
+	const optIn = "op.WithAllowPrivateNetworkJWKS()"
+	_, err := New(Config{FetchError: errSentinel, OptIn: optIn}).Fetch(context.Background(), "http://10.0.0.1/jwks")
+	if !errors.Is(err, errSentinel) || !strings.Contains(err.Error(), optIn) {
+		t.Fatalf("err=%v want the sentinel and a hint naming %s", err, optIn)
+	}
+	_, err = New(Config{FetchError: errSentinel}).Fetch(context.Background(), "http://10.0.0.1/jwks")
+	if err == nil || strings.Contains(err.Error(), "pass ") {
+		t.Fatalf("err=%v want a refusal without a hint", err)
+	}
+}

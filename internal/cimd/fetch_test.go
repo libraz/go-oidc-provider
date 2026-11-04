@@ -12,6 +12,8 @@ import (
 	"time"
 
 	"github.com/libraz/go-oidc-provider/internal/auditevent"
+	"github.com/libraz/go-oidc-provider/internal/netsec"
+	"github.com/libraz/go-oidc-provider/internal/securefetch"
 	"github.com/libraz/go-oidc-provider/op/store"
 )
 
@@ -346,5 +348,15 @@ func TestDocumentTTL(t *testing.T) {
 				t.Fatalf("documentTTL(%v) = %v, want %v", tc.header, got, tc.want)
 			}
 		})
+	}
+}
+
+func TestFetchPolicy_PrivateRefusalNamesOptIn(t *testing.T) {
+	t.Parallel()
+	const optIn = "op.WithAllowPrivateNetworkClientIDMetadata()"
+	c := securefetch.NewClient(fetchPolicy(false, optIn, time.Second, nil))
+	err := c.AssertSafeURL(context.Background(), "https://10.0.0.1/client.json")
+	if !errors.Is(err, netsec.ErrPrivateNetworkBlocked) || !strings.Contains(err.Error(), optIn) {
+		t.Fatalf("err=%v want ErrPrivateNetworkBlocked naming %s", err, optIn)
 	}
 }

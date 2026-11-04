@@ -88,6 +88,13 @@ type Options struct {
 	// are true.
 	AllowLoopback bool
 
+	// OptIn spells the public option that lifts the private-network
+	// deny-list for this client (for example
+	// "op.WithAllowPrivateNetworkJWKS()"). When non-empty, a
+	// private-network refusal names it so the operator knows what to
+	// set. Cloud-metadata refusals never carry it: no option lifts them.
+	OptIn string
+
 	// AllowedSchemes is the URL scheme allow-list. A nil / empty value
 	// falls back to {"http", "https"}; pass {"https"} to force TLS.
 	AllowedSchemes []string
@@ -251,7 +258,7 @@ func AssertSafeURLParsed(ctx context.Context, u *url.URL, opts Options) error {
 			// back into a private-network one.
 			return assertResolvedHostSafe(ctx, host, opts)
 		}
-		return fmt.Errorf("%w: host %q is loopback / localhost", ErrPrivateNetworkBlocked, host)
+		return opts.privateBlocked(fmt.Sprintf("host %q is loopback / localhost", host))
 	}
 	if ip := net.ParseIP(host); ip != nil {
 		return assertIPSafe(ip, host, opts)
@@ -299,6 +306,16 @@ func (o Options) classifyAddr(ip net.IP) addrVerdict {
 	return addrDeniedPrivate
 }
 
+// privateBlocked builds the [ErrPrivateNetworkBlocked] error for detail,
+// appending the [Options.OptIn] hint when one is set. Every
+// private-network refusal goes through it so the hint cannot drift.
+func (o Options) privateBlocked(detail string) error {
+	if o.OptIn == "" {
+		return fmt.Errorf("%w: %s", ErrPrivateNetworkBlocked, detail)
+	}
+	return fmt.Errorf("%w: %s; pass %s to admit private-network targets", ErrPrivateNetworkBlocked, detail, o.OptIn)
+}
+
 // assertIPSafe runs the deny-list against a literal IP host. The
 // helper is split out so [AssertSafeURLParsed] stays under the
 // project gocognit gate.
@@ -307,7 +324,7 @@ func assertIPSafe(ip net.IP, host string, opts Options) error {
 	case addrDeniedMetadata:
 		return fmt.Errorf("%w: host %q is a cloud metadata IP", ErrCloudMetadataBlocked, host)
 	case addrDeniedPrivate:
-		return fmt.Errorf("%w: host %q is loopback / link-local / private", ErrPrivateNetworkBlocked, host)
+		return opts.privateBlocked(fmt.Sprintf("host %q is loopback / link-local / private", host))
 	case addrAllowed:
 	}
 	return nil
@@ -334,8 +351,7 @@ func assertResolvedHostSafe(ctx context.Context, host string, opts Options) erro
 			return fmt.Errorf("%w: host %q resolves to a cloud metadata IP %s",
 				ErrCloudMetadataBlocked, host, addr.IP)
 		case addrDeniedPrivate:
-			return fmt.Errorf("%w: host %q resolves to a private IP %s",
-				ErrPrivateNetworkBlocked, host, addr.IP)
+			return opts.privateBlocked(fmt.Sprintf("host %q resolves to a private IP %s", host, addr.IP))
 		case addrAllowed:
 		}
 	}
@@ -494,7 +510,7 @@ func makeDialControl(opts Options) func(network, address string, c syscall.RawCo
 		case addrDeniedMetadata:
 			return fmt.Errorf("%w: dial address %s is a cloud metadata IP", ErrCloudMetadataBlocked, ip)
 		case addrDeniedPrivate:
-			return fmt.Errorf("%w: dial address %s is loopback / link-local / private", ErrPrivateNetworkBlocked, ip)
+			return opts.privateBlocked(fmt.Sprintf("dial address %s is loopback / link-local / private", ip))
 		case addrAllowed:
 		}
 		if opts.DialControlHook != nil {

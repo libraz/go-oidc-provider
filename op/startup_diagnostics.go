@@ -108,6 +108,16 @@ type privateNetworkReach struct {
 	callerDriven bool
 }
 
+// The public options that lift each fetch's private-network deny-list, as
+// spelled in the refusal error so the operator knows what to set.
+const (
+	optInJWKS             = "op.WithAllowPrivateNetworkJWKS()"
+	optInSector           = "op.WithAllowPrivateNetworkSector()"
+	optInClientIDMetadata = "op.WithAllowPrivateNetworkClientIDMetadata()"
+	optInBackchannel      = "op.WithAllowPrivateNetworkBackchannel()"
+	optInSharedSignals    = "op.WithAllowPrivateNetworkSharedSignals()"
+)
+
 // privateNetworkReaches lists the private-network options with their state.
 func (c *config) privateNetworkReaches() []privateNetworkReach {
 	return []privateNetworkReach{

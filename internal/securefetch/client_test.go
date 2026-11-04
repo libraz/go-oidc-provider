@@ -456,3 +456,18 @@ func mustClient(t *testing.T, p securefetch.Policy) *securefetch.Client {
 	t.Helper()
 	return securefetch.NewClient(p)
 }
+
+// TestPolicy_OptInReachesRefusal pins that Policy.OptIn travels to the
+// netsec error for the URL-time gate.
+func TestPolicy_OptInReachesRefusal(t *testing.T) {
+	t.Parallel()
+	const optIn = "op.WithAllowPrivateNetworkSector()"
+	c := securefetch.NewClient(securefetch.Policy{OptIn: optIn})
+	err := c.AssertSafeURL(context.Background(), "http://10.0.0.1/x")
+	if !errors.Is(err, netsec.ErrPrivateNetworkBlocked) {
+		t.Fatalf("err=%v want ErrPrivateNetworkBlocked", err)
+	}
+	if !strings.Contains(err.Error(), optIn) {
+		t.Fatalf("err=%q does not name %s", err, optIn)
+	}
+}

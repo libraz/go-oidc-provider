@@ -8,11 +8,13 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/libraz/go-oidc-provider/internal/netsec"
 	"github.com/libraz/go-oidc-provider/op/store"
 	"github.com/libraz/go-oidc-provider/op/storeadapter/inmem"
 )
@@ -564,7 +566,7 @@ func TestWorker_RoundsDrainBacklog(t *testing.T) {
 func TestWorker_ReceiverTimeoutIsRetried(t *testing.T) {
 	t.Parallel()
 	e := newWorkerEnv(t)
-	e.w.fetch = workerFetchClient(false, true, 100*time.Millisecond)
+	e.w.fetch = workerFetchClient(false, "", true, 100*time.Millisecond)
 	hung := newWorkerHungReceiver(t, nil)
 	_, fast := newWorkerReceiver(t, http.StatusAccepted, "")
 
@@ -801,5 +803,15 @@ func TestNewWorker_RequiresDeps(t *testing.T) {
 	}
 	if _, err := NewWorker(full); err != nil {
 		t.Fatalf("NewWorker(full) = %v", err)
+	}
+}
+
+func TestWorkerFetchClient_PrivateRefusalNamesOptIn(t *testing.T) {
+	t.Parallel()
+	const optIn = "op.WithAllowPrivateNetworkSharedSignals()"
+	c := workerFetchClient(false, optIn, false, time.Second)
+	err := c.AssertSafeURL(context.Background(), "https://10.0.0.1/push")
+	if !errors.Is(err, netsec.ErrPrivateNetworkBlocked) || !strings.Contains(err.Error(), optIn) {
+		t.Fatalf("err=%v want ErrPrivateNetworkBlocked naming %s", err, optIn)
 	}
 }

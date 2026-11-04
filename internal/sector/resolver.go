@@ -108,6 +108,7 @@ type resolverConfig struct {
 	negativeTTL        time.Duration
 	cacheMaxEntries    int
 	allowPrivate       bool
+	optIn              string
 	resolverLookupHook func(ctx context.Context, host string) ([]net.IPAddr, error)
 }
 
@@ -192,6 +193,12 @@ func AllowPrivateNetwork() Option {
 	return func(cfg *resolverConfig) { cfg.allowPrivate = true }
 }
 
+// WithOptIn spells the public option that enables [AllowPrivateNetwork];
+// a deny-list refusal names it so the operator knows what to set.
+func WithOptIn(name string) Option {
+	return func(cfg *resolverConfig) { cfg.optIn = name }
+}
+
 // withResolverLookupHook injects a custom DNS resolution function.
 // Unexported because production callers always go through
 // [net.DefaultResolver]; the hook exists so tests can simulate
@@ -229,6 +236,7 @@ func New(opts ...Option) *Resolver {
 	cfg.clock = timex.OrSystem(cfg.clock)
 	policy := securefetch.Policy{
 		AllowPrivateNetwork: cfg.allowPrivate,
+		OptIn:               cfg.optIn,
 		AllowedSchemes:      []string{"https"},
 		MaxBodyBytes:        cfg.maxBody,
 		AcceptContentTypes:  []string{jsonContentType},

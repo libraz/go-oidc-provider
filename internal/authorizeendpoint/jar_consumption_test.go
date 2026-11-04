@@ -4,6 +4,7 @@ package authorizeendpoint
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -12,6 +13,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/libraz/go-oidc-provider/internal/netsec"
 	"github.com/libraz/go-oidc-provider/internal/securefetch"
 	"github.com/libraz/go-oidc-provider/op/interaction"
 	"github.com/libraz/go-oidc-provider/op/store"
@@ -449,5 +451,14 @@ func TestFetchJARRequestURI_BodyCapPrecedesTheMediaTypeGate(t *testing.T) {
 	if !strings.Contains(desc, "size cap") {
 		t.Fatalf("description=%q want the size-cap refusal; the media-type gate answered first, "+
 			"which means the body was read past the cap before anything rejected it", desc)
+	}
+}
+
+func TestJARRequestURIPolicy_PrivateRefusalNamesOptIn(t *testing.T) {
+	t.Parallel()
+	c := securefetch.NewClient(jarRequestURIPolicy(false))
+	err := c.AssertSafeURL(context.Background(), "https://10.0.0.1/request.jwt")
+	if !errors.Is(err, netsec.ErrPrivateNetworkBlocked) || !strings.Contains(err.Error(), "op.WithAllowPrivateNetworkJAR()") {
+		t.Fatalf("err=%v want ErrPrivateNetworkBlocked naming op.WithAllowPrivateNetworkJAR()", err)
 	}
 }

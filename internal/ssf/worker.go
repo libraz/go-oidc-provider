@@ -83,6 +83,10 @@ type WorkerDeps struct {
 	// endpoints. Cloud metadata addresses stay refused.
 	AllowPrivateNetwork bool
 
+	// OptIn spells the public option that sets AllowPrivateNetwork; a
+	// deny-list refusal names it.
+	OptIn string
+
 	// AllowInsecureForDev admits http:// and loopback push endpoints.
 	AllowInsecureForDev bool
 
@@ -140,7 +144,7 @@ func NewWorker(d WorkerDeps) (*Worker, error) {
 		streams:    d.Streams,
 		sealer:     d.Sealer,
 		signingKey: d.SigningKey,
-		fetch:      workerFetchClient(d.AllowPrivateNetwork, d.AllowInsecureForDev, workerPushTimeout),
+		fetch:      workerFetchClient(d.AllowPrivateNetwork, d.OptIn, d.AllowInsecureForDev, workerPushTimeout),
 		audit:      emitter,
 		clock:      timex.OrSystem(d.Clock),
 		logger:     logger,
@@ -150,10 +154,11 @@ func NewWorker(d WorkerDeps) (*Worker, error) {
 
 // workerFetchClient builds the SSRF-hardened push client: https only and
 // no loopback unless the dev flag is set, no redirects, a bounded body.
-func workerFetchClient(allowPrivate, insecureDev bool, timeout time.Duration) *securefetch.Client {
+func workerFetchClient(allowPrivate bool, optIn string, insecureDev bool, timeout time.Duration) *securefetch.Client {
 	return securefetch.NewClient(securefetch.Policy{
 		AllowPrivateNetwork:  allowPrivate,
 		AllowLoopbackNetwork: insecureDev,
+		OptIn:                optIn,
 		AllowedSchemes:       securefetch.Schemes(insecureDev),
 		MaxBodyBytes:         backchannel.MaxResponseBytes,
 		Timeout:              timeout,
