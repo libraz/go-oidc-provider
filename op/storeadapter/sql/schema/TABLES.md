@@ -58,7 +58,7 @@ op.New and `Store.ValidateSchema` check that every column listed here exists.
 | `oidc_registration_access_tokens` | `registration_access_tokens` | Registration access tokens for RFC 7592 client management. | `op.WithDynamicRegistration` is set. | `op.WithDynamicRegistration`. |
 | `oidc_op_metadata` | `op_metadata` | OP-internal markers, such as the subject mode the pairwise gate pins. | Always: `op.New` reads it at construction. | `op.New` reads and writes it at construction. |
 | `oidc_device_codes` | `device_codes` | RFC 8628 device authorization records. | The `device_code` grant is enabled or `op.WithDeviceCodeGrant` is set. | The `device_code` grant is enabled. |
-| `oidc_ciba_requests` | `ciba_requests` | CIBA backchannel authentication requests. | The CIBA grant is enabled or `op.WithCIBA` is set. | `op.WithCIBA`. |
+| `oidc_ciba_requests` | `ciba_requests` | CIBA backchannel authentication requests. | The CIBA grant is enabled or `op.WithCIBAGrant` is set. | `op.WithCIBAGrant`. |
 | `oidc_totp_secrets` | `totp_secrets` | Encrypted TOTP secrets. | The login flow has an `op.StepTOTP` backed by `Store.TOTPs()`. | `Store.TOTPs()` is passed to `op.StepTOTP`. |
 | `oidc_passkeys` | `passkeys` | Registered WebAuthn credentials. | The login flow has a passkey step backed by `Store.Passkeys()`. | `Store.Passkeys()` is passed to `op.PrimaryPasskey` or `op/passkeykit`. |
 | `oidc_recovery_codes` | `recovery_codes` | Hashed single-use recovery codes. | The login flow has an `op.StepRecoveryCode` backed by `Store.RecoveryCodes()`. | `Store.RecoveryCodes()` is passed to `op.StepRecoveryCode` or `op/recoverykit`. |

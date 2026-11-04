@@ -385,7 +385,7 @@ func TestWithProfile_FAPI_JARVerifierConstructs(t *testing.T) {
 		{
 			name: "FAPICIBA",
 			opts: []op.Option{
-				op.WithCIBA(op.WithCIBAHintResolver(stubCIBAHintResolver{})),
+				op.WithCIBAGrant(op.CIBAGrant{HintResolver: stubCIBAHintResolver{}}),
 				op.WithProfile(profile.FAPICIBA),
 				op.WithFeature(feature.DPoP),
 				op.WithDPoPNonceSource(stubDPoPNonceSource{}),
@@ -542,12 +542,12 @@ func TestWithProfile_AutoEnableSilentlySkipsExisting(t *testing.T) {
 func TestWithProfile_FAPICIBA_AutoEnablesJAR_RequiresSenderConstraint(t *testing.T) {
 	t.Parallel()
 
-	// WithCIBA appends grant.CIBA to the configured grant set
+	// WithCIBAGrant appends grant.CIBA to the configured grant set
 	// idempotently, so a separate WithGrants call is unnecessary; the
 	// shared option set keeps the per-subtest body terse.
 	cibaCommon := func() []op.Option {
 		return []op.Option{
-			op.WithCIBA(op.WithCIBAHintResolver(stubCIBAHintResolver{})),
+			op.WithCIBAGrant(op.CIBAGrant{HintResolver: stubCIBAHintResolver{}}),
 		}
 	}
 
@@ -603,7 +603,7 @@ func TestWithProfile_FAPICIBA_RequiresDPoPNonceSource(t *testing.T) {
 	t.Parallel()
 
 	opts := append(validBaseOptsWithInmem(t),
-		op.WithCIBA(op.WithCIBAHintResolver(stubCIBAHintResolver{})),
+		op.WithCIBAGrant(op.CIBAGrant{HintResolver: stubCIBAHintResolver{}}),
 		op.WithProfile(profile.FAPICIBA),
 		op.WithFeature(feature.DPoP),
 	)
@@ -617,7 +617,7 @@ func TestWithProfile_FAPICIBA_RequiresDPoPNonceSource(t *testing.T) {
 }
 
 // stubCIBAHintResolver is a minimal [op.HintResolver] used by tests
-// that need to satisfy [op.WithCIBA]'s resolver-presence invariant
+// that need to satisfy [op.WithCIBAGrant]'s resolver-presence invariant
 // without exercising the runtime hint-resolution flow.
 type stubCIBAHintResolver struct{}
 

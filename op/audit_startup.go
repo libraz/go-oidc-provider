@@ -11,7 +11,7 @@ import (
 )
 
 // emitStartupProfile records the constructed Provider's security
-// posture as a single [AuditStartupProfile] event. It runs from [New]
+// posture as a single audit.StartupProfile event. It runs from [New]
 // once validation has succeeded, so every value it reports is the one
 // the Provider will actually serve with — a configuration that would
 // have produced a different answer never reaches this point.
@@ -84,13 +84,23 @@ func (c *config) declaredProfileNames() []string {
 }
 
 // declaredFeatureNames projects [config.features] onto its canonical
-// wire identifiers. The slice includes flags a profile auto-enabled,
-// which is the point: it is the resolved feature set, not the literal
-// [WithFeature] call list.
+// wire identifiers, followed by the extensions their dedicated options
+// enable. The slice includes flags a profile auto-enabled, which is the
+// point: it is the resolved feature set, not the literal [WithFeature]
+// call list.
 func (c *config) declaredFeatureNames() []string {
-	out := make([]string, 0, len(c.features))
+	out := make([]string, 0, len(c.features)+3)
 	for _, f := range c.features {
 		out = append(out, f.String())
+	}
+	if len(c.authorizationDetailTypes) > 0 {
+		out = append(out, "rar")
+	}
+	if c.grantManagementEnabled {
+		out = append(out, "grant_management")
+	}
+	if c.dcr != nil {
+		out = append(out, "dynamic_registration")
 	}
 	return out
 }

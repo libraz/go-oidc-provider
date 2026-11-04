@@ -31,6 +31,7 @@ import (
 	josev4 "github.com/go-jose/go-jose/v4"
 
 	"github.com/libraz/go-oidc-provider/op"
+	"github.com/libraz/go-oidc-provider/op/audit"
 	"github.com/libraz/go-oidc-provider/op/feature"
 	"github.com/libraz/go-oidc-provider/op/testkit"
 	"github.com/libraz/go-oidc-provider/test/scenarios/internal/scenariokit"
@@ -2780,7 +2781,7 @@ func TestScenario_CA_DISC_07_MTLSEndpointAliasesGated(t *testing.T) {
 				op.WithFeature(feature.MTLS),
 				op.WithFeature(feature.Introspect),
 				op.WithFeature(feature.Revoke),
-				op.WithDynamicRegistration(op.RegistrationOption{}),
+				op.WithDynamicRegistration(op.DynamicRegistration{}),
 				op.WithDiscoveryMetadata(op.DiscoveryMetadata{
 					MTLSEndpointAliases: aliases,
 				}),
@@ -3192,7 +3193,7 @@ func TestScenario_CA_ERR_05_ClientAuthnFailureAuditEvent(t *testing.T) {
 				t.Fatalf("error field missing on failure response: %v", resp.Body)
 			}
 
-			events := capture.findEvents(string(op.AuditClientAuthnFailure))
+			events := capture.findEvents(string(audit.ClientAuthnFailure))
 			if len(events) != 1 {
 				t.Fatalf("got %d client_authn.failure events, want exactly 1; capture=%s",
 					len(events), capture.dump())

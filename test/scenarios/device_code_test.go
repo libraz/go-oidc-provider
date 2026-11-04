@@ -81,7 +81,7 @@ func newDevProviderWithResources(t *testing.T, scopes, resources []string, extra
 	if err != nil {
 		t.Fatalf("HashClientSecret: %v", err)
 	}
-	opts := append([]testkit.Option{testkit.WithOptions(op.WithDeviceCodeGrant())}, extra...)
+	opts := append([]testkit.Option{testkit.WithOptions(op.WithDeviceCodeGrant(op.DeviceCodeGrant{}))}, extra...)
 	tk := testkit.NewProvider(t, opts...)
 	client := tk.RegisterClient(t, testkit.ClientFixture{
 		ID:                      "dev-rp",
@@ -317,7 +317,7 @@ func TestScenario_DEV_002_DeviceAuthRequiresGrantTypeAllowance(t *testing.T) {
 	if err != nil {
 		t.Fatalf("HashClientSecret: %v", err)
 	}
-	tk := testkit.NewProvider(t, testkit.WithOptions(op.WithDeviceCodeGrant()))
+	tk := testkit.NewProvider(t, testkit.WithOptions(op.WithDeviceCodeGrant(op.DeviceCodeGrant{})))
 	client := tk.RegisterClient(t, testkit.ClientFixture{
 		ID:                      "dev-rp-002",
 		SecretHash:              hash,
@@ -1075,7 +1075,7 @@ func TestScenario_DEV_092B_DeviceAuthRejectsAllowedClientsScope(t *testing.T) {
 		t.Fatalf("HashClientSecret: %v", err)
 	}
 	tk := testkit.NewProvider(t, testkit.WithOptions(
-		op.WithDeviceCodeGrant(),
+		op.WithDeviceCodeGrant(op.DeviceCodeGrant{}),
 		op.WithScope(op.Scope{
 			Name:           "billing:write",
 			Public:         true,

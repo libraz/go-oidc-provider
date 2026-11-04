@@ -52,7 +52,7 @@ import (
 //   - op.WithProfile(profile.FAPICIBA) — applies the FAPI alg
 //     lockdown and the FAPI-CIBA MUST set. The profile requires the
 //     CIBA grant but does not activate it: the grant arrives through
-//     op.WithGrants / op.WithCIBA below, and op.New rejects the
+//     op.WithGrants / op.WithCIBAGrant below, and op.New rejects the
 //     profile if it is missing.
 //   - op.WithFeature(feature.MTLS) — sender constraint; required by
 //     fapi-ciba-id1's hardcoded cert-bound check.
@@ -67,8 +67,8 @@ import (
 //     against OpenID Connect Discovery 1.0 §3, which lists the member as
 //     REQUIRED with no CIBA-only exemption. The seeded clients stay
 //     CIBA-only — this is a provider-level grant, not a client one.
-//   - op.WithCIBA(WithCIBAHintResolver(...), WithCIBAPollInterval(1s),
-//     WithCIBAMaxPollViolations(50)) — 1 s poll keeps the OFCS plan
+//   - op.WithCIBAGrant(CIBAGrant{HintResolver: ..., PollInterval: 1s,
+//     MaxPollViolations: 50}) — 1 s poll keeps the OFCS plan
 //     moving; the auto-approve delay (cfg.cibaAutoApproveDelay) is
 //     intentionally longer so the first poll lands authorization_pending.
 //     The poll-abuse cap is raised because the OFCS
@@ -80,11 +80,11 @@ func fapiCIBAOptions() []op.Option {
 		op.WithProfile(profile.FAPICIBA),
 		op.WithFeature(feature.MTLS),
 		op.WithGrants(opgrant.AuthorizationCode, opgrant.CIBA, opgrant.RefreshToken),
-		op.WithCIBA(
-			op.WithCIBAHintResolver(demoHintResolver()),
-			op.WithCIBAPollInterval(time.Second),
-			op.WithCIBAMaxPollViolations(50),
-		),
+		op.WithCIBAGrant(op.CIBAGrant{
+			HintResolver:      demoHintResolver(),
+			PollInterval:      time.Second,
+			MaxPollViolations: 50,
+		}),
 	}
 }
 

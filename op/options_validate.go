@@ -13,7 +13,6 @@ import (
 	"github.com/libraz/go-oidc-provider/internal/discovery"
 	"github.com/libraz/go-oidc-provider/internal/nilcheck"
 	"github.com/libraz/go-oidc-provider/internal/proxy"
-	"github.com/libraz/go-oidc-provider/op/feature"
 	"github.com/libraz/go-oidc-provider/op/grant"
 	"github.com/libraz/go-oidc-provider/op/profile"
 	"github.com/libraz/go-oidc-provider/op/store"
@@ -33,7 +32,6 @@ func (c *config) validate() error {
 		c.validateScopes,
 		c.validateIDTokenScopeClaims,
 		c.validateProfiles,
-		c.validateFeatureActivation,
 		c.validateRegistration,
 		c.validateAuthorizationCodeGrantRequired,
 		c.validateInteractions,
@@ -420,7 +418,7 @@ func checkExternalStepKind(where string, ext ExternalStep) error {
 // served by any registered bundle. The seed en / ja bundles are
 // always available, so a default of "en" / "ja" never trips the
 // check; embedders that override the default to a custom locale
-// MUST register the matching bundle through [WithLocale].
+// MUST register the matching bundle through [WithLocaleBundle].
 func (c *config) validateLocales() error {
 	if c.defaultLocale == "" {
 		return nil
@@ -433,7 +431,7 @@ func (c *config) validateLocales() error {
 	if c.defaultLocale == LocaleEnglish || c.defaultLocale == LocaleJapanese {
 		return nil
 	}
-	return newConfigurationError("WithDefaultLocale references a locale that is not registered through WithLocale or shipped as a seed bundle", nil)
+	return newConfigurationError("WithDefaultLocale references a locale that is not registered through WithLocaleBundle or shipped as a seed bundle", nil)
 }
 
 // validateLoginFlowRequired covers the no-[LoginFlow] case.
@@ -533,28 +531,10 @@ func (c *config) validateInteractions() error {
 }
 
 // validateRegistration enforces the cross-cutting invariants of
-// [WithDynamicRegistration] and owns the [feature.DynamicRegistration]
-// flag: the option records only the configuration, and the flag is
-// derived here once every option has been applied.
-//
-// Deriving it here rather than inside the option is what makes the
-// "flag declared twice" diagnostic order-independent. [WithFeature] is
-// idempotent, so an embedder who passed the flag explicitly leaves no
-// trace once the option has also set it — the duplicate would be
-// visible in one call order and invisible in the other. With the
-// option no longer setting the flag, a flag present alongside a
-// configured [config.dcr] can only have come from [WithFeature].
+// [WithDynamicRegistration] against the rest of the configuration.
 func (c *config) validateRegistration() error {
-	flagOn := featureEnabled(c.features, feature.DynamicRegistration)
 	if c.dcr == nil {
-		if flagOn {
-			return newConfigurationError("feature.DynamicRegistration enabled without WithDynamicRegistration", nil)
-		}
 		return nil
-	}
-	if flagOn {
-		return newConfigurationError("feature.DynamicRegistration was enabled more than once: "+
-			"WithDynamicRegistration already enables it, so remove WithFeature(feature.DynamicRegistration)", nil)
 	}
 	if nilcheck.IsNil(c.store.InitialAccessTokens()) {
 		return newConfigurationError("WithDynamicRegistration requires the configured Store to provide a non-nil "+
@@ -576,29 +556,6 @@ func (c *config) validateRegistration() error {
 		if _, ok := c.scopeIndex[name]; !ok {
 			return newConfigurationError("WithDynamicRegistration: OpenRegistrationDefaultScopes contains unknown scope "+name, nil)
 		}
-	}
-	// Every check has passed, so the configuration is complete: publish
-	// the flag the router and the discovery builder read.
-	c.features = append(c.features, feature.DynamicRegistration)
-	return nil
-}
-
-// validateFeatureActivation rejects the feature flags that carry no
-// behaviour of their own. [feature.RAR] and [feature.GrantManagement]
-// are activated by the option that supplies their configuration —
-// [WithAuthorizationDetailTypes] registers the type set RAR validates
-// against, [WithGrantManagement] supplies the action set and mounts the
-// endpoint — so a flag arriving without that option describes a
-// deployment the OP cannot serve. Accepting it silently would advertise
-// nothing, mount nothing, and give the embedder no way to discover why.
-// [feature.DynamicRegistration] is rejected the same way, in
-// [config.validateRegistration], where the store checks it shares live.
-func (c *config) validateFeatureActivation() error {
-	if featureEnabled(c.features, feature.RAR) && len(c.authorizationDetailTypes) == 0 {
-		return newConfigurationError("feature.RAR enabled without WithAuthorizationDetailTypes", nil)
-	}
-	if featureEnabled(c.features, feature.GrantManagement) && !c.grantManagementEnabled {
-		return newConfigurationError("feature.GrantManagement enabled without WithGrantManagement", nil)
 	}
 	return nil
 }

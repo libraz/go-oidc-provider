@@ -2,8 +2,6 @@ package op
 
 import (
 	"strconv"
-
-	"github.com/libraz/go-oidc-provider/op/feature"
 )
 
 // GrantManagementAction enumerates the grant_management_action values the
@@ -74,8 +72,7 @@ type GrantManagement struct {
 // response carries grant_id, and discovery advertises the feature.
 //
 // See [GrantManagement] for the accepted actions and the required flag.
-// Enabling this implicitly turns on [feature.GrantManagement]. The
-// option may be supplied at most once; a repeat fails [New].
+// The option may be supplied at most once; a repeat fails [New].
 //
 // Experimental: tracks an IETF draft, so the surface MAY change in a
 // minor release on a wire-incompatible draft bump.
@@ -101,9 +98,6 @@ func WithGrantManagement(g GrantManagement) Option {
 		c.grantManagementActions = append([]GrantManagementAction(nil), actions...)
 		c.grantManagementActionRequired = g.ActionRequired
 		c.grantManagementEnabled = true
-		if !featureEnabled(c.features, feature.GrantManagement) {
-			c.features = append(c.features, feature.GrantManagement)
-		}
 		return nil
 	})
 }

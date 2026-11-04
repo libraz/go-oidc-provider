@@ -480,7 +480,7 @@ func TestSet_Find_AcceptsKeyBeforeNotAfter(t *testing.T) {
 // every Find call that rejects a retired kid, and that the kid value
 // it receives matches the one the caller looked up. The observer is
 // the audit anchor: the OP wires the slog emitter behind it so SOC
-// tooling sees [op.AuditKeyRetiredKidPresented] for every rejection.
+// tooling sees op/audit.KeyRetiredKidPresented for every rejection.
 //
 // Unknown-kid lookups MUST NOT trigger the observer — the rotation
 // audit signal would lose meaning if an attacker probing arbitrary

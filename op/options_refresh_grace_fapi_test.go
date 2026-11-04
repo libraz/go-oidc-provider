@@ -100,7 +100,7 @@ func TestWithRefreshGracePeriod_NonFAPIProfileAllowsWiderWindow(t *testing.T) {
 	t.Parallel()
 
 	rec := captureStartupProfile(t,
-		op.WithCIBA(op.WithCIBAHintResolver(stubCIBAHintResolver{})),
+		op.WithCIBAGrant(op.CIBAGrant{HintResolver: stubCIBAHintResolver{}}),
 		op.WithProfile(profile.FAPICIBA),
 		op.WithFeature(feature.DPoP),
 		op.WithDPoPNonceSource(stubDPoPNonceSource{}),

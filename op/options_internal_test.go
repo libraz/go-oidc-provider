@@ -283,7 +283,7 @@ func TestProfileAllowedAuthMethodNames_MTLSFollowsTheFeature(t *testing.T) {
 // TestEffectiveDeviceCodeExpiry_DefaultsAndOverride pins the H1
 // resolution contract for the device_code TTL knob: a zero-value
 // [config.deviceCodeExpiry] resolves to [devicecode.DefaultExpiresIn]
-// and an embedder-supplied value via [WithDeviceCodeTTL] wins.
+// and an embedder-supplied value via [DeviceCodeGrant.TTL] wins.
 // The knob is deliberately independent of [config.accessTokenTTL].
 func TestEffectiveDeviceCodeExpiry_DefaultsAndOverride(t *testing.T) {
 	t.Parallel()

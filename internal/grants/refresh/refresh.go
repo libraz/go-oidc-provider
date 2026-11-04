@@ -54,7 +54,7 @@ import (
 )
 
 // Audit event names sourced from the typed registry that backs the public
-// op.AuditEvent catalog.
+// op/audit.Event catalog.
 const (
 	auditRefreshReplayDetected    = string(auditevent.AuditRefreshReplayDetected)
 	auditRefreshChainRevokeFailed = string(auditevent.AuditRefreshChainRevokeFailed)

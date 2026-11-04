@@ -11,14 +11,29 @@ const (
 	// so accidentally-zero callers fail loudly.
 	profileUnspecified Profile = iota
 
-	// FAPI2Baseline selects the OpenID Foundation FAPI 2.0 Baseline OP
-	// profile. It mandates PAR, JAR, PKCE and sender-constrained tokens
-	// (DPoP or mTLS), and refuses RS256 issuing.
+	// FAPI2Baseline selects the OpenID Foundation FAPI 2.0 Security
+	// Profile (Final) Baseline OP profile. It enforces:
+	//   - pushed authorization requests (PAR) on every authorization
+	//     request, with a request_uri lifetime below 600 seconds;
+	//   - PKCE and either state or nonce on every authorization request;
+	//   - sender-constrained access tokens via DPoP or mTLS;
+	//   - private_key_jwt, tls_client_auth or self_signed_tls_client_auth
+	//     client authentication, with a client assertion "aud" equal to
+	//     the issuer identifier as a single string;
+	//   - no refresh-token rotation;
+	//   - a 10-minute access-token TTL cap and no RS256 issuing.
+	//
+	// JAR processing is switched on, but a signed request object is NOT
+	// required: plain PAR and form requests remain acceptable.
 	FAPI2Baseline
 
 	// FAPI2MessageSigning selects the FAPI 2.0 Message Signing OP
-	// profile. It builds on Baseline by additionally requiring JARM for
-	// non-repudiation of the authorization response.
+	// profile. It builds on [FAPI2Baseline] by additionally requiring:
+	//   - a signed request object (JAR) on every /authorize and /par
+	//     request;
+	//   - JARM-signed authorization responses;
+	//   - signed (RFC 9701 JWT) introspection responses;
+	//   - a DPoP nonce source whenever DPoP is in use.
 	FAPI2MessageSigning
 
 	// FAPICIBA selects the FAPI Client-Initiated Backchannel
@@ -54,8 +69,8 @@ const (
 	// [OIDCCore].
 	//
 	// Declared after the FAPI constants so their numeric values stay
-	// put; the wire form is [Profile.String], never the ordinal, and
-	// stays "baseline".
+	// put; the wire form is [Profile.String] ("oauth21"), never the
+	// ordinal.
 	//
 	// Stable since v1.5.
 	OAuth21
@@ -78,7 +93,7 @@ const (
 func (p Profile) String() string {
 	switch p {
 	case OAuth21:
-		return "baseline"
+		return "oauth21"
 	case OIDCCore:
 		return "oidc-core"
 	case FAPI2Baseline:

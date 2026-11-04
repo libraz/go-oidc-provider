@@ -59,7 +59,7 @@ func (b *syncBuffer) String() string {
 // newFixture builds a DCR-enabled provider with the supplied options
 // applied on top of the testkit defaults. The clock is pinned at
 // 2026-04-26 12:00 UTC.
-func newFixture(tb testing.TB, regOpt op.RegistrationOption, extra ...op.Option) *dcrFixture {
+func newFixture(tb testing.TB, regOpt op.DynamicRegistration, extra ...op.Option) *dcrFixture {
 	tb.Helper()
 	clock := fixedClock{now: time.Date(2026, 4, 26, 12, 0, 0, 0, time.UTC)}
 	logBuf := &syncBuffer{}
@@ -194,7 +194,7 @@ func minimalMetadata() map[string]any {
 func TestRegister_HappyPath_MintsConfidentialClient(t *testing.T) {
 	t.Parallel()
 
-	f := newFixture(t, op.RegistrationOption{})
+	f := newFixture(t, op.DynamicRegistration{})
 	_, iat := f.issueIAT(t, op.InitialAccessTokenSpec{})
 
 	resp := f.post(t, minimalMetadata(), iat)
@@ -266,7 +266,7 @@ func TestRegister_HappyPath_MintsConfidentialClient(t *testing.T) {
 func TestRegister_BodyTooLarge(t *testing.T) {
 	t.Parallel()
 
-	f := newFixture(t, op.RegistrationOption{})
+	f := newFixture(t, op.DynamicRegistration{})
 	_, iat := f.issueIAT(t, op.InitialAccessTokenSpec{})
 
 	oversized := `{"redirect_uris":["https://rp.test.invalid/callback"],"client_name":"` +
@@ -287,7 +287,7 @@ func TestRegister_BodyTooLarge(t *testing.T) {
 func TestRegister_RejectsNegativeDefaultMaxAge(t *testing.T) {
 	t.Parallel()
 
-	f := newFixture(t, op.RegistrationOption{})
+	f := newFixture(t, op.DynamicRegistration{})
 	_, iat := f.issueIAT(t, op.InitialAccessTokenSpec{})
 
 	body := minimalMetadata()
@@ -308,7 +308,7 @@ func TestRegister_RejectsNegativeDefaultMaxAge(t *testing.T) {
 func TestRegister_IgnoresStandardUnstoredMetadata(t *testing.T) {
 	t.Parallel()
 
-	f := newFixture(t, op.RegistrationOption{})
+	f := newFixture(t, op.DynamicRegistration{})
 	_, iat := f.issueIAT(t, op.InitialAccessTokenSpec{})
 
 	body := minimalMetadata()
@@ -360,7 +360,7 @@ func TestRegister_IgnoresStandardUnstoredMetadata(t *testing.T) {
 func TestRegister_HappyPath_PostLogoutRedirectURIsRoundTrip(t *testing.T) {
 	t.Parallel()
 
-	f := newFixture(t, op.RegistrationOption{})
+	f := newFixture(t, op.DynamicRegistration{})
 	_, iat := f.issueIAT(t, op.InitialAccessTokenSpec{})
 
 	body := minimalMetadata()
@@ -393,7 +393,7 @@ func TestRegister_HappyPath_PostLogoutRedirectURIsRoundTrip(t *testing.T) {
 func TestRegister_HappyPath_PublicClient_OmitsSecret(t *testing.T) {
 	t.Parallel()
 
-	f := newFixture(t, op.RegistrationOption{})
+	f := newFixture(t, op.DynamicRegistration{})
 	_, iat := f.issueIAT(t, op.InitialAccessTokenSpec{})
 
 	body := minimalMetadata()
@@ -426,11 +426,11 @@ func TestRegister_HappyPath_PublicClient_OmitsSecret(t *testing.T) {
 // baseline keeps a scope-omitted DCR from silently widening to
 // every public scope the embedder configured; broadening is
 // available behind
-// [op.RegistrationOption.OpenRegistrationDefaultScopes].
+// [op.DynamicRegistration.OpenRegistrationDefaultScopes].
 func TestRegister_OpenRegistration_DefaultsScopeEmpty(t *testing.T) {
 	t.Parallel()
 
-	f := newFixture(t, op.RegistrationOption{Open: true})
+	f := newFixture(t, op.DynamicRegistration{Open: true})
 
 	resp := f.post(t, minimalMetadata(), "")
 	defer resp.Body.Close()
@@ -459,7 +459,7 @@ func TestRegister_OpenRegistration_DefaultsScopeEmpty(t *testing.T) {
 
 // TestRegister_OpenRegistration_DefaultsScopeFromOption confirms
 // the embedder opt-in escape hatch: when
-// [op.RegistrationOption.OpenRegistrationDefaultScopes] is set, an
+// [op.DynamicRegistration.OpenRegistrationDefaultScopes] is set, an
 // open registration that omits the scope field receives the
 // configured default verbatim. The list is space-joined into the
 // response and persisted on [store.Client.Scopes] so subsequent
@@ -467,7 +467,7 @@ func TestRegister_OpenRegistration_DefaultsScopeEmpty(t *testing.T) {
 func TestRegister_OpenRegistration_DefaultsScopeFromOption(t *testing.T) {
 	t.Parallel()
 
-	f := newFixture(t, op.RegistrationOption{
+	f := newFixture(t, op.DynamicRegistration{
 		Open:                          true,
 		OpenRegistrationDefaultScopes: []string{"openid", "profile"},
 	})
@@ -503,7 +503,7 @@ func TestRegister_OpenRegistration_DefaultsScopeFromOption(t *testing.T) {
 func TestRegister_OpenRegistration_ExplicitScopeOverridesDefault(t *testing.T) {
 	t.Parallel()
 
-	f := newFixture(t, op.RegistrationOption{
+	f := newFixture(t, op.DynamicRegistration{
 		Open:                          true,
 		OpenRegistrationDefaultScopes: []string{"openid", "profile", "email"},
 	})
@@ -526,7 +526,7 @@ func TestRegister_RejectsAllowedClientsRestrictedScope(t *testing.T) {
 	t.Parallel()
 
 	f := newFixture(t,
-		op.RegistrationOption{Open: true},
+		op.DynamicRegistration{Open: true},
 		op.WithScope(op.Scope{
 			Name:           "billing:write",
 			Public:         true,
@@ -570,7 +570,7 @@ func slicesEqual(a, b []string) bool {
 func TestRegister_OpenRegistration_AcceptedAndLogged(t *testing.T) {
 	t.Parallel()
 
-	f := newFixture(t, op.RegistrationOption{Open: true})
+	f := newFixture(t, op.DynamicRegistration{Open: true})
 
 	resp := f.post(t, minimalMetadata(), "")
 	defer resp.Body.Close()
@@ -644,7 +644,7 @@ func TestRegister_Errors_4xx(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			f := newFixture(t, op.RegistrationOption{})
+			f := newFixture(t, op.DynamicRegistration{})
 			ct := tc.contentType
 			if ct == "" {
 				ct = "application/json"
@@ -674,7 +674,7 @@ func TestRegister_Errors_4xx(t *testing.T) {
 func TestRegister_ExpiredIAT_Rejected(t *testing.T) {
 	t.Parallel()
 
-	f := newFixture(t, op.RegistrationOption{IATTTL: time.Hour, IATUses: 1})
+	f := newFixture(t, op.DynamicRegistration{IATTTL: time.Hour, IATUses: 1})
 	// Manually persist an IAT whose ExpiresAt has already passed against
 	// the fixture clock. The library's IssueInitialAccessToken cannot
 	// produce this shape (TTL must be non-negative), so we go through
@@ -704,7 +704,7 @@ func TestRegister_ExpiredIAT_Rejected(t *testing.T) {
 func TestRegister_ConsumedIAT_Rejected(t *testing.T) {
 	t.Parallel()
 
-	f := newFixture(t, op.RegistrationOption{IATTTL: time.Hour, IATUses: 1})
+	f := newFixture(t, op.DynamicRegistration{IATTTL: time.Hour, IATUses: 1})
 	_, iat := f.issueIAT(t, op.InitialAccessTokenSpec{})
 
 	first := f.post(t, minimalMetadata(), iat)
@@ -729,7 +729,7 @@ func TestRegister_ConsumedIAT_Rejected(t *testing.T) {
 func TestRegister_IATScopeAllowlist_Enforced(t *testing.T) {
 	t.Parallel()
 
-	f := newFixture(t, op.RegistrationOption{})
+	f := newFixture(t, op.DynamicRegistration{})
 	_, iat := f.issueIAT(t, op.InitialAccessTokenSpec{
 		AllowedScopes: []string{"openid", "profile"},
 	})
@@ -754,7 +754,7 @@ func TestRegister_IATScopeAllowlist_Enforced(t *testing.T) {
 func TestRegister_IATRace_AtomicallySerialised(t *testing.T) {
 	t.Parallel()
 
-	f := newFixture(t, op.RegistrationOption{IATTTL: time.Hour, IATUses: 1})
+	f := newFixture(t, op.DynamicRegistration{IATTTL: time.Hour, IATUses: 1})
 	_, iat := f.issueIAT(t, op.InitialAccessTokenSpec{})
 
 	type result struct {
@@ -927,7 +927,7 @@ func TestRegister_MetadataValidation_4xx(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			f := newFixture(t, op.RegistrationOption{})
+			f := newFixture(t, op.DynamicRegistration{})
 			_, iat := f.issueIAT(t, op.InitialAccessTokenSpec{})
 			body := minimalMetadata()
 			tc.mutate(body)
@@ -953,7 +953,7 @@ func TestRegister_MetadataValidation_4xx(t *testing.T) {
 func TestRegister_MalformedJSON_AfterIAT(t *testing.T) {
 	t.Parallel()
 
-	f := newFixture(t, op.RegistrationOption{})
+	f := newFixture(t, op.DynamicRegistration{})
 	_, iat := f.issueIAT(t, op.InitialAccessTokenSpec{})
 
 	resp := f.post(t, "{not valid json", iat)
@@ -989,7 +989,7 @@ func TestRegister_TrailingJSONDocument_Rejected(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			f := newFixture(t, op.RegistrationOption{})
+			f := newFixture(t, op.DynamicRegistration{})
 			_, iat := f.issueIAT(t, op.InitialAccessTokenSpec{})
 
 			resp := f.post(t, tc.body, iat)
@@ -1012,7 +1012,7 @@ func TestRegister_TrailingJSONDocument_Rejected(t *testing.T) {
 func TestRegister_WrongContentType_AfterIAT(t *testing.T) {
 	t.Parallel()
 
-	f := newFixture(t, op.RegistrationOption{})
+	f := newFixture(t, op.DynamicRegistration{})
 	_, iat := f.issueIAT(t, op.InitialAccessTokenSpec{})
 
 	resp := f.postWithContentType(t, `{"redirect_uris":["https://rp/cb"]}`, iat, "text/plain")
@@ -1036,7 +1036,7 @@ func TestRegister_ValidateMetadataHook_Rejects(t *testing.T) {
 	hook := func(_ context.Context, _ op.ClientMetadata) error {
 		return errors.New("tenant\nfoo: not allowed")
 	}
-	f := newFixture(t, op.RegistrationOption{ValidateMetadata: hook})
+	f := newFixture(t, op.DynamicRegistration{ValidateMetadata: hook})
 	_, iat := f.issueIAT(t, op.InitialAccessTokenSpec{})
 
 	resp := f.post(t, minimalMetadata(), iat)
@@ -1065,7 +1065,7 @@ func TestRegister_NotAllowedMethods(t *testing.T) {
 	for _, method := range []string{http.MethodGet, http.MethodPut, http.MethodDelete} {
 		t.Run(method, func(t *testing.T) {
 			t.Parallel()
-			f := newFixture(t, op.RegistrationOption{})
+			f := newFixture(t, op.DynamicRegistration{})
 			req, err := http.NewRequestWithContext(context.Background(), method, f.endpoint, http.NoBody)
 			if err != nil {
 				t.Fatalf("NewRequest: %v", err)
@@ -1091,7 +1091,7 @@ func TestRegister_NotAllowedMethods(t *testing.T) {
 // clients.
 func dcrFixtureWithStaticClient(tb testing.TB, id string) *dcrFixture {
 	tb.Helper()
-	f := newFixture(tb, op.RegistrationOption{})
+	f := newFixture(tb, op.DynamicRegistration{})
 	if err := f.prov.Store.RegisterClient(context.Background(), &store.Client{
 		ID:                      id,
 		RedirectURIs:            []string{"https://rp.test.invalid/cb"},

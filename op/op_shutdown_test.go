@@ -309,7 +309,7 @@ func TestNew_RecordsBackchannelCoordinatorForDCRDeletion(t *testing.T) {
 		WithStore(inmem.New()),
 		WithKeyset(Keyset{SigningKey{KeyID: "sig-1", Signer: priv}}),
 		WithGrants(grant.ClientCredentials),
-		WithDynamicRegistration(RegistrationOption{}),
+		WithDynamicRegistration(DynamicRegistration{}),
 	)
 	if err != nil {
 		t.Fatalf("New: %v", err)

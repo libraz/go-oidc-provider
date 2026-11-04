@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/libraz/go-oidc-provider/internal/audit"
+	"github.com/libraz/go-oidc-provider/internal/auditevent"
 	"github.com/libraz/go-oidc-provider/internal/httpx"
 	"github.com/libraz/go-oidc-provider/internal/i18n"
 	"github.com/libraz/go-oidc-provider/internal/jose"
@@ -74,7 +75,7 @@ func (p *Provider) SubjectGenerator() SubjectGenerator { //nolint:ireturn,nolint
 }
 
 // LocaleResolver returns the locale [LocaleResolver] the Provider built
-// from [WithLocale] / [WithDefaultLocale] / [WithPreferredLocaleStore].
+// from [WithLocaleBundle] / [WithDefaultLocale] / [WithPreferredLocaleStore].
 // Embedders use it to render emails, server-rendered admin pages, or
 // other out-of-band surfaces in the same locale the OP picks for
 // /authorize prompts. The resolver is safe for concurrent use.
@@ -422,7 +423,7 @@ func keysetClock(cfg *config) func() time.Time {
 }
 
 // retiredKidObserver builds the [keys.RetiredKidObserver] that fires
-// [AuditKeyRetiredKidPresented] when the verifier rejects a kid whose
+// audit.KeyRetiredKidPresented when the verifier rejects a kid whose
 // retirement deadline has elapsed. The observer rides on the
 // configured [audit.Emitter] chain so the event lands on every sink
 // (slog audit logger + the Prometheus bridge when [WithPrometheus] is
@@ -441,7 +442,7 @@ func retiredKidObserver(cfg *config) keys.RetiredKidObserver {
 	emitter := cfg.effectiveAuditEmitter()
 	return func(ctx context.Context, kid string) {
 		emitter.Emit(ctx, audit.Event{
-			Name:    string(AuditKeyRetiredKidPresented),
+			Name:    string(auditevent.AuditKeyRetiredKidPresented),
 			Level:   audit.LevelWarn,
 			Message: "verification rejected: presented kid is retired",
 			Extras: map[string]any{

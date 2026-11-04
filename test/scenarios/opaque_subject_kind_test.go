@@ -63,9 +63,9 @@ func newSubjectKindProvider(t *testing.T, format op.AccessTokenFormat) (*testkit
 		op.WithFeature(feature.Introspect),
 		op.WithGrants(grant.AuthorizationCode, grant.RefreshToken, grant.ClientCredentials),
 		op.WithCustomGrant(handler),
-		op.WithTokenExchange(txAllowAllPolicy{}),
-		op.WithDeviceCodeGrant(),
-		op.WithCIBA(op.WithCIBAHintResolver(cibaHintResolver{})),
+		op.WithTokenExchangeGrant(op.TokenExchangeGrant{Policy: txAllowAllPolicy{}}),
+		op.WithDeviceCodeGrant(op.DeviceCodeGrant{}),
+		op.WithCIBAGrant(op.CIBAGrant{HintResolver: cibaHintResolver{}}),
 	))
 	hash, err := op.HashClientSecret(osClientSecret)
 	if err != nil {

@@ -37,13 +37,13 @@ func TestNew_TLSClientAuthBehindProxyRequiresRootCAs(t *testing.T) {
 	}{
 		{"static seed behind proxy without root CAs", []op.Option{seed, proxy}, []string{"pki-rp", "WithMTLSRootCAs"}},
 		{"dynamic registration behind proxy without root CAs", []op.Option{
-			proxy, op.WithDynamicRegistration(op.RegistrationOption{}),
+			proxy, op.WithDynamicRegistration(op.DynamicRegistration{}),
 		}, []string{"WithDynamicRegistration", "WithMTLSRootCAs"}},
 		{"static seed behind proxy with root CAs", []op.Option{seed, proxy, roots}, nil},
 		{"static seed over direct TLS", []op.Option{seed}, nil},
 		{"self-signed seed behind proxy", []op.Option{selfSigned, proxy}, nil},
 		{"dynamic registration under OAuth21 behind proxy without root CAs", []op.Option{
-			proxy, op.WithDynamicRegistration(op.RegistrationOption{}),
+			proxy, op.WithDynamicRegistration(op.DynamicRegistration{}),
 			op.WithProfile(profile.OAuth21),
 		}, []string{"WithMTLSRootCAs"}},
 	}

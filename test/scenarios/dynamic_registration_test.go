@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/libraz/go-oidc-provider/op"
+	opaudit "github.com/libraz/go-oidc-provider/op/audit"
 	"github.com/libraz/go-oidc-provider/op/store"
 	"github.com/libraz/go-oidc-provider/op/testkit"
 	"github.com/libraz/go-oidc-provider/test/scenarios/internal/scenariokit"
@@ -36,7 +37,7 @@ type dcrFixture struct {
 func newDCRFixture(t *testing.T) *dcrFixture {
 	t.Helper()
 	tk := testkit.NewProvider(t, testkit.WithOptions(
-		op.WithDynamicRegistration(op.RegistrationOption{}),
+		op.WithDynamicRegistration(op.DynamicRegistration{}),
 	))
 	return &dcrFixture{
 		tk:       tk,
@@ -250,13 +251,13 @@ func TestScenario_DCR_EP_05_AdapterUpsertCalledOnce(t *testing.T) {
 // audit event carrying the freshly minted client_id. The audit chain
 // is the single observability seam for DCR success on v1.0.
 //
-// Spec: OP audit (op.AuditDCRClientRegistered).
+// Spec: OP audit (opaudit.DCRClientRegistered).
 func TestScenario_DCR_EP_06_RegistrationCreateAuditEmitted(t *testing.T) {
 	t.Parallel()
 
 	audit := scenariokit.NewAuditCapture()
 	tk := testkit.NewProvider(t, testkit.WithOptions(
-		op.WithDynamicRegistration(op.RegistrationOption{}),
+		op.WithDynamicRegistration(op.DynamicRegistration{}),
 		op.WithAuditLogger(audit.Logger()),
 	))
 	endpoint := tk.Server.URL + "/oidc/register"
@@ -279,7 +280,7 @@ func TestScenario_DCR_EP_06_RegistrationCreateAuditEmitted(t *testing.T) {
 		raw, _ := io.ReadAll(resp.Body)
 		t.Fatalf("status=%d want 201 body=%s", resp.StatusCode, raw)
 	}
-	got := audit.EventsByName(string(op.AuditDCRClientRegistered))
+	got := audit.EventsByName(string(opaudit.DCRClientRegistered))
 	if len(got) != 1 {
 		t.Fatalf("dcr.client.registered emitted %d times, want 1; all events=%v",
 			len(got), audit.Events())
@@ -372,7 +373,7 @@ func TestScenario_DCR_DEF_05_GrantTypesDefaultAuthCode(t *testing.T) {
 	t.Parallel()
 
 	tk := testkit.NewProvider(t, testkit.WithOptions(
-		op.WithDynamicRegistration(op.RegistrationOption{
+		op.WithDynamicRegistration(op.DynamicRegistration{
 			AllowedGrantTypes: []string{"authorization_code", "refresh_token"},
 		}),
 	))
@@ -681,7 +682,7 @@ func TestScenario_DCR_IAT_05_IATEntityAttachedToContext(t *testing.T) {
 }
 
 // TestScenario_DCR_IAT_06_PublicDCRSupportedButDiscouraged confirms
-// that op.RegistrationOption{Open: true} admits POST /register without
+// that op.DynamicRegistration{Open: true} admits POST /register without
 // an Initial Access Token (the "public DCR" mode). The wire shape is a
 // 201 Created carrying a fresh client_id, and the OP MUST stamp a
 // dcr.open_registration_used audit event so operators can quantify the
@@ -693,7 +694,7 @@ func TestScenario_DCR_IAT_06_PublicDCRSupportedButDiscouraged(t *testing.T) {
 
 	audit := scenariokit.NewAuditCapture()
 	tk := testkit.NewProvider(t, testkit.WithOptions(
-		op.WithDynamicRegistration(op.RegistrationOption{Open: true}),
+		op.WithDynamicRegistration(op.DynamicRegistration{Open: true}),
 		op.WithAuditLogger(audit.Logger()),
 	))
 	endpoint := tk.Server.URL + "/oidc/register"
@@ -715,7 +716,7 @@ func TestScenario_DCR_IAT_06_PublicDCRSupportedButDiscouraged(t *testing.T) {
 	if cid, _ := out["client_id"].(string); cid == "" {
 		t.Errorf("client_id missing from open-DCR response: %+v", out)
 	}
-	if got := audit.EventsByName(string(op.AuditDCROpenRegistrationUsed)); len(got) != 1 {
+	if got := audit.EventsByName(string(opaudit.DCROpenRegistrationUsed)); len(got) != 1 {
 		t.Errorf("dcr.open_registration_used emitted %d times, want 1; events=%v",
 			len(got), audit.Events())
 	}
@@ -1228,7 +1229,7 @@ func newPairwiseDCRFixture(t *testing.T) *dcrFixture {
 	t.Helper()
 	salt := bytes.Repeat([]byte{0x2a}, 32)
 	tk := testkit.NewProvider(t, testkit.WithOptions(
-		op.WithDynamicRegistration(op.RegistrationOption{}),
+		op.WithDynamicRegistration(op.DynamicRegistration{}),
 		op.WithPairwiseSubject(salt),
 	))
 	return &dcrFixture{

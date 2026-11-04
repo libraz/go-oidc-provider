@@ -27,7 +27,8 @@ const (
 // broken-scan guard in one place instead of silently emptying a check.
 const (
 	auditEventPkg  = "internal/auditevent"
-	auditAliasFile = "op/audit.go"
+	auditAliasFile = "op/audit/audit.go"
+	auditEventType = "Event"
 	messagesFile   = "internal/i18n/embedded/en.json"
 	dynamoPkg      = "op/storeadapter/dynamodb"
 )
@@ -180,14 +181,17 @@ func symbolCandidate(d decl) bool {
 }
 
 // isAuditEventConst reports whether a declaration is one of the public
-// audit-event aliases, in either the `X AuditEvent = ...` or the
-// `X = AuditEvent(...)` form the catalogue uses.
+// audit-event aliases in the op/audit catalogue, in either the
+// `X Event = ...` or the `X = Event(...)` form it uses.
 func isAuditEventConst(d decl) bool {
-	if d.typeName == "AuditEvent" {
+	if d.file != auditAliasFile {
+		return false
+	}
+	if d.typeName == auditEventType {
 		return true
 	}
 	for _, ref := range d.refs {
-		if ref == "AuditEvent" {
+		if ref == auditEventType {
 			return true
 		}
 	}
@@ -223,7 +227,7 @@ func checkEvents(ix *index, al *allowlist) []finding {
 		if !ok {
 			out = append(out, finding{
 				kind: kindEvent, id: d.str, where: d.pos(),
-				detail: "catalogued but no public op constant aliases it, so an embedder cannot name the event",
+				detail: "catalogued but no public op/audit constant aliases it, so an embedder cannot name the event",
 			})
 			continue
 		}
@@ -271,7 +275,7 @@ func emissionSite(path string) bool {
 	return !strings.HasPrefix(path, auditEventPkg+"/")
 }
 
-// auditAliases maps each internal event constant to the public op
+// auditAliases maps each internal event constant to the public op/audit
 // constant that aliases it.
 func auditAliases(ix *index) map[string]decl {
 	out := map[string]decl{}

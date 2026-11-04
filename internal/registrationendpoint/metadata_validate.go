@@ -346,7 +346,7 @@ func validateDefaultMaxAge(v *int64) error {
 //
 // The minimum-privilege baseline for open registration is
 // deliberate: prior to the
-// [op.RegistrationOption.OpenRegistrationDefaultScopes] surface,
+// [op.DynamicRegistration.OpenRegistrationDefaultScopes] surface,
 // open mode fell through to the registry's full public scope list,
 // which silently widened every dynamically registered client.
 // Embedders that rely on a wider default opt in explicitly through

@@ -701,7 +701,7 @@ func TestScenario_ENC_036_DCRRejectsHalfPairEncryptionMetadata(t *testing.T) {
 	encKey := scenariokit.NewOPEncryptionKey(t, "op-enc-036")
 	rp := scenariokit.NewRPEncryptionKey(t, "rp-enc-036")
 	tk := testkit.NewProvider(t, testkit.WithOptions(
-		op.WithDynamicRegistration(op.RegistrationOption{Open: true}),
+		op.WithDynamicRegistration(op.DynamicRegistration{Open: true}),
 		op.WithEncryptionKeyset(op.EncryptionKeyset{encKey}),
 	))
 

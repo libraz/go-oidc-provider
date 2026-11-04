@@ -49,7 +49,7 @@ func builtinGrantTypeWireSet() map[string]struct{} {
 // it is not appended at the end.
 //
 // Token exchange is the one wire with no [grant.Type] constant: it is
-// enabled through [WithTokenExchange] rather than [WithGrants] and
+// enabled through [WithTokenExchangeGrant] rather than [WithGrants] and
 // its handler rides the extension dispatcher, where a same-named
 // custom registration would win the lookup outright. It is added by
 // name, and a test pins the result against every extension grant the
@@ -172,8 +172,19 @@ func (c *config) customGrantHandlers() []CustomGrantHandler {
 	return out
 }
 
-// WithTokenExchange enables the RFC 8693 token-exchange grant_type
-// at the token endpoint, gated by the supplied [TokenExchangePolicy].
+// TokenExchangeGrant configures the RFC 8693 token-exchange grant
+// enabled by [WithTokenExchangeGrant].
+//
+// Stable since v1.5.
+type TokenExchangeGrant struct {
+	// Policy decides whether to admit each exchange. REQUIRED: a nil
+	// Policy fails construction with [ErrTokenExchangePolicyNil] as
+	// token-exchange requires an explicit deny-by-default hook.
+	Policy TokenExchangePolicy
+}
+
+// WithTokenExchangeGrant enables the RFC 8693 token-exchange grant_type
+// at the token endpoint, gated by [TokenExchangeGrant.Policy].
 // The provider verifies subject_token / actor_token, normalises the
 // requested audience, intersects the requested scope with the
 // subject_token's scope and the calling client's allowed set, builds
@@ -185,25 +196,25 @@ func (c *config) customGrantHandlers() []CustomGrantHandler {
 //
 // Construction-time errors:
 //
-//   - [ErrTokenExchangePolicyNil] — policy is nil. Token-exchange
+//   - [ErrTokenExchangePolicyNil] — Policy is nil. Token-exchange
 //     requires an explicit deny-by-default hook.
-//   - [ErrTokenExchangeDuplicate] — WithTokenExchange was already
+//   - [ErrTokenExchangeDuplicate] — WithTokenExchangeGrant was already
 //     invoked. The grant_type has a single canonical URN; a second
 //     registration would shadow the first silently.
 //
 // Stable since v1.5.
-func WithTokenExchange(policy TokenExchangePolicy) Option {
+func WithTokenExchangeGrant(g TokenExchangeGrant) Option {
 	return optionFunc(func(c *config) error {
-		if err := c.claimOnce("WithTokenExchange"); err != nil {
+		if err := c.claimOnce("WithTokenExchangeGrant"); err != nil {
 			if errors.Is(err, errShadowedDefault) {
 				return err
 			}
 			return ErrTokenExchangeDuplicate
 		}
-		if nilcheck.IsNil(policy) {
+		if nilcheck.IsNil(g.Policy) {
 			return ErrTokenExchangePolicyNil
 		}
-		c.tokenExchangePolicy = policy
+		c.tokenExchangePolicy = g.Policy
 		return nil
 	})
 }

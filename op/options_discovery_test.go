@@ -215,7 +215,7 @@ func TestWithDiscoveryMetadata_RejectsOPControlledOverride(t *testing.T) {
 // advertise the embedder-owned static fields (service_documentation,
 // op_policy_uri, op_tos_uri). The ui_locales_supported field is
 // auto-derived from the registered locale resolver (seed bundles plus
-// [WithLocale]) so it is asserted separately — its presence is honest
+// [WithLocaleBundle]) so it is asserted separately — its presence is honest
 // advertisement, not embedder-supplied metadata.
 func TestWithDiscoveryMetadata_OmitsDefaultMetadata(t *testing.T) {
 	t.Parallel()
@@ -255,7 +255,7 @@ func TestWithDiscoveryMetadata_OmitsDefaultMetadata(t *testing.T) {
 	// ui_locales_supported is auto-derived from the resolver. The seed
 	// bundles guarantee at least the canonical "en" tag is registered,
 	// so the wire MUST advertise a non-empty array even without an
-	// explicit WithDiscoveryMetadata or WithLocale call.
+	// explicit WithDiscoveryMetadata or WithLocaleBundle call.
 	locales, ok := wire["ui_locales_supported"].([]any)
 	if !ok {
 		t.Fatalf("ui_locales_supported missing or not a JSON array: %T (%v)",
@@ -271,7 +271,7 @@ func TestWithDiscoveryMetadata_OmitsDefaultMetadata(t *testing.T) {
 // [DiscoveryMetadata.UILocalesSupported]: when the embedder does not
 // supply an explicit list, the discovery document advertises every
 // locale registered with the runtime resolver — seed bundles plus any
-// [WithLocale] additions. The test registers a custom French bundle
+// [WithLocaleBundle] additions. The test registers a custom French bundle
 // and asserts "fr" appears in the wire array alongside the seed
 // locales.
 func TestDiscovery_UILocalesSupported_DerivedFromResolver(t *testing.T) {
@@ -283,7 +283,7 @@ func TestDiscovery_UILocalesSupported_DerivedFromResolver(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LocaleBundleFromMap(fr): %v", err)
 	}
-	provider, err := op.New(append(validBaseOpts(t), op.WithLocale(french))...)
+	provider, err := op.New(append(validBaseOpts(t), op.WithLocaleBundle(french))...)
 	if err != nil {
 		t.Fatalf("op.New: %v", err)
 	}
@@ -321,7 +321,7 @@ func TestDiscovery_UILocalesSupported_DerivedFromResolver(t *testing.T) {
 		}
 	}
 	if !sawFR {
-		t.Errorf("ui_locales_supported = %v, want it to include the WithLocale-registered \"fr\"", locales)
+		t.Errorf("ui_locales_supported = %v, want it to include the WithLocaleBundle-registered \"fr\"", locales)
 	}
 }
 

@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/libraz/go-oidc-provider/op"
+	opaudit "github.com/libraz/go-oidc-provider/op/audit"
 	"github.com/libraz/go-oidc-provider/op/grant"
 	"github.com/libraz/go-oidc-provider/op/testkit"
 )
@@ -59,7 +60,7 @@ func (h *rotationAuditCounter) Handle(_ context.Context, rec slog.Record) error 
 	return nil
 }
 
-func (h *rotationAuditCounter) count(event op.AuditEvent) int {
+func (h *rotationAuditCounter) count(event opaudit.Event) int {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	return h.counts[string(event)]
@@ -143,12 +144,12 @@ func TestClientSecretRotation_EndToEnd(t *testing.T) {
 	}
 
 	requireIssued(t, current)
-	if got := audit.count(op.AuditClientAuthnPreviousSecret); got != 0 {
-		t.Fatalf("%s emitted %d times for the current secret, want 0", op.AuditClientAuthnPreviousSecret, got)
+	if got := audit.count(opaudit.ClientAuthnPreviousSecret); got != 0 {
+		t.Fatalf("%s emitted %d times for the current secret, want 0", opaudit.ClientAuthnPreviousSecret, got)
 	}
 	requireIssued(t, previous)
-	if got := audit.count(op.AuditClientAuthnPreviousSecret); got != 1 {
-		t.Fatalf("%s emitted %d times after one previous-secret use, want 1", op.AuditClientAuthnPreviousSecret, got)
+	if got := audit.count(opaudit.ClientAuthnPreviousSecret); got != 1 {
+		t.Fatalf("%s emitted %d times after one previous-secret use, want 1", opaudit.ClientAuthnPreviousSecret, got)
 	}
 	requireInvalidClient(t, "not-either-secret")
 
@@ -156,7 +157,7 @@ func TestClientSecretRotation_EndToEnd(t *testing.T) {
 	clock.set(expiry)
 	requireInvalidClient(t, previous)
 	requireIssued(t, current)
-	if got := audit.count(op.AuditClientAuthnPreviousSecret); got != 1 {
-		t.Fatalf("%s emitted %d times after the window closed, want 1", op.AuditClientAuthnPreviousSecret, got)
+	if got := audit.count(opaudit.ClientAuthnPreviousSecret); got != 1 {
+		t.Fatalf("%s emitted %d times after the window closed, want 1", opaudit.ClientAuthnPreviousSecret, got)
 	}
 }

@@ -69,19 +69,19 @@ func TestNew_WarnsOncePerUnenabledSeedGrant(t *testing.T) {
 			name:       "device code not enabled, listed twice",
 			opts:       []op.Option{seedWithGrants("authorization_code", deviceCodeURN, deviceCodeURN)},
 			wantLines:  1,
-			wantInLine: []string{"level=WARN", "static client seed-app", deviceCodeURN, "WithDeviceCodeGrant()"},
+			wantInLine: []string{"level=WARN", "static client seed-app", deviceCodeURN, "WithDeviceCodeGrant(DeviceCodeGrant{})"},
 		},
 		{
 			name:       "token exchange not registered",
 			opts:       []op.Option{seedWithGrants("authorization_code", op.TokenExchangeGrantType)},
 			wantLines:  1,
-			wantInLine: []string{"level=WARN", "seed-app", op.TokenExchangeGrantType, "WithTokenExchange(...)"},
+			wantInLine: []string{"level=WARN", "seed-app", op.TokenExchangeGrantType, "WithTokenExchangeGrant(...)"},
 		},
 		{
 			name: "token exchange registered",
 			opts: []op.Option{
 				seedWithGrants("authorization_code", op.TokenExchangeGrantType),
-				op.WithTokenExchange(allowAllTokenExchange{}),
+				op.WithTokenExchangeGrant(op.TokenExchangeGrant{Policy: allowAllTokenExchange{}}),
 			},
 		},
 		{
@@ -188,8 +188,8 @@ func TestNew_WarnsWhenNoLoggerConfigured(t *testing.T) { //nolint:paralleltest /
 func TestNew_LogsPrivateNetworkReach(t *testing.T) {
 	t.Parallel()
 
-	openDCR := op.WithDynamicRegistration(op.RegistrationOption{Open: true})
-	iatDCR := op.WithDynamicRegistration(op.RegistrationOption{})
+	openDCR := op.WithDynamicRegistration(op.DynamicRegistration{Open: true})
+	iatDCR := op.WithDynamicRegistration(op.DynamicRegistration{})
 	cimd := op.WithClientIDMetadataDocuments(op.ClientIDMetadataDocuments{})
 	cases := []struct {
 		name    string

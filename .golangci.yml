@@ -207,8 +207,6 @@ linters:
         # actionable there.
         - generic
         - github.com/libraz/go-oidc-provider/op\.Option
-        - github.com/libraz/go-oidc-provider/op\.CIBAOption
-        - github.com/libraz/go-oidc-provider/op\.DeviceCodeOption
         - github.com/libraz/go-oidc-provider/op\.HintResolver
         - github.com/libraz/go-oidc-provider/op/store\..*
         - github.com/libraz/go-oidc-provider/op/interaction\..*

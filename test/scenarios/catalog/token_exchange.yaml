@@ -248,7 +248,7 @@ rows:
     behaviour: |
       The provider MUST reject token-exchange at op.New time when
       the embedder did not register a TokenExchangePolicy via the
-      WithTokenExchange option. Deployments cannot accidentally
+      WithTokenExchangeGrant option. Deployments cannot accidentally
       enable token-exchange.
     status: active
 

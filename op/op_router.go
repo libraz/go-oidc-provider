@@ -797,7 +797,7 @@ func (a cibaHintResolverAdapter) Resolve(ctx context.Context, kind ciba.HintKind
 }
 
 // mountBackchannelAuthenticationEndpoint registers the /bc-authorize
-// handler when the CIBA grant is configured (via [WithCIBA] or by
+// handler when the CIBA grant is configured (via [WithCIBAGrant] or by
 // including [grant.CIBA] in [WithGrants]). The mount is gated on
 // the resolved grant configuration so a deployment that does not
 // enable the grant keeps the route absent — the discovery document
@@ -899,7 +899,7 @@ func buildSectorResolver(cfg *config) *sector.Resolver {
 }
 
 // wrapValidateMetadata adapts a caller-supplied
-// [RegistrationOption.ValidateMetadata] hook (which sees the public
+// [DynamicRegistration.ValidateMetadata] hook (which sees the public
 // op.ClientMetadata) into the internal-package signature
 // (registrationendpoint.ClientMetadata). internal/* must not import
 // op/, so the conversion lives here.

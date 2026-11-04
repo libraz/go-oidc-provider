@@ -64,11 +64,11 @@ func TestInfoMissingStoreCapabilities(t *testing.T) {
 	cases := []struct {
 		name string
 		st   store.Store
-		dcr  *RegistrationOption
+		dcr  *DynamicRegistration
 		want []string
 	}{
 		{name: "bundled store", st: inmem.New()},
-		{name: "bundled store with dynamic registration", st: inmem.New(), dcr: &RegistrationOption{}},
+		{name: "bundled store with dynamic registration", st: inmem.New(), dcr: &DynamicRegistration{}},
 		{
 			name: "wrapper hides IssuanceRevocationChecker",
 			st:   wrappedRevocationsStore{inmem.New()},

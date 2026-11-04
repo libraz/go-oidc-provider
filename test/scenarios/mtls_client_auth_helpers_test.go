@@ -217,8 +217,8 @@ func mtlsEndpointOptions() []op.Option {
 		op.WithFeature(feature.Introspect),
 		op.WithFeature(feature.Revoke),
 		op.WithGrants(grant.AuthorizationCode, grant.RefreshToken, grant.ClientCredentials),
-		op.WithDeviceCodeGrant(),
-		op.WithCIBA(op.WithCIBAHintResolver(cibaHintResolver{})),
+		op.WithDeviceCodeGrant(op.DeviceCodeGrant{}),
+		op.WithCIBAGrant(op.CIBAGrant{HintResolver: cibaHintResolver{}}),
 		op.WithGrantManagement(op.GrantManagement{Actions: []op.GrantManagementAction{op.GrantActionQuery, op.GrantActionRevoke}}),
 	}
 }
@@ -591,7 +591,7 @@ func (f *mtlsFixture) arrange(tb testing.TB, c mtlsCase) (mtlsTopology, *httptes
 func newMTLSDCRFixture(t *testing.T) *dcrFixture {
 	t.Helper()
 	tk := testkit.NewProvider(t, testkit.WithOptions(
-		op.WithDynamicRegistration(op.RegistrationOption{}),
+		op.WithDynamicRegistration(op.DynamicRegistration{}),
 		op.WithFeature(feature.MTLS),
 	))
 	return &dcrFixture{tk: tk, endpoint: tk.Server.URL + "/oidc/register"}

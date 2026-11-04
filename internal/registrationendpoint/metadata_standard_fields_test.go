@@ -72,7 +72,7 @@ func fullStandardMetadata() map[string]any {
 func TestRegister_AcceptsFullStandardMetadataSet(t *testing.T) {
 	t.Parallel()
 
-	f := newFixture(t, op.RegistrationOption{})
+	f := newFixture(t, op.DynamicRegistration{})
 	_, iat := f.issueIAT(t, op.InitialAccessTokenSpec{})
 
 	resp := f.post(t, fullStandardMetadata(), iat)
@@ -99,7 +99,7 @@ func TestRegister_AcceptsFullStandardMetadataSet(t *testing.T) {
 func TestIntrospectionSignedResponseAlg_RoundTripsAndNormalizesNone(t *testing.T) {
 	t.Parallel()
 
-	f := newFixture(t, op.RegistrationOption{})
+	f := newFixture(t, op.DynamicRegistration{})
 	body := minimalMetadata()
 	body["introspection_signed_response_alg"] = "ES256"
 	created := f.register(t, body)
@@ -142,7 +142,7 @@ func TestIntrospectionSignedResponseAlg_RoundTripsAndNormalizesNone(t *testing.T
 func TestIntrospectionSignedResponseAlg_OmittedPUTClearsExistingMetadata(t *testing.T) {
 	t.Parallel()
 
-	f := newFixture(t, op.RegistrationOption{})
+	f := newFixture(t, op.DynamicRegistration{})
 	created := f.register(t, map[string]any{
 		"redirect_uris":                     []string{"https://rp.test.invalid/callback"},
 		"introspection_signed_response_alg": "ES256",
@@ -178,7 +178,7 @@ func TestIntrospectionSignedResponseAlg_OmittedPUTClearsExistingMetadata(t *test
 func TestRegister_IgnoresUnmodelledMembers(t *testing.T) {
 	t.Parallel()
 
-	f := newFixture(t, op.RegistrationOption{})
+	f := newFixture(t, op.DynamicRegistration{})
 	_, iat := f.issueIAT(t, op.InitialAccessTokenSpec{})
 
 	body := minimalMetadata()
@@ -244,7 +244,7 @@ func TestRegister_RefusesValuesTheOPWillNotHonour(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			f := newFixture(t, op.RegistrationOption{})
+			f := newFixture(t, op.DynamicRegistration{})
 			_, iat := f.issueIAT(t, op.InitialAccessTokenSpec{})
 
 			body := minimalMetadata()
@@ -271,7 +271,7 @@ func TestRegister_RefusesValuesTheOPWillNotHonour(t *testing.T) {
 func TestManage_Update_AppliesTheSameToleranceRule(t *testing.T) {
 	t.Parallel()
 
-	f := newFixture(t, op.RegistrationOption{})
+	f := newFixture(t, op.DynamicRegistration{})
 	created := f.register(t, nil)
 
 	accepted := fullStandardMetadata()
@@ -316,7 +316,7 @@ func TestManage_Update_AppliesTheSameToleranceRule(t *testing.T) {
 func TestManage_Update_RefusesPerClientCertificateBinding(t *testing.T) {
 	t.Parallel()
 
-	f := newFixture(t, op.RegistrationOption{})
+	f := newFixture(t, op.DynamicRegistration{})
 	created := f.register(t, nil)
 
 	refused := minimalMetadata()

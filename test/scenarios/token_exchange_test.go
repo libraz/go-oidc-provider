@@ -8,7 +8,7 @@ package scenarios_test
 //   - RFC 9449 — OAuth 2.0 DPoP
 //   - RFC 8705 — OAuth 2.0 Mutual-TLS Client Authentication
 //
-// The TX rows exercise op.WithTokenExchange end-to-end. Each test
+// The TX rows exercise op.WithTokenExchangeGrant end-to-end. Each test
 // stands up a testkit provider, mints a subject_token directly with
 // the OP signing key (via the access-token signer), registers the
 // shadow row in the inmem store so revocation gates fire, and POSTs
@@ -32,6 +32,7 @@ import (
 	"github.com/libraz/go-oidc-provider/internal/keys"
 	"github.com/libraz/go-oidc-provider/internal/tokens"
 	"github.com/libraz/go-oidc-provider/op"
+	"github.com/libraz/go-oidc-provider/op/audit"
 	"github.com/libraz/go-oidc-provider/op/store"
 	"github.com/libraz/go-oidc-provider/op/testkit"
 	"github.com/libraz/go-oidc-provider/test/scenarios/internal/scenariokit"
@@ -120,7 +121,7 @@ func newTXProviderOpts(t *testing.T, policy op.TokenExchangePolicy, extra ...op.
 		t.Fatalf("HashClientSecret: %v", err)
 	}
 	opts := make([]op.Option, 0, 1+len(extra))
-	opts = append(opts, op.WithTokenExchange(policy))
+	opts = append(opts, op.WithTokenExchangeGrant(op.TokenExchangeGrant{Policy: policy}))
 	opts = append(opts, extra...)
 	tk := testkit.NewProvider(t, testkit.WithOptions(opts...))
 	caller := tk.RegisterClient(t, testkit.ClientFixture{
@@ -554,11 +555,11 @@ func TestScenario_TX_027_AuditOutcomeMatchesWire(t *testing.T) {
 		if status != http.StatusBadRequest || body["error"] != "invalid_scope" {
 			t.Fatalf("status=%d body=%v want 400 invalid_scope", status, body)
 		}
-		if n := len(capture.EventsByName(string(op.AuditTokenExchangeGranted))); n != 0 {
-			t.Errorf("%s emitted %d time(s) for a refused exchange; want 0", op.AuditTokenExchangeGranted, n)
+		if n := len(capture.EventsByName(string(audit.TokenExchangeGranted))); n != 0 {
+			t.Errorf("%s emitted %d time(s) for a refused exchange; want 0", audit.TokenExchangeGranted, n)
 		}
-		if n := len(capture.EventsByName(string(op.AuditCustomGrantFailed))); n != 1 {
-			t.Errorf("%s emitted %d time(s); want exactly 1", op.AuditCustomGrantFailed, n)
+		if n := len(capture.EventsByName(string(audit.CustomGrantFailed))); n != 1 {
+			t.Errorf("%s emitted %d time(s); want exactly 1", audit.CustomGrantFailed, n)
 		}
 	})
 	t.Run("issued", func(t *testing.T) {
@@ -572,11 +573,11 @@ func TestScenario_TX_027_AuditOutcomeMatchesWire(t *testing.T) {
 		if status, body := p.postTokenExchange(t, form); status != http.StatusOK {
 			t.Fatalf("status=%d body=%v want 200", status, body)
 		}
-		if n := len(capture.EventsByName(string(op.AuditTokenExchangeGranted))); n != 1 {
-			t.Errorf("%s emitted %d time(s); want exactly 1", op.AuditTokenExchangeGranted, n)
+		if n := len(capture.EventsByName(string(audit.TokenExchangeGranted))); n != 1 {
+			t.Errorf("%s emitted %d time(s); want exactly 1", audit.TokenExchangeGranted, n)
 		}
-		if n := len(capture.EventsByName(string(op.AuditCustomGrantFailed))); n != 0 {
-			t.Errorf("%s emitted %d time(s) for an issued exchange; want 0", op.AuditCustomGrantFailed, n)
+		if n := len(capture.EventsByName(string(audit.CustomGrantFailed))); n != 0 {
+			t.Errorf("%s emitted %d time(s) for an issued exchange; want 0", audit.CustomGrantFailed, n)
 		}
 	})
 }
@@ -1036,7 +1037,7 @@ func TestTokenExchange_AccessTokenStandardExtrasDropped(t *testing.T) {
 
 func TestScenario_TX_024_WithTokenExchangeRequiredAtNew(t *testing.T) {
 	t.Parallel()
-	_, err := op.New(testkit.MinimalOptions(t, op.WithTokenExchange(nil))...)
+	_, err := op.New(testkit.MinimalOptions(t, op.WithTokenExchangeGrant(op.TokenExchangeGrant{Policy: nil}))...)
 	if !errors.Is(err, op.ErrTokenExchangePolicyNil) {
 		t.Fatalf("op.New err=%v, want %v", err, op.ErrTokenExchangePolicyNil)
 	}
@@ -1090,7 +1091,7 @@ func TestScenario_TX_025_IDTokenCnfMirrorsAccessTokenBinding(t *testing.T) {
 // TestScenario_TX_026_RegistryFaultEmitsDedicatedAudit pins the M10
 // invariant at the public-API level: the dedicated audit event the
 // in-tree RFC 8693 handler emits on a transient access-token registry
-// fault is registered in the op.AuditEvent catalogue and is byte-
+// fault is registered in the audit.Event catalogue and is byte-
 // distinct from the ordinary token_exchange.subject_token_invalid
 // event so SOC tooling can branch on it. The deep behavioural pin —
 // drive the registry-fault path end-to-end and assert the wire shape
@@ -1110,17 +1111,17 @@ func TestScenario_TX_025_IDTokenCnfMirrorsAccessTokenBinding(t *testing.T) {
 // Spec: RFC 6749 §5.2 (collapsed wire taxonomy).
 func TestScenario_TX_026_RegistryFaultEmitsDedicatedAudit(t *testing.T) {
 	t.Parallel()
-	if op.AuditTokenExchangeSubjectTokenRegistryError == "" {
+	if audit.TokenExchangeSubjectTokenRegistryError == "" {
 		t.Fatalf("AuditTokenExchangeSubjectTokenRegistryError is empty; the M10 dedicated audit constant is missing from the public catalogue")
 	}
-	if op.AuditTokenExchangeSubjectTokenRegistryError == op.AuditTokenExchangeSubjectTokenInvalid {
+	if audit.TokenExchangeSubjectTokenRegistryError == audit.TokenExchangeSubjectTokenInvalid {
 		t.Fatalf("registry-error event %q must be byte-distinct from the generic invalid event %q so SOC tooling can branch on the name",
-			op.AuditTokenExchangeSubjectTokenRegistryError, op.AuditTokenExchangeSubjectTokenInvalid)
+			audit.TokenExchangeSubjectTokenRegistryError, audit.TokenExchangeSubjectTokenInvalid)
 	}
 	const wantWire = "token_exchange.subject_token_registry_error"
-	if string(op.AuditTokenExchangeSubjectTokenRegistryError) != wantWire {
+	if string(audit.TokenExchangeSubjectTokenRegistryError) != wantWire {
 		t.Errorf("registry-error event wire form = %q, want %q",
-			op.AuditTokenExchangeSubjectTokenRegistryError, wantWire)
+			audit.TokenExchangeSubjectTokenRegistryError, wantWire)
 	}
 }
 

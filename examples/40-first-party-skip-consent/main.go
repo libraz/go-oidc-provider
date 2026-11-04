@@ -11,7 +11,7 @@
 // rendering a consent screen. A user without a session signs in first
 // and the grant goes to the subject that sign-in binds; a user already
 // signed in gets the code straight away.
-// [op.AuditConsentGrantedFirstParty] fires on every skip so the
+// [audit.ConsentGrantedFirstParty] fires on every skip so the
 // audit trail captures the auto-grant.
 //
 // Run with the example build tag:

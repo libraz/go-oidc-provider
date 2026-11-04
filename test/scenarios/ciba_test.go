@@ -107,19 +107,19 @@ type cibaProvider struct {
 // token_endpoint_auth_method is client_secret_basic. extra carries
 // additional [op.Option] values the caller layers on top of the CIBA
 // opt-in (typical use: [op.WithFeature(feature.JAR)] for CIBA-002 /
-// 023 / 034). CIBA sub-options (WithCIBAMaxExpiresIn etc.) flow through
-// [newCIBAProviderWithCIBAOpts] which composes them inside [op.WithCIBA].
+// 023 / 034). CIBA settings (CIBAGrant.MaxRequestTTL etc.) flow through
+// [newCIBAProviderWithCIBAOpts] which applies them through [op.WithCIBAGrant].
 func newCIBAProvider(t *testing.T, scopes []string, extra ...op.Option) *cibaProvider {
-	return newCIBAProviderWithCIBAOpts(t, scopes, nil, extra...)
+	return newCIBAProviderWithCIBAOpts(t, scopes, op.CIBAGrant{}, extra...)
 }
 
 // newCIBAProviderWithCIBAOpts mirrors [newCIBAProvider] but lets the
-// caller pass [op.CIBAOption] sub-options the test exercises (typical
-// use: [op.WithCIBAMaxExpiresIn] for CIBA-017). The HintResolver is
-// always wired by the harness so callers cannot forget the
-// resolver-presence invariant.
-func newCIBAProviderWithCIBAOpts(t *testing.T, scopes []string, cibaOpts []op.CIBAOption, extra ...op.Option) *cibaProvider {
-	return newCIBAProviderWithResources(t, scopes, nil, cibaOpts, extra...)
+// caller pass the [op.CIBAGrant] settings the test exercises (typical
+// use: MaxRequestTTL for CIBA-017). The HintResolver is always wired
+// by the harness so callers cannot forget the resolver-presence
+// invariant.
+func newCIBAProviderWithCIBAOpts(t *testing.T, scopes []string, cibaGrant op.CIBAGrant, extra ...op.Option) *cibaProvider {
+	return newCIBAProviderWithResources(t, scopes, nil, cibaGrant, extra...)
 }
 
 // newCIBAProviderWithResources is the resource-aware variant of
@@ -127,14 +127,14 @@ func newCIBAProviderWithCIBAOpts(t *testing.T, scopes []string, cibaOpts []op.CI
 // registered client's Resources allowlist so /bc-authorize can admit
 // the values the test row sends. A nil/empty resources slice matches
 // the default helper.
-func newCIBAProviderWithResources(t *testing.T, scopes, resources []string, cibaOpts []op.CIBAOption, extra ...op.Option) *cibaProvider {
+func newCIBAProviderWithResources(t *testing.T, scopes, resources []string, cibaGrant op.CIBAGrant, extra ...op.Option) *cibaProvider {
 	t.Helper()
 	hash, err := op.HashClientSecret(cibaClientSecret)
 	if err != nil {
 		t.Fatalf("HashClientSecret: %v", err)
 	}
-	allCIBAOpts := append([]op.CIBAOption{op.WithCIBAHintResolver(cibaHintResolver{})}, cibaOpts...)
-	opts := append([]op.Option{op.WithCIBA(allCIBAOpts...)}, extra...)
+	cibaGrant.HintResolver = cibaHintResolver{}
+	opts := append([]op.Option{op.WithCIBAGrant(cibaGrant)}, extra...)
 	tk := testkit.NewProvider(t, testkit.WithOptions(opts...))
 	client := tk.RegisterClient(t, testkit.ClientFixture{
 		ID:                      "ciba-rp",
@@ -168,7 +168,7 @@ func newCIBAPairwiseProvider(t *testing.T) *cibaProvider {
 		t.Fatalf("HashClientSecret: %v", err)
 	}
 	tk := testkit.NewProvider(t, testkit.WithOptions(
-		op.WithCIBA(op.WithCIBAHintResolver(cibaHintResolver{})),
+		op.WithCIBAGrant(op.CIBAGrant{HintResolver: cibaHintResolver{}}),
 		op.WithPairwiseSubject(cibaPairwiseSalt),
 	))
 	client := tk.RegisterClient(t, testkit.ClientFixture{
@@ -267,7 +267,7 @@ func newCIBAFAPIFixture(t *testing.T) *cibaFAPIFixture {
 	tk := testkit.NewProvider(t,
 		testkit.WithClock(clock),
 		testkit.WithOptions(
-			op.WithCIBA(op.WithCIBAHintResolver(cibaHintResolver{})),
+			op.WithCIBAGrant(op.CIBAGrant{HintResolver: cibaHintResolver{}}),
 			op.WithProfile(profile.FAPICIBA),
 			op.WithFeature(feature.DPoP),
 			op.WithDPoPNonceSource(stubCIBADPoPNonceSource{}),
@@ -838,7 +838,7 @@ func TestScenario_CIBA_016_BackchannelBypassesPARRequirement(t *testing.T) {
 func TestScenario_CIBA_017_RequestedExpiryIsHonoured(t *testing.T) {
 	t.Parallel()
 	p := newCIBAProviderWithCIBAOpts(t, []string{"openid"},
-		[]op.CIBAOption{op.WithCIBAMaxExpiresIn(10 * time.Minute)})
+		op.CIBAGrant{MaxRequestTTL: 10 * time.Minute})
 
 	status, body, _ := p.bcAuthorizeForm(t, url.Values{
 		"login_hint":       {cibaKnownLoginHint},
@@ -1077,7 +1077,7 @@ func TestScenario_CIBA_020_BackchannelRequiresGrantTypeAllowance(t *testing.T) {
 		t.Fatalf("HashClientSecret: %v", err)
 	}
 	tk := testkit.NewProvider(t, testkit.WithOptions(
-		op.WithCIBA(op.WithCIBAHintResolver(cibaHintResolver{})),
+		op.WithCIBAGrant(op.CIBAGrant{HintResolver: cibaHintResolver{}}),
 	))
 	client := tk.RegisterClient(t, testkit.ClientFixture{
 		ID:                      "ciba-rp-no-grant",
@@ -1712,7 +1712,7 @@ func TestScenario_CIBA_047_BackchannelRejectsUnregisteredResource(t *testing.T) 
 	t.Parallel()
 	p := newCIBAProviderWithResources(t,
 		[]string{"openid"},
-		[]string{"https://api-allowed.example"}, nil)
+		[]string{"https://api-allowed.example"}, op.CIBAGrant{})
 
 	status, body, _ := p.bcAuthorizeForm(t, url.Values{
 		"login_hint": {cibaKnownLoginHint},
@@ -1736,7 +1736,7 @@ func TestScenario_CIBA_048_BackchannelRejectsMultiResource(t *testing.T) {
 	t.Parallel()
 	p := newCIBAProviderWithResources(t,
 		[]string{"openid"},
-		[]string{"https://api-a.example", "https://api-b.example"}, nil)
+		[]string{"https://api-a.example", "https://api-b.example"}, op.CIBAGrant{})
 
 	form := url.Values{}
 	form.Set("login_hint", cibaKnownLoginHint)

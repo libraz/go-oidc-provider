@@ -18,7 +18,7 @@ import (
 
 // stubHintResolver is a deterministic [op.HintResolver] used by the
 // option-layer tests. The tests do not exercise /bc-authorize end-to-
-// end; they only need a non-nil resolver so [op.WithCIBA] passes its
+// end; they only need a non-nil resolver so [op.WithCIBAGrant] passes its
 // construction-time validation.
 type stubHintResolver struct {
 	subject string
@@ -35,14 +35,14 @@ func (s stubHintResolver) Resolve(_ context.Context, _ op.HintKind, _ string) (s
 	return s.subject, nil
 }
 
-// TestWithCIBA_AcceptsValidConfig confirms a fully wired [op.WithCIBA]
+// TestWithCIBA_AcceptsValidConfig confirms a fully wired [op.WithCIBAGrant]
 // constructs without error against the inmem reference store (which
 // ships a non-nil [store.CIBARequestStore]).
 func TestWithCIBA_AcceptsValidConfig(t *testing.T) {
 	t.Parallel()
 
 	_, err := op.New(append(validBaseOptsWithInmem(t),
-		op.WithCIBA(op.WithCIBAHintResolver(stubHintResolver{})),
+		op.WithCIBAGrant(op.CIBAGrant{HintResolver: stubHintResolver{}}),
 	)...)
 	if err != nil {
 		t.Fatalf("op.New: %v", err)
@@ -58,10 +58,10 @@ func TestWithCIBA_RejectsMissingHintResolver(t *testing.T) {
 	t.Parallel()
 
 	_, err := op.New(append(validBaseOptsWithInmem(t),
-		op.WithCIBA(),
+		op.WithCIBAGrant(op.CIBAGrant{}),
 	)...)
 	if err == nil {
-		t.Fatal("expected error when WithCIBA is invoked without a HintResolver")
+		t.Fatal("expected error when WithCIBAGrant is invoked without a HintResolver")
 	}
 	if !strings.Contains(err.Error(), "HintResolver") {
 		t.Errorf("err = %v, want it to mention HintResolver", err)
@@ -77,7 +77,7 @@ func TestWithCIBA_RejectsMissingSubstore(t *testing.T) {
 	t.Parallel()
 
 	_, err := op.New(append(validBaseOpts(t),
-		op.WithCIBA(op.WithCIBAHintResolver(stubHintResolver{})),
+		op.WithCIBAGrant(op.CIBAGrant{HintResolver: stubHintResolver{}}),
 	)...)
 	if err == nil {
 		t.Fatal("expected error when CIBARequests substore is nil")
@@ -90,7 +90,7 @@ func TestWithCIBA_RejectsMissingSubstore(t *testing.T) {
 // TestWithGrants_CIBA_RejectsMissingSubstore mirrors
 // [TestWithCIBA_RejectsMissingSubstore] for the alternative entry
 // point: an embedder that activates CIBA via [op.WithGrants] (rather
-// than the dedicated [op.WithCIBA] option) must still see the
+// than the dedicated [op.WithCIBAGrant] option) must still see the
 // construction error when the configured Store does not provide a
 // CIBARequests substore. Prior to the fix this path bypassed the
 // gate and the runtime reached a nil-substore Save on the first
@@ -136,7 +136,7 @@ func TestWithCIBA_DiscoveryAdvertisesEndpoint(t *testing.T) {
 	t.Parallel()
 
 	provider, err := op.New(append(validBaseOptsWithInmem(t),
-		op.WithCIBA(op.WithCIBAHintResolver(stubHintResolver{})),
+		op.WithCIBAGrant(op.CIBAGrant{HintResolver: stubHintResolver{}}),
 	)...)
 	if err != nil {
 		t.Fatalf("op.New: %v", err)
@@ -193,7 +193,7 @@ func TestWithCIBA_RouterMountsEndpoint(t *testing.T) {
 	t.Parallel()
 
 	provider, err := op.New(append(validBaseOptsWithInmem(t),
-		op.WithCIBA(op.WithCIBAHintResolver(stubHintResolver{})),
+		op.WithCIBAGrant(op.CIBAGrant{HintResolver: stubHintResolver{}}),
 	)...)
 	if err != nil {
 		t.Fatalf("op.New: %v", err)
@@ -276,16 +276,16 @@ func TestWithCIBADefaultExpiresIn_RejectsNegative(t *testing.T) {
 	t.Parallel()
 
 	_, err := op.New(append(validBaseOptsWithInmem(t),
-		op.WithCIBA(
-			op.WithCIBAHintResolver(stubHintResolver{}),
-			op.WithCIBADefaultExpiresIn(-1*time.Second),
-		),
+		op.WithCIBAGrant(op.CIBAGrant{
+			HintResolver:      stubHintResolver{},
+			DefaultRequestTTL: -1 * time.Second,
+		}),
 	)...)
 	if err == nil {
-		t.Fatal("expected error for negative WithCIBADefaultExpiresIn")
+		t.Fatal("expected error for negative DefaultRequestTTL")
 	}
-	if !strings.Contains(err.Error(), "WithCIBADefaultExpiresIn") {
-		t.Errorf("err = %v, want it to name the option", err)
+	if !strings.Contains(err.Error(), "DefaultRequestTTL") {
+		t.Errorf("err = %v, want it to name the field", err)
 	}
 }
 
@@ -295,16 +295,16 @@ func TestWithCIBAMaxExpiresIn_RejectsNegative(t *testing.T) {
 	t.Parallel()
 
 	_, err := op.New(append(validBaseOptsWithInmem(t),
-		op.WithCIBA(
-			op.WithCIBAHintResolver(stubHintResolver{}),
-			op.WithCIBAMaxExpiresIn(-1*time.Second),
-		),
+		op.WithCIBAGrant(op.CIBAGrant{
+			HintResolver:  stubHintResolver{},
+			MaxRequestTTL: -1 * time.Second,
+		}),
 	)...)
 	if err == nil {
-		t.Fatal("expected error for negative WithCIBAMaxExpiresIn")
+		t.Fatal("expected error for negative MaxRequestTTL")
 	}
-	if !strings.Contains(err.Error(), "WithCIBAMaxExpiresIn") {
-		t.Errorf("err = %v, want it to name the option", err)
+	if !strings.Contains(err.Error(), "MaxRequestTTL") {
+		t.Errorf("err = %v, want it to name the field", err)
 	}
 }
 
@@ -316,17 +316,17 @@ func TestWithCIBAExpiresIn_RejectsDefaultAboveMax(t *testing.T) {
 	t.Parallel()
 
 	_, err := op.New(append(validBaseOptsWithInmem(t),
-		op.WithCIBA(
-			op.WithCIBAHintResolver(stubHintResolver{}),
-			op.WithCIBADefaultExpiresIn(10*time.Minute),
-			op.WithCIBAMaxExpiresIn(5*time.Minute),
-		),
+		op.WithCIBAGrant(op.CIBAGrant{
+			HintResolver:      stubHintResolver{},
+			DefaultRequestTTL: 10 * time.Minute,
+			MaxRequestTTL:     5 * time.Minute,
+		}),
 	)...)
 	if err == nil {
 		t.Fatal("expected error when the default expiry exceeds the cap")
 	}
-	if !strings.Contains(err.Error(), "WithCIBADefaultExpiresIn") {
-		t.Errorf("err = %v, want it to name the option", err)
+	if !strings.Contains(err.Error(), "DefaultRequestTTL") {
+		t.Errorf("err = %v, want it to name the field", err)
 	}
 }
 
@@ -339,19 +339,19 @@ func TestWithCIBAExpiresIn_FAPICIBACap(t *testing.T) {
 
 	cases := []struct {
 		name    string
-		opt     op.CIBAOption
+		grant   op.CIBAGrant
 		wantErr string
 	}{
-		{"default-above-cap", op.WithCIBADefaultExpiresIn(11 * time.Minute), "WithCIBADefaultExpiresIn"},
-		{"max-above-cap", op.WithCIBAMaxExpiresIn(time.Hour), "WithCIBAMaxExpiresIn"},
-		{"default-at-cap", op.WithCIBADefaultExpiresIn(10 * time.Minute), ""},
-		{"max-at-cap", op.WithCIBAMaxExpiresIn(10 * time.Minute), ""},
+		{"default-above-cap", op.CIBAGrant{DefaultRequestTTL: 11 * time.Minute}, "DefaultRequestTTL"},
+		{"max-above-cap", op.CIBAGrant{MaxRequestTTL: time.Hour}, "MaxRequestTTL"},
+		{"default-at-cap", op.CIBAGrant{DefaultRequestTTL: 10 * time.Minute}, ""},
+		{"max-at-cap", op.CIBAGrant{MaxRequestTTL: 10 * time.Minute}, ""},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			_, err := op.New(append(validBaseOptsWithInmem(t),
-				op.WithCIBA(op.WithCIBAHintResolver(stubHintResolver{}), tc.opt),
+				op.WithCIBAGrant(withStubHintResolver(tc.grant)),
 				op.WithProfile(profile.FAPICIBA),
 				op.WithFeature(feature.DPoP),
 				op.WithDPoPNonceSource(stubDPoPNonceSource{}),
@@ -376,16 +376,16 @@ func TestWithCIBAPollInterval_RejectsNegative(t *testing.T) {
 	t.Parallel()
 
 	_, err := op.New(append(validBaseOptsWithInmem(t),
-		op.WithCIBA(
-			op.WithCIBAHintResolver(stubHintResolver{}),
-			op.WithCIBAPollInterval(-1*time.Second),
-		),
+		op.WithCIBAGrant(op.CIBAGrant{
+			HintResolver: stubHintResolver{},
+			PollInterval: -1 * time.Second,
+		}),
 	)...)
 	if err == nil {
-		t.Fatal("expected error for negative WithCIBAPollInterval")
+		t.Fatal("expected error for negative PollInterval")
 	}
-	if !strings.Contains(err.Error(), "WithCIBAPollInterval") {
-		t.Errorf("err = %v, want it to name the option", err)
+	if !strings.Contains(err.Error(), "PollInterval") {
+		t.Errorf("err = %v, want it to name the field", err)
 	}
 }
 
@@ -399,31 +399,37 @@ func TestWithCIBAMaxPollViolations_AcceptsValue(t *testing.T) {
 
 	for _, n := range []uint8{0, 5, 50, 255} {
 		_, err := op.New(append(validBaseOptsWithInmem(t),
-			op.WithCIBA(
-				op.WithCIBAHintResolver(stubHintResolver{}),
-				op.WithCIBAMaxPollViolations(n),
-			),
+			op.WithCIBAGrant(op.CIBAGrant{
+				HintResolver:      stubHintResolver{},
+				MaxPollViolations: n,
+			}),
 		)...)
 		if err != nil {
-			t.Errorf("op.New with WithCIBAMaxPollViolations(%d) returned %v", n, err)
+			t.Errorf("op.New with MaxPollViolations=%d returned %v", n, err)
 		}
 	}
 }
 
-// TestWithCIBAHintResolver_RejectsNil pins the option's nil-resolver
+// TestWithCIBAGrant_RejectsNilHintResolver pins the nil-resolver
 // rejection so a typo cannot silently disable hint resolution.
-func TestWithCIBAHintResolver_RejectsNil(t *testing.T) {
+func TestWithCIBAGrant_RejectsNilHintResolver(t *testing.T) {
 	t.Parallel()
 
 	_, err := op.New(append(validBaseOptsWithInmem(t),
-		op.WithCIBA(op.WithCIBAHintResolver(nil)),
+		op.WithCIBAGrant(op.CIBAGrant{}),
 	)...)
 	if err == nil {
 		t.Fatal("expected error for nil HintResolver")
 	}
-	if !strings.Contains(err.Error(), "non-nil HintResolver") {
-		t.Errorf("err = %v, want it to mention non-nil HintResolver", err)
+	if !strings.Contains(err.Error(), "HintResolver") {
+		t.Errorf("err = %v, want it to mention HintResolver", err)
 	}
+}
+
+// withStubHintResolver returns g with the stub resolver wired.
+func withStubHintResolver(g op.CIBAGrant) op.CIBAGrant {
+	g.HintResolver = stubHintResolver{}
+	return g
 }
 
 // TestHintResolverFunc_AdaptsFunction confirms the function-typed

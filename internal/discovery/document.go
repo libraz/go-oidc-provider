@@ -399,7 +399,7 @@ type Document struct {
 	// AuthorizationDetailsTypesSupported lists the RFC 9396 §10
 	// authorization_details "type" values the OP accepts. Populated
 	// only when [op.WithAuthorizationDetailTypes] registered any types
-	// (feature.RAR); empty otherwise so the field is omitted.
+	// (RFC 9396); empty otherwise so the field is omitted.
 	AuthorizationDetailsTypesSupported []string `json:"authorization_details_types_supported,omitempty"`
 
 	// AuthorizationGrantProfilesSupported lists the authorization grant

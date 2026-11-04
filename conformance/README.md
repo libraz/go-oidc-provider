@@ -256,7 +256,7 @@ OP_ENABLE_DCR=1 make conformance-op-up
 ```
 
 For the **fapi-ciba** plan, restart with `OP_PROFILE=fapi-ciba` so
-the op-demo wires `op.WithCIBA` and the auto-approving substore:
+the op-demo wires `op.WithCIBAGrant` and the auto-approving substore:
 
 ```sh
 OP_PROFILE=fapi-ciba make conformance-op-up

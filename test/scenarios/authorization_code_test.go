@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/libraz/go-oidc-provider/op"
+	opaudit "github.com/libraz/go-oidc-provider/op/audit"
 	"github.com/libraz/go-oidc-provider/op/testkit"
 	"github.com/libraz/go-oidc-provider/test/scenarios/internal/scenariokit"
 )
@@ -382,7 +383,7 @@ func TestScenario_AC_005_ExpiredCodeRejected(t *testing.T) {
 	if tok.AccessToken != "" || tok.IDToken != "" || tok.RefreshToken != "" {
 		t.Errorf("expired exchange must not mint tokens: %+v", tok.Raw)
 	}
-	if got := audit.EventsByName(string(op.AuditTokenIssued)); len(got) != 0 {
+	if got := audit.EventsByName(string(opaudit.TokenIssued)); len(got) != 0 {
 		t.Errorf("token.issued audit event must not fire on expired-code path: %+v", got)
 	}
 }
@@ -623,7 +624,7 @@ func TestScenario_AC_008_ClientMismatchRejected(t *testing.T) {
 	if tok.AccessToken != "" || tok.IDToken != "" || tok.RefreshToken != "" {
 		t.Errorf("cross-client exchange must not mint tokens: %+v", tok.Raw)
 	}
-	if got := audit.EventsByName(string(op.AuditTokenIssued)); len(got) != 0 {
+	if got := audit.EventsByName(string(opaudit.TokenIssued)); len(got) != 0 {
 		t.Errorf("token.issued audit event must not fire on client-mismatch path: %+v", got)
 	}
 }
@@ -752,7 +753,7 @@ func TestScenario_AC_010_RedirectURIMismatchRejected(t *testing.T) {
 	if tok.AccessToken != "" || tok.IDToken != "" || tok.RefreshToken != "" {
 		t.Errorf("redirect_uri-mismatch exchange must not mint tokens: %+v", tok.Raw)
 	}
-	if got := audit.EventsByName(string(op.AuditTokenIssued)); len(got) != 0 {
+	if got := audit.EventsByName(string(opaudit.TokenIssued)); len(got) != 0 {
 		t.Errorf("token.issued audit event must not fire on redirect_uri-mismatch path: %+v", got)
 	}
 }

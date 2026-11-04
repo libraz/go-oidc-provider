@@ -15,7 +15,6 @@ import (
 	"time"
 
 	"github.com/libraz/go-oidc-provider/op"
-	"github.com/libraz/go-oidc-provider/op/feature"
 	"github.com/libraz/go-oidc-provider/op/store"
 	"github.com/libraz/go-oidc-provider/op/storeadapter/inmem"
 )
@@ -136,7 +135,7 @@ func TestWithDynamicRegistration_RejectsMissingIATStore(t *testing.T) {
 	clock := dcrFixedClock()
 	s := noIATStore{Store: inmem.New(inmem.WithClock(clock))}
 	opts := append(dcrBaseOpts(t, s, clock),
-		op.WithDynamicRegistration(op.RegistrationOption{}),
+		op.WithDynamicRegistration(op.DynamicRegistration{}),
 	)
 	_, err := op.New(opts...)
 	if err == nil {
@@ -157,7 +156,7 @@ func TestWithDynamicRegistration_RejectsMissingRATStore(t *testing.T) {
 	clock := dcrFixedClock()
 	s := noRATStore{Store: inmem.New(inmem.WithClock(clock))}
 	opts := append(dcrBaseOpts(t, s, clock),
-		op.WithDynamicRegistration(op.RegistrationOption{}),
+		op.WithDynamicRegistration(op.DynamicRegistration{}),
 	)
 	_, err := op.New(opts...)
 	if err == nil {
@@ -178,7 +177,7 @@ func TestWithDynamicRegistration_RejectsStoreWithoutClientRegistry(t *testing.T)
 	clock := dcrFixedClock()
 	s := nonRegistryStore{inner: inmem.New(inmem.WithClock(clock))}
 	opts := append(dcrBaseOpts(t, s, clock),
-		op.WithDynamicRegistration(op.RegistrationOption{}),
+		op.WithDynamicRegistration(op.DynamicRegistration{}),
 	)
 	_, err := op.New(opts...)
 	if err == nil {
@@ -195,7 +194,7 @@ func TestWithDynamicRegistration_RejectsNegativeIATTTL(t *testing.T) {
 	clock := dcrFixedClock()
 	s := inmem.New(inmem.WithClock(clock))
 	opts := append(dcrBaseOpts(t, s, clock),
-		op.WithDynamicRegistration(op.RegistrationOption{IATTTL: -time.Second}),
+		op.WithDynamicRegistration(op.DynamicRegistration{IATTTL: -time.Second}),
 	)
 	_, err := op.New(opts...)
 	if err == nil {
@@ -212,7 +211,7 @@ func TestWithDynamicRegistration_RejectsNegativeIATUses(t *testing.T) {
 	clock := dcrFixedClock()
 	s := inmem.New(inmem.WithClock(clock))
 	opts := append(dcrBaseOpts(t, s, clock),
-		op.WithDynamicRegistration(op.RegistrationOption{IATUses: -1}),
+		op.WithDynamicRegistration(op.DynamicRegistration{IATUses: -1}),
 	)
 	_, err := op.New(opts...)
 	if err == nil {
@@ -229,7 +228,7 @@ func TestWithDynamicRegistration_RejectsUnknownGrantType(t *testing.T) {
 	clock := dcrFixedClock()
 	s := inmem.New(inmem.WithClock(clock))
 	opts := append(dcrBaseOpts(t, s, clock),
-		op.WithDynamicRegistration(op.RegistrationOption{
+		op.WithDynamicRegistration(op.DynamicRegistration{
 			AllowedGrantTypes: []string{"client_credentials"},
 		}),
 	)
@@ -248,7 +247,7 @@ func TestWithDynamicRegistration_RejectsNonCodeResponseType(t *testing.T) {
 	clock := dcrFixedClock()
 	s := inmem.New(inmem.WithClock(clock))
 	opts := append(dcrBaseOpts(t, s, clock),
-		op.WithDynamicRegistration(op.RegistrationOption{
+		op.WithDynamicRegistration(op.DynamicRegistration{
 			AllowedResponseTypes: []string{"token"},
 		}),
 	)
@@ -273,7 +272,7 @@ func TestWithDynamicRegistration_RejectsUnknownOpenDefaultScope(t *testing.T) {
 	clock := dcrFixedClock()
 	s := inmem.New(inmem.WithClock(clock))
 	opts := append(dcrBaseOpts(t, s, clock),
-		op.WithDynamicRegistration(op.RegistrationOption{
+		op.WithDynamicRegistration(op.DynamicRegistration{
 			Open:                          true,
 			OpenRegistrationDefaultScopes: []string{"openid", "definitely-not-registered"},
 		}),
@@ -298,7 +297,7 @@ func TestWithDynamicRegistration_RejectsEmptyOpenDefaultScope(t *testing.T) {
 	clock := dcrFixedClock()
 	s := inmem.New(inmem.WithClock(clock))
 	opts := append(dcrBaseOpts(t, s, clock),
-		op.WithDynamicRegistration(op.RegistrationOption{
+		op.WithDynamicRegistration(op.DynamicRegistration{
 			Open:                          true,
 			OpenRegistrationDefaultScopes: []string{"openid", ""},
 		}),
@@ -318,8 +317,8 @@ func TestWithDynamicRegistration_RejectsDuplicate(t *testing.T) {
 	clock := dcrFixedClock()
 	s := inmem.New(inmem.WithClock(clock))
 	opts := append(dcrBaseOpts(t, s, clock),
-		op.WithDynamicRegistration(op.RegistrationOption{}),
-		op.WithDynamicRegistration(op.RegistrationOption{}),
+		op.WithDynamicRegistration(op.DynamicRegistration{}),
+		op.WithDynamicRegistration(op.DynamicRegistration{}),
 	)
 	_, err := op.New(opts...)
 	if err == nil {
@@ -330,83 +329,23 @@ func TestWithDynamicRegistration_RejectsDuplicate(t *testing.T) {
 	}
 }
 
-// TestWithDynamicRegistration_RejectsRedundantFeatureFlag confirms that an
-// embedder who passes feature.DynamicRegistration through WithFeature in
-// addition to WithDynamicRegistration receives a deterministic configuration
-// error rather than silent double-enablement.
-//
-// Both call orders are covered because WithFeature is idempotent: it
-// returns without touching the config when the flag is already present.
-// A duplicate check that lived at the option site therefore only saw the
-// second declaration in one of the two orders, and the same
-// configuration booted or failed depending on the order the embedder
-// happened to list the options in.
-func TestWithDynamicRegistration_RejectsRedundantFeatureFlag(t *testing.T) {
-	t.Parallel()
-
-	cases := []struct {
-		name string
-		opts func(t *testing.T) []op.Option
-	}{
-		{
-			name: "flag first",
-			opts: func(t *testing.T) []op.Option {
-				t.Helper()
-				clock := dcrFixedClock()
-				return append(dcrBaseOpts(t, inmem.New(inmem.WithClock(clock)), clock),
-					op.WithFeature(feature.DynamicRegistration),
-					op.WithDynamicRegistration(op.RegistrationOption{}),
-				)
-			},
-		},
-		{
-			name: "option first",
-			opts: func(t *testing.T) []op.Option {
-				t.Helper()
-				clock := dcrFixedClock()
-				return append(dcrBaseOpts(t, inmem.New(inmem.WithClock(clock)), clock),
-					op.WithDynamicRegistration(op.RegistrationOption{}),
-					op.WithFeature(feature.DynamicRegistration),
-				)
-			},
-		},
-	}
-
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
-
-			_, err := op.New(tc.opts(t)...)
-			if err == nil {
-				t.Fatal("expected configuration error when feature flag and option are both supplied")
-			}
-			if !op.IsServerError(err) {
-				t.Errorf("redundant feature flag must surface as server configuration error: %v", err)
-			}
-			if desc := configurationDescription(t, err); !strings.Contains(desc, "more than once") {
-				t.Errorf("description=%q must report the duplicate declaration", desc)
-			}
-		})
-	}
-}
-
 func TestWithDynamicRegistration_AcceptsZeroValue(t *testing.T) {
 	t.Parallel()
 
 	clock := dcrFixedClock()
 	s := inmem.New(inmem.WithClock(clock))
 	opts := append(dcrBaseOpts(t, s, clock),
-		op.WithDynamicRegistration(op.RegistrationOption{}),
+		op.WithDynamicRegistration(op.DynamicRegistration{}),
 	)
 	provider, err := op.New(opts...)
 	if err != nil {
-		t.Fatalf("op.New rejected zero-value RegistrationOption: %v", err)
+		t.Fatalf("op.New rejected zero-value DynamicRegistration: %v", err)
 	}
 	if provider == nil {
 		t.Fatal("expected non-nil provider")
 	}
 
-	// The defaults documented on RegistrationOption must be applied when
+	// The defaults documented on DynamicRegistration must be applied when
 	// the option is supplied with zero-value fields. We verify by issuing
 	// an IAT and checking the ExpiresAt is at least one default IATTTL
 	// (24h) ahead of the deterministic clock.
@@ -439,7 +378,7 @@ func TestProvider_IssueInitialAccessToken_HappyPath(t *testing.T) {
 	clock := dcrFixedClock()
 	s := inmem.New(inmem.WithClock(clock))
 	opts := append(dcrBaseOpts(t, s, clock),
-		op.WithDynamicRegistration(op.RegistrationOption{
+		op.WithDynamicRegistration(op.DynamicRegistration{
 			IATTTL:  time.Hour,
 			IATUses: 3,
 		}),
@@ -482,7 +421,7 @@ func TestProvider_IssueInitialAccessToken_AppliesDefaults(t *testing.T) {
 	clock := dcrFixedClock()
 	s := inmem.New(inmem.WithClock(clock))
 	opts := append(dcrBaseOpts(t, s, clock),
-		op.WithDynamicRegistration(op.RegistrationOption{
+		op.WithDynamicRegistration(op.DynamicRegistration{
 			IATTTL:  2 * time.Hour,
 			IATUses: 5,
 		}),
@@ -516,7 +455,7 @@ func TestProvider_IssueInitialAccessToken_PersistsAllowedScopesAndTag(t *testing
 	clock := dcrFixedClock()
 	s := inmem.New(inmem.WithClock(clock))
 	opts := append(dcrBaseOpts(t, s, clock),
-		op.WithDynamicRegistration(op.RegistrationOption{}),
+		op.WithDynamicRegistration(op.DynamicRegistration{}),
 	)
 	provider, err := op.New(opts...)
 	if err != nil {
@@ -547,7 +486,7 @@ func TestProvider_IssueInitialAccessToken_RejectsNegativeTTL(t *testing.T) {
 	clock := dcrFixedClock()
 	s := inmem.New(inmem.WithClock(clock))
 	opts := append(dcrBaseOpts(t, s, clock),
-		op.WithDynamicRegistration(op.RegistrationOption{}),
+		op.WithDynamicRegistration(op.DynamicRegistration{}),
 	)
 	provider, err := op.New(opts...)
 	if err != nil {
@@ -570,7 +509,7 @@ func TestProvider_IssueInitialAccessToken_RejectsNegativeMaxUses(t *testing.T) {
 	clock := dcrFixedClock()
 	s := inmem.New(inmem.WithClock(clock))
 	opts := append(dcrBaseOpts(t, s, clock),
-		op.WithDynamicRegistration(op.RegistrationOption{}),
+		op.WithDynamicRegistration(op.DynamicRegistration{}),
 	)
 	provider, err := op.New(opts...)
 	if err != nil {
@@ -605,7 +544,7 @@ func TestProvider_RevokeInitialAccessToken_HappyPath(t *testing.T) {
 	clock := dcrFixedClock()
 	s := inmem.New(inmem.WithClock(clock))
 	opts := append(dcrBaseOpts(t, s, clock),
-		op.WithDynamicRegistration(op.RegistrationOption{}),
+		op.WithDynamicRegistration(op.DynamicRegistration{}),
 	)
 	provider, err := op.New(opts...)
 	if err != nil {
@@ -646,7 +585,7 @@ func TestProvider_RevokeInitialAccessToken_NotFoundIsIdempotent(t *testing.T) {
 	clock := dcrFixedClock()
 	s := inmem.New(inmem.WithClock(clock))
 	opts := append(dcrBaseOpts(t, s, clock),
-		op.WithDynamicRegistration(op.RegistrationOption{}),
+		op.WithDynamicRegistration(op.DynamicRegistration{}),
 	)
 	provider, err := op.New(opts...)
 	if err != nil {
@@ -684,7 +623,7 @@ func TestProvider_RevokeInitialAccessToken_RejectsEmptyID(t *testing.T) {
 	clock := dcrFixedClock()
 	s := inmem.New(inmem.WithClock(clock))
 	opts := append(dcrBaseOpts(t, s, clock),
-		op.WithDynamicRegistration(op.RegistrationOption{}),
+		op.WithDynamicRegistration(op.DynamicRegistration{}),
 	)
 	provider, err := op.New(opts...)
 	if err != nil {
@@ -722,7 +661,7 @@ func TestIntegration_DCR_IssuerPath_ClientManagementIsReachable(t *testing.T) {
 		op.WithCookieKeys(newRandomCookieKey(t)),
 		op.WithClock(clock),
 		fixtureAuthenticator(),
-		op.WithDynamicRegistration(op.RegistrationOption{}),
+		op.WithDynamicRegistration(op.DynamicRegistration{}),
 	)
 	if err != nil {
 		t.Fatalf("op.New: %v", err)

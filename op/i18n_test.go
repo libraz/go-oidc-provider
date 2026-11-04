@@ -72,7 +72,7 @@ func TestWithLocale_RegistersOverride(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LocaleBundleFromMap: %v", err)
 	}
-	provider, err := op.New(append(validBaseOpts(t), op.WithLocale(bundle))...)
+	provider, err := op.New(append(validBaseOpts(t), op.WithLocaleBundle(bundle))...)
 	if err != nil {
 		t.Fatalf("op.New with override: %v", err)
 	}
@@ -91,7 +91,7 @@ func TestProviderLocaleResolver_ReflectsRegistration(t *testing.T) {
 		t.Fatalf("LocaleBundleFromMap(fr): %v", err)
 	}
 	provider, err := op.New(append(validBaseOpts(t),
-		op.WithLocale(bundle),
+		op.WithLocaleBundle(bundle),
 		op.WithDefaultLocale("fr"),
 	)...)
 	if err != nil {
@@ -138,7 +138,7 @@ func TestProviderLocaleResolver_MessageFallbackAndRawText(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LocaleBundleFromMap(fr): %v", err)
 	}
-	provider, err := op.New(append(validBaseOpts(t), op.WithLocale(french))...)
+	provider, err := op.New(append(validBaseOpts(t), op.WithLocaleBundle(french))...)
 	if err != nil {
 		t.Fatalf("op.New: %v", err)
 	}
@@ -195,7 +195,7 @@ func TestWithLocale_RegistersCustomLocale(t *testing.T) {
 		t.Fatalf("LocaleBundleFromMap: %v", err)
 	}
 	provider, err := op.New(append(validBaseOpts(t),
-		op.WithLocale(bundle),
+		op.WithLocaleBundle(bundle),
 		op.WithDefaultLocale("zh-CN"),
 	)...)
 	if err != nil {
@@ -213,7 +213,7 @@ func TestSetLocaleCookie_StoresARegisteredLocaleAddedByOption(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LocaleBundleFromMap: %v", err)
 	}
-	provider, err := op.New(append(validBaseOpts(t), op.WithLocale(bundle))...)
+	provider, err := op.New(append(validBaseOpts(t), op.WithLocaleBundle(bundle))...)
 	if err != nil {
 		t.Fatalf("op.New with zh-CN: %v", err)
 	}
@@ -277,7 +277,7 @@ func TestLocale_RegionQualifiedBundleRoundTripsEverySurface(t *testing.T) {
 		t.Fatalf("bundle.Locale() = %q, want the canonical %q", got, "pt-br")
 	}
 
-	provider, err := op.New(append(validBaseOpts(t), op.WithLocale(bundle))...)
+	provider, err := op.New(append(validBaseOpts(t), op.WithLocaleBundle(bundle))...)
 	if err != nil {
 		t.Fatalf("op.New with pt-BR: %v", err)
 	}
@@ -337,7 +337,7 @@ func TestLocale_UILocalesSpellingsSelectTheSameBundle(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LocaleBundleFromMap(zh-Hant): %v", err)
 	}
-	provider, err := op.New(append(validBaseOpts(t), op.WithLocale(ptBR), op.WithLocale(zhHant))...)
+	provider, err := op.New(append(validBaseOpts(t), op.WithLocaleBundle(ptBR), op.WithLocaleBundle(zhHant))...)
 	if err != nil {
 		t.Fatalf("op.New: %v", err)
 	}
@@ -393,8 +393,8 @@ func TestWithDefaultLocale_PartialBundleFallsBackRatherThanBlanking(t *testing.T
 		t.Fatalf("LocaleBundleFromMap(fr): %v", err)
 	}
 	provider, err := op.New(append(validBaseOpts(t),
-		op.WithLocale(enOverlay),
-		op.WithLocale(french),
+		op.WithLocaleBundle(enOverlay),
+		op.WithLocaleBundle(french),
 		op.WithDefaultLocale("fr"),
 	)...)
 	if err != nil {

@@ -14,7 +14,7 @@ func TestProfile_String(t *testing.T) {
 		in   profile.Profile
 		want string
 	}{
-		{"baseline", profile.OAuth21, "baseline"},
+		{"baseline", profile.OAuth21, "oauth21"},
 		{"fapi2-baseline", profile.FAPI2Baseline, "fapi2-baseline"},
 		{"fapi2-message-signing", profile.FAPI2MessageSigning, "fapi2-message-signing"},
 		{"fapi-ciba", profile.FAPICIBA, "fapi-ciba"},

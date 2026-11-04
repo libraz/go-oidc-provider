@@ -2,7 +2,7 @@
 
 // op.go — OP-side wiring for example 32-ciba-pos.
 //
-// buildProvider enables [op.WithCIBA] in poll mode, registers a
+// buildProvider enables [op.WithCIBAGrant] in poll mode, registers a
 // [op.HintResolver] that maps the demo login_hint to a stable
 // subject, and statically registers the POS terminal as a CIBA-only
 // confidential client. The substore returned alongside the provider
@@ -47,13 +47,13 @@ func buildProvider() (*op.Provider, *inmem.Store, error) {
 		// CIBA is the only grant this OP serves. The POS terminal never
 		// opens a browser — the user approves on their own authentication
 		// device — so naming grant.CIBA here drops the default
-		// {authorization_code, refresh_token} pair, while WithCIBA below
+		// {authorization_code, refresh_token} pair, while WithCIBAGrant below
 		// wires the hint resolver and mounts /bc-authorize.
 		op.WithGrants(grant.CIBA),
-		op.WithCIBA(
-			op.WithCIBAHintResolver(resolver),
-			op.WithCIBAPollInterval(pollInterval),
-		),
+		op.WithCIBAGrant(op.CIBAGrant{
+			HintResolver: resolver,
+			PollInterval: pollInterval,
+		}),
 		op.WithStaticClients(op.ConfidentialClient{
 			ID:         clientID,
 			Secret:     clientSecret,

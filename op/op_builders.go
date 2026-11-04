@@ -127,12 +127,12 @@ func buildMetricsCollector(cfg *config) error {
 }
 
 // buildLocaleResolver assembles the [i18n.Resolver] from the seed
-// bundles plus any embedder overrides registered through [WithLocale].
+// bundles plus any embedder overrides registered through [WithLocaleBundle].
 // Override entries are merged on top of the existing bundle for the
 // same tag at key granularity: the embedder's keys win on collision,
 // keys present only on the existing bundle are preserved. This means
 // embedders override only the strings they care about without having
-// to re-supply the entire seed catalogue. [WithLocale] refuses a key
+// to re-supply the entire seed catalogue. [WithLocaleBundle] refuses a key
 // supplied twice, so the order of the merges never decides a value.
 func buildLocaleResolver(cfg *config) (*i18n.Resolver, error) {
 	seeds, err := i18n.DefaultBundles()
@@ -153,7 +153,7 @@ func buildLocaleResolver(cfg *config) (*i18n.Resolver, error) {
 		if existing, exists := bundles[tag]; exists {
 			merged, mergeErr := existing.Merge(b.internal)
 			if mergeErr != nil {
-				return nil, newConfigurationError("WithLocale: "+mergeErr.Error(), mergeErr)
+				return nil, newConfigurationError("WithLocaleBundle: "+mergeErr.Error(), mergeErr)
 			}
 			bundles[tag] = merged
 			continue
@@ -1069,7 +1069,7 @@ func buildDiscoveryInput(cfg *config, scopes *scoperegistry.Registry, locales *i
 		// Fall back to the registered locale set so the resolver and
 		// the discovery surface stay in lock-step: the OP advertises
 		// every tag for which a bundle has been registered (seed +
-		// [WithLocale]). Embedders that need an explicit list — e.g.
+		// [WithLocaleBundle]). Embedders that need an explicit list — e.g.
 		// hiding a locale they ship internally but do not expose to
 		// RPs — keep the override path through [WithDiscoveryMetadata].
 		available := locales.Available()
@@ -1242,6 +1242,7 @@ func firstPartyClientSet(cfg *config) map[string]struct{} {
 // aligned.
 func buildDiscoveryFeatures(cfg *config) discovery.Features {
 	out := buildFeatures(cfg.features)
+	out.DynamicRegistration = cfg.dcr != nil
 	out.DeviceCodeGrant = cfg.grantEnabled(grant.DeviceCode)
 	out.CIBAGrant = cfg.grantEnabled(grant.CIBA)
 	out.EncryptionInbound = cfg.encryptionInboundEnabled()
@@ -1273,20 +1274,10 @@ func buildFeatures(flags []feature.Flag) discovery.Features {
 			out.Introspect = true
 		case feature.Revoke:
 			out.Revoke = true
-		case feature.DynamicRegistration:
-			out.DynamicRegistration = true
 		case feature.PKCE:
 			// PKCE is always enabled in v1.0; the flag exists so the
 			// caller can advertise it explicitly in discovery, which
 			// is already the default. Nothing to do here.
-		case feature.RAR:
-			// RAR advertises through authorization_details_types_supported
-			// (set from the registered types), not a boolean discovery
-			// flag, so there is nothing to toggle on [discovery.Features].
-		case feature.GrantManagement:
-			// Grant Management advertises through the dedicated
-			// grant_management_* Input fields, not a boolean
-			// [discovery.Features] flag, so there is nothing to toggle.
 		}
 	}
 	return out

@@ -2,6 +2,10 @@ package feature
 
 // Flag is the typed enumeration of optional protocol extensions. The zero
 // value is invalid; callers MUST use one of the exported constants.
+//
+// Extensions that need configuration of their own (dynamic client
+// registration, rich authorization requests, grant management) have no
+// flag: the option that supplies the configuration enables them.
 type Flag uint8
 
 const (
@@ -72,32 +76,6 @@ const (
 	// endpoint becomes routable for confidential and public clients,
 	// each revoking only tokens issued to itself.
 	Revoke
-
-	// DynamicRegistration enables RFC 7591 / RFC 7592 / OpenID Connect
-	// Dynamic Client Registration 1.0. The /register endpoint becomes
-	// routable, the discovery document advertises
-	// "registration_endpoint", and operators may mint Initial Access
-	// Tokens via [op.Provider.IssueInitialAccessToken]. Activated
-	// implicitly by [op.WithDynamicRegistration]; callers do not pass
-	// this flag to [op.WithFeature] directly.
-	DynamicRegistration
-
-	// RAR enables RFC 9396 Rich Authorization Requests. The
-	// authorization_details parameter is accepted at /authorize, /par,
-	// and /token, validated against the embedder-registered type set,
-	// persisted on the grant, and echoed on the token response and
-	// introspection. Activated implicitly by
-	// [op.WithAuthorizationDetailTypes]; callers do not pass this flag
-	// to [op.WithFeature] directly.
-	RAR
-
-	// GrantManagement enables the OAuth 2.0 Grant Management draft: the
-	// grant_management_action / grant_id authorization parameters, the
-	// grant management endpoint (query / revoke), and the matching
-	// discovery metadata. Activated implicitly by
-	// [op.WithGrantManagement]; callers do not pass this flag to
-	// [op.WithFeature] directly.
-	GrantManagement
 )
 
 // String returns the canonical lower-case identifier used in discovery
@@ -120,12 +98,6 @@ func (f Flag) String() string {
 		return "introspect"
 	case Revoke:
 		return "revoke"
-	case DynamicRegistration:
-		return "dynamic_registration"
-	case RAR:
-		return "rar"
-	case GrantManagement:
-		return "grant_management"
 	case flagUnspecified:
 		return ""
 	default:
@@ -136,7 +108,7 @@ func (f Flag) String() string {
 // IsValid reports whether f is one of the recognised exported constants.
 func (f Flag) IsValid() bool {
 	switch f {
-	case PKCE, PAR, JAR, JARM, DPoP, MTLS, Introspect, Revoke, DynamicRegistration, RAR, GrantManagement:
+	case PKCE, PAR, JAR, JARM, DPoP, MTLS, Introspect, Revoke:
 		return true
 	case flagUnspecified:
 		return false

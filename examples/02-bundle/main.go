@@ -22,7 +22,7 @@
 // [op.WithFirstPartyClients] marks the demo RP as first-party, so the
 // OP creates the consent grant on the user's behalf and skips the
 // consent screen on every subsequent /authorize round-trip;
-// [op.AuditConsentGrantedFirstParty] fires in the audit stream so SOC
+// [audit.ConsentGrantedFirstParty] fires in the audit stream so SOC
 // tooling can correlate the auto-grant with the code mint. Example 40
 // ([examples/40-first-party-skip-consent]) covers the option in
 // isolation. The captcha rule ([op.RuleAfterFailedAttempts]) is wired

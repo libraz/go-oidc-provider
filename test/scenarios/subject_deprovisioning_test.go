@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/libraz/go-oidc-provider/op"
+	"github.com/libraz/go-oidc-provider/op/audit"
 	"github.com/libraz/go-oidc-provider/op/feature"
 	"github.com/libraz/go-oidc-provider/op/store"
 	"github.com/libraz/go-oidc-provider/op/storeadapter/inmem"
@@ -190,11 +191,11 @@ func TestSubjectDeprovisioning_RefreshRefusedAndAccessTokenDead(t *testing.T) {
 	sdExpectInactive(t, env.tk, tok.AccessToken, sdClientID, sdSecret)
 
 	var refusal bool
-	for _, ev := range env.capture.EventsByName(string(op.AuditTokenRevoked)) {
+	for _, ev := range env.capture.EventsByName(string(audit.TokenRevoked)) {
 		refusal = refusal || ev.Level == slog.LevelWarn
 	}
 	if !refusal {
-		t.Fatalf("no %s event recorded the refusal", op.AuditTokenRevoked)
+		t.Fatalf("no %s event recorded the refusal", audit.TokenRevoked)
 	}
 }
 
@@ -224,8 +225,8 @@ func TestSubjectDeprovisioning_NormalRedemptionUnchanged(t *testing.T) {
 	if status != http.StatusOK || body["access_token"] == nil {
 		t.Fatalf("refresh status=%d body=%v, want 200", status, body)
 	}
-	if n := len(env.capture.EventsByName(string(op.AuditTokenRevoked))); n != 0 {
-		t.Fatalf("%d %s events on a normal redemption", n, op.AuditTokenRevoked)
+	if n := len(env.capture.EventsByName(string(audit.TokenRevoked))); n != 0 {
+		t.Fatalf("%d %s events on a normal redemption", n, audit.TokenRevoked)
 	}
 }
 

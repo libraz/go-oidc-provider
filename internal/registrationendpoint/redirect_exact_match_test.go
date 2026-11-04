@@ -37,7 +37,7 @@ const registeredRedirectURI = "https://rp.test.invalid/callback"
 func TestDCR_RegisteredRedirectURIIsMatchedByteExactly(t *testing.T) {
 	t.Parallel()
 
-	f := newFixture(t, op.RegistrationOption{})
+	f := newFixture(t, op.DynamicRegistration{})
 	_, iat := f.issueIAT(t, op.InitialAccessTokenSpec{})
 
 	resp := f.post(t, map[string]any{
@@ -166,7 +166,7 @@ func TestDCR_RejectsRedirectURIShapesThatBlurTheMatch(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			f := newFixture(t, op.RegistrationOption{})
+			f := newFixture(t, op.DynamicRegistration{})
 			_, iat := f.issueIAT(t, op.InitialAccessTokenSpec{})
 			resp := f.post(t, map[string]any{"redirect_uris": []string{tc.uri}}, iat)
 			defer resp.Body.Close()

@@ -716,7 +716,7 @@ func (s *Store) DeviceCodes() store.DeviceCodeStore {
 
 // CIBARequests implements [store.Store]. The composite passes the
 // call through to the routed backend; nil from the backend surfaces
-// as nil here so op.New can reject the op.WithCIBA option when the
+// as nil here so op.New can reject the op.WithCIBAGrant option when the
 // substore is missing instead of panicking later. Routed backends MAY
 // support the substore independently of the transactional anchor —
 // CIBARequests is intentionally outside [TxClusterKinds].

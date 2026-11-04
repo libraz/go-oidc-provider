@@ -60,7 +60,7 @@ func TestBuildLocaleResolver_OverlayMergesIntoSeed(t *testing.T) {
 }
 
 // TestBuildLocaleResolver_LayeredOverlaysComposeLastWins verifies that
-// repeated [WithLocale] calls for the same locale compose by repeated
+// repeated [WithLocaleBundle] calls for the same locale compose by repeated
 // merge: the later overlay wins per key while earlier overlays remain
 // authoritative for keys the later call did not redefine. Embedders
 // who layer a regional overlay on top of a brand overlay rely on this

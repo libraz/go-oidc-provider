@@ -65,7 +65,7 @@ func newGLEnv(t *testing.T, extra ...op.Option) *glEnv {
 	opts := append([]op.Option{
 		op.WithUserStore(users),
 		op.WithFeature(feature.Introspect),
-		op.WithTokenExchange(txDecisionPolicy{decision: &op.TokenExchangeDecision{IssueRefreshToken: op.PtrBool(true)}}),
+		op.WithTokenExchangeGrant(op.TokenExchangeGrant{Policy: txDecisionPolicy{decision: &op.TokenExchangeDecision{IssueRefreshToken: op.PtrBool(true)}}}),
 	}, extra...)
 	tk := testkit.NewProvider(t, testkit.WithOptions(opts...))
 	hash, err := op.HashClientSecret(glSecret)

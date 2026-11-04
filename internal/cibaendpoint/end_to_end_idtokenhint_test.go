@@ -119,7 +119,7 @@ func newHintFixture(t *testing.T, extra ...op.Option) *hintFixture {
 	clock := &advanceableClock{now: time.Date(2026, 5, 4, 12, 0, 0, 0, time.UTC)}
 	resolver := &recordingHintResolver{}
 	opts := append([]op.Option{
-		op.WithCIBA(op.WithCIBAHintResolver(resolver)),
+		op.WithCIBAGrant(op.CIBAGrant{HintResolver: resolver}),
 	}, extra...)
 	tk := testkit.NewProvider(t,
 		testkit.WithClock(clock),

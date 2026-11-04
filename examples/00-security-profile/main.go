@@ -28,7 +28,7 @@
 // Both records print to stdout on boot; compare their extras:
 //
 //	"profiles": ["oidc-core"] "pkce_required": false ← :8080
-//	"profiles": ["baseline"]  "pkce_required": true  ← :8081
+//	"profiles": ["oauth21"]  "pkce_required": true  ← :8081
 //
 // The record carries the resolved policy, not just the declaration —
 // which sender-constraint mechanism won, which client-auth methods

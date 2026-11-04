@@ -11,6 +11,7 @@ import (
 
 	"github.com/libraz/go-oidc-provider/internal/redact"
 	"github.com/libraz/go-oidc-provider/op"
+	"github.com/libraz/go-oidc-provider/op/audit"
 	"github.com/libraz/go-oidc-provider/op/feature"
 	"github.com/libraz/go-oidc-provider/op/grant"
 	"github.com/libraz/go-oidc-provider/op/profile"
@@ -40,7 +41,7 @@ func TestWithProfile_FAPICIBARequiresCIBAGrant(t *testing.T) {
 	if !strings.Contains(err.Error(), "profile.FAPICIBA") {
 		t.Errorf("err = %v, want it to name the declared profile", err)
 	}
-	if !strings.Contains(err.Error(), "WithCIBA") {
+	if !strings.Contains(err.Error(), "WithCIBAGrant") {
 		t.Errorf("err = %v, want it to name the option that activates the grant", err)
 	}
 }
@@ -52,12 +53,12 @@ func TestWithProfile_FAPICIBAAcceptsWiredGrant(t *testing.T) {
 	t.Parallel()
 
 	opts := append(validBaseOptsWithInmem(t),
-		op.WithCIBA(op.WithCIBAHintResolver(stubCIBAHintResolver{})),
+		op.WithCIBAGrant(op.CIBAGrant{HintResolver: stubCIBAHintResolver{}}),
 		op.WithProfile(profile.FAPICIBA),
 		op.WithDPoPNonceSource(stubDPoPNonceSource{}),
 	)
 	if _, err := op.New(opts...); err != nil {
-		t.Fatalf("WithProfile(FAPICIBA) + WithCIBA failed: %v", err)
+		t.Fatalf("WithProfile(FAPICIBA) + WithCIBAGrant failed: %v", err)
 	}
 }
 
@@ -101,7 +102,7 @@ func TestWithProfile_BaselineAddsNoFeatureRequirement(t *testing.T) {
 	}
 }
 
-// startupRecord is the decoded [op.AuditStartupProfile] line. Only the
+// startupRecord is the decoded [audit.StartupProfile] line. Only the
 // fields the assertions below read are modelled; the slog JSON handler
 // emits the canonical audit attributes at the top level and the event
 // payload under an "extras" group.
@@ -133,11 +134,11 @@ func captureStartupProfile(t *testing.T, extra ...op.Option) startupRecord {
 		if err := json.Unmarshal([]byte(line), &rec); err != nil {
 			t.Fatalf("decode audit line %q: %v", line, err)
 		}
-		if rec.Event == string(op.AuditStartupProfile) {
+		if rec.Event == string(audit.StartupProfile) {
 			return rec
 		}
 	}
-	t.Fatalf("no %s record in audit output: %s", op.AuditStartupProfile, buf.String())
+	t.Fatalf("no %s record in audit output: %s", audit.StartupProfile, buf.String())
 	return startupRecord{}
 }
 
@@ -151,7 +152,7 @@ func TestAuditStartupProfile_UnprofiledDeployment(t *testing.T) {
 	if rec.Audit != "true" {
 		t.Errorf("audit=%q want \"true\" so shippers can route the record", rec.Audit)
 	}
-	assertStrings(t, rec, "profiles", []string{"baseline"})
+	assertStrings(t, rec, "profiles", []string{"oauth21"})
 	assertStrings(t, rec, "grants", []string{"authorization_code", "refresh_token"})
 	assertBool(t, rec, "pkce_required", true)
 	assertBool(t, rec, "par_required", false)
@@ -205,7 +206,7 @@ func TestAuditStartupProfile_BaselineDeployment(t *testing.T) {
 	t.Parallel()
 
 	rec := captureStartupProfile(t, op.WithProfile(profile.OAuth21))
-	assertStrings(t, rec, "profiles", []string{"baseline"})
+	assertStrings(t, rec, "profiles", []string{"oauth21"})
 	assertBool(t, rec, "pkce_required", true)
 	assertBool(t, rec, "par_required", false)
 	assertStrings(t, rec, "client_auth_methods", nil)
@@ -287,7 +288,7 @@ func TestAuditStartupProfile_CIBADeployment(t *testing.T) {
 	t.Parallel()
 
 	rec := captureStartupProfile(t,
-		op.WithCIBA(op.WithCIBAHintResolver(stubCIBAHintResolver{})),
+		op.WithCIBAGrant(op.CIBAGrant{HintResolver: stubCIBAHintResolver{}}),
 		op.WithProfile(profile.FAPICIBA),
 		op.WithDPoPNonceSource(stubDPoPNonceSource{}),
 	)

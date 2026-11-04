@@ -25,7 +25,7 @@ import (
 func TestRegister_RejectsScopeNotInRegistry(t *testing.T) {
 	t.Parallel()
 
-	f := newFixture(t, op.RegistrationOption{Open: true})
+	f := newFixture(t, op.DynamicRegistration{Open: true})
 
 	body := minimalMetadata()
 	body["scope"] = "openid definitely-not-registered"

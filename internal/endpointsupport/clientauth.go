@@ -326,7 +326,7 @@ func EmitAuthnFailure(
 // pre-issuance client authentication failure (RFC 6749 §5.2). Endpoints
 // that report such failures under one shared name use it so the audit
 // stream stays uniform; the value comes from the registry exposed publicly
-// as op.AuditClientAuthnFailure.
+// as op/audit.ClientAuthnFailure.
 const EventClientAuthnFailure = string(auditevent.AuditClientAuthnFailure)
 
 // AuditAuthnFailure returns the onFailure hook for [AuthenticateClient]

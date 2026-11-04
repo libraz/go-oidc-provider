@@ -142,7 +142,7 @@ func (c *config) fillAnyOfDefault(anyOf []feature.Flag) {
 	c.features = append(c.features, defaultFlag)
 }
 
-// applyRegistrationDefaults fills in [RegistrationOption] zero-value
+// applyRegistrationDefaults fills in [DynamicRegistration] zero-value
 // fields with their library defaults. The fill is only performed when
 // [WithDynamicRegistration] was invoked; the function is otherwise a
 // no-op so that [config.validate] can still distinguish "feature not
@@ -213,7 +213,7 @@ func isStandardScope(name string) bool {
 
 // resolveGrants assembles the final grant set from the two ways an
 // embedder can reach it: the wholesale [WithGrants] list and the
-// per-grant opt-in options ([WithCIBA], [WithDeviceCodeGrant],
+// per-grant opt-in options ([WithCIBAGrant], [WithDeviceCodeGrant],
 // [WithJWTBearerGrant]) that also wire the grant's collaborators.
 //
 // The base is the [WithGrants] list when it was supplied, and the
@@ -226,7 +226,7 @@ func isStandardScope(name string) bool {
 //     opt-in options appended to an empty slice during option
 //     application, which made the default fill-in below see a
 //     non-empty set and skip — so an OP configured with nothing but
-//     WithCIBA served the CIBA grant and nothing else.
+//     WithCIBAGrant served the CIBA grant and nothing else.
 //   - Resolving after every option has been applied makes the result
 //     order-independent, matching the contract [WithProfile]'s
 //     auto-enable already documents. [WithGrants] overwrites the

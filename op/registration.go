@@ -14,7 +14,7 @@ import (
 )
 
 // defaultIATUses is the consumption ceiling applied to an Initial
-// Access Token when [RegistrationOption.IATUses] is left at zero.
+// Access Token when [DynamicRegistration.IATUses] is left at zero.
 // Single-use is the production-grade baseline; operators who run
 // invitation flows that register multiple clients from one token raise
 // this explicitly.
@@ -32,7 +32,7 @@ const iatSecretBytes = 32
 // short enough to stay readable in operator logs.
 const iatIDBytes = 16
 
-// RegistrationOption configures Dynamic Client Registration (RFC 7591 /
+// DynamicRegistration configures Dynamic Client Registration (RFC 7591 /
 // RFC 7592 / OpenID Connect Dynamic Client Registration 1.0). It is
 // consumed by [WithDynamicRegistration] and is otherwise opaque to the
 // caller.
@@ -41,7 +41,7 @@ const iatIDBytes = 16
 // Token required, only authorization_code + refresh_token grants, only
 // the "code" response type, no metadata hook, 24 h IAT TTL, single-use
 // IAT. Each field documents the override semantics individually.
-type RegistrationOption struct {
+type DynamicRegistration struct {
 	// Open, when true, allows POST /register without an Initial Access
 	// Token. Production deployments SHOULD leave this false; the OP
 	// records a warn-level dcr.open_registration_used audit event on every
@@ -86,7 +86,7 @@ type RegistrationOption struct {
 	IATUses int
 
 	// OpenRegistrationDefaultScopes is the scope default applied to
-	// open-registration POSTs ([RegistrationOption.Open] = true) that
+	// open-registration POSTs ([DynamicRegistration.Open] = true) that
 	// omit the scope field. The slice is space-joined into the
 	// response and persisted on the [store.Client.Scopes] record so
 	// the registered client can request those scopes at /authorize.
@@ -137,7 +137,7 @@ type RegistrationOption struct {
 }
 
 // ClientMetadata is the OpenID Connect Dynamic Client Registration 1.0
-// §2 view of a client passed to [RegistrationOption.ValidateMetadata].
+// §2 view of a client passed to [DynamicRegistration.ValidateMetadata].
 // Field semantics follow the spec; metadata fields the spec does not
 // name are not visible at this hook so embedders cannot accidentally
 // gate registration on internal-only attributes.
@@ -155,12 +155,12 @@ type ClientMetadata struct {
 
 	// GrantTypes is the candidate grant_types list. The library has
 	// already filtered this against
-	// [RegistrationOption.AllowedGrantTypes]; embedders MAY apply
+	// [DynamicRegistration.AllowedGrantTypes]; embedders MAY apply
 	// further per-tenant restrictions.
 	GrantTypes []string
 
 	// ResponseTypes is the candidate response_types list, filtered
-	// through [RegistrationOption.AllowedResponseTypes].
+	// through [DynamicRegistration.AllowedResponseTypes].
 	ResponseTypes []string
 
 	// Scope is the requested scope value as a single
@@ -390,16 +390,16 @@ type ClientMetadata struct {
 
 // InitialAccessTokenSpec configures the IAT issued by
 // [Provider.IssueInitialAccessToken]. Zero TTL applies the default from
-// [RegistrationOption.IATTTL]; zero MaxUses applies
-// [RegistrationOption.IATUses]. Negative values for either field are
+// [DynamicRegistration.IATTTL]; zero MaxUses applies
+// [DynamicRegistration.IATUses]. Negative values for either field are
 // rejected.
 type InitialAccessTokenSpec struct {
 	// TTL is the validity window of the issued IAT. Zero falls back
-	// to [RegistrationOption.IATTTL].
+	// to [DynamicRegistration.IATTTL].
 	TTL time.Duration
 
 	// MaxUses is the consumption ceiling. Zero falls back to
-	// [RegistrationOption.IATUses].
+	// [DynamicRegistration.IATUses].
 	MaxUses int
 
 	// AllowedScopes constrains the scope values a client registered
@@ -460,15 +460,13 @@ type InitialAccessTokenIssued struct {
 // the /register endpoint, advertises "registration_endpoint" in the
 // discovery document, and unlocks
 // [Provider.IssueInitialAccessToken] /
-// [Provider.RevokeInitialAccessToken]. It enables the
-// dynamic-registration feature flag implicitly, so passing that flag
-// to [WithFeature] as well fails [New] in either call order.
+// [Provider.RevokeInitialAccessToken].
 //
 // Calling the option twice fails at construction time so the operator
-// notices the duplicate. The supplied [RegistrationOption] is
+// notices the duplicate. The supplied [DynamicRegistration] is
 // validated eagerly: negative TTL or MaxUses, unknown grant types, and
 // response types other than "code" are rejected. Defaults documented
-// on each [RegistrationOption] field are applied at [New] time after
+// on each [DynamicRegistration] field are applied at [New] time after
 // every option has run.
 //
 // The configured [store.Store] MUST expose non-nil
@@ -478,12 +476,12 @@ type InitialAccessTokenIssued struct {
 // failing the first POST /register.
 //
 // Stable since v1.0.
-func WithDynamicRegistration(o RegistrationOption) Option {
+func WithDynamicRegistration(o DynamicRegistration) Option {
 	return optionFunc(func(c *config) error {
 		if err := c.claimOnce("WithDynamicRegistration"); err != nil {
 			return err
 		}
-		if err := validateRegistrationOption(o); err != nil {
+		if err := validateDynamicRegistration(o); err != nil {
 			return err
 		}
 		// Defensive copy of slice fields so a later mutation of the
@@ -493,20 +491,15 @@ func WithDynamicRegistration(o RegistrationOption) Option {
 		copyCfg.AllowedResponseTypes = slices.Clone(o.AllowedResponseTypes)
 		copyCfg.OpenRegistrationDefaultScopes = slices.Clone(o.OpenRegistrationDefaultScopes)
 		c.dcr = &copyCfg
-		// The feature flag is derived in config.validateRegistration
-		// rather than set here: setting it at the option site makes the
-		// "declared twice" check depend on whether WithFeature ran
-		// before or after this option.
 		return nil
 	})
 }
 
-// validateRegistrationOption enforces the [WithDynamicRegistration]
+// validateDynamicRegistration enforces the [WithDynamicRegistration]
 // invariants that can be checked without consulting the rest of the
-// configuration. Cross-cutting checks (store substore presence,
-// duplicate feature flag) live in [config.validateRegistration] /
-// [WithDynamicRegistration].
-func validateRegistrationOption(o RegistrationOption) error {
+// configuration. Cross-cutting checks (store substore presence)
+// live in [config.validateRegistration].
+func validateDynamicRegistration(o DynamicRegistration) error {
 	if o.IATTTL < 0 {
 		return newConfigurationError("WithDynamicRegistration: IATTTL must not be negative", nil)
 	}
@@ -542,7 +535,7 @@ func registrationGrantAllowed(wire string) bool {
 
 // defaultRegistrationGrantTypes returns the wire-form grant_types a
 // dynamically registered client may request when
-// [RegistrationOption.AllowedGrantTypes] is left empty. The list is
+// [DynamicRegistration.AllowedGrantTypes] is left empty. The list is
 // returned afresh on every call so callers may freely mutate it.
 func defaultRegistrationGrantTypes() []string {
 	return []string{
@@ -553,7 +546,7 @@ func defaultRegistrationGrantTypes() []string {
 
 // defaultRegistrationResponseTypes returns the wire-form response_types
 // a dynamically registered client may request when
-// [RegistrationOption.AllowedResponseTypes] is left empty. v1.0 ships
+// [DynamicRegistration.AllowedResponseTypes] is left empty. v1.0 ships
 // with "code" only.
 func defaultRegistrationResponseTypes() []string {
 	return []string{"code"}

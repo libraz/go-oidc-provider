@@ -107,7 +107,7 @@ func TestConstructionErrors_ClassPredicatesPartition(t *testing.T) {
 			return err
 		}},
 		{"locale_bundle_zero_value", func(tb testing.TB) error {
-			_, err := op.New(append(validBaseOpts(tb), op.WithLocale(op.LocaleBundle{}))...)
+			_, err := op.New(append(validBaseOpts(tb), op.WithLocaleBundle(op.LocaleBundle{}))...)
 			return err
 		}},
 		{"default_locale_empty", func(tb testing.TB) error {

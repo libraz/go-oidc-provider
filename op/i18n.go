@@ -19,7 +19,7 @@ type Locale string
 
 // LocaleEnglish and LocaleJapanese are the seed locales the library
 // ships with. Embedders MAY register additional locales through
-// [WithLocale]; the existing entries are still served until the
+// [WithLocaleBundle]; the existing entries are still served until the
 // override is registered.
 const (
 	LocaleEnglish  Locale = "en"
@@ -64,7 +64,7 @@ func LocaleBundleFromMap(locale Locale, messages map[string]string) (LocaleBundl
 
 // Locale returns the locale tag the bundle was constructed for. The
 // accessor exists so embedders that build a slice of bundles can
-// assert on the tags before threading them through [WithLocale].
+// assert on the tags before threading them through [WithLocaleBundle].
 func (b LocaleBundle) Locale() Locale {
 	if b.internal == nil {
 		return ""
@@ -79,7 +79,7 @@ func (b LocaleBundle) Locale() Locale {
 // locale-specific audience SHOULD set this so a request without any
 // locale hint lands on the right language.
 //
-// The supplied locale MUST be registered through [WithLocale] (or
+// The supplied locale MUST be registered through [WithLocaleBundle] (or
 // be one of the seed locales — en / ja). A default that is not
 // registered is rejected at construction time. The locale is
 // canonicalised the same way [LocaleBundleFromMap] canonicalises a
@@ -216,7 +216,7 @@ func (p *Provider) ClearLocaleCookie(w http.ResponseWriter) {
 }
 
 // LocaleResolver is the public view of the locale resolver the Provider
-// built from [WithLocale] / [WithDefaultLocale] /
+// built from [WithLocaleBundle] / [WithDefaultLocale] /
 // [WithPreferredLocaleStore]. Embedders fetch it through
 // [Provider.LocaleResolver] when they want to render emails, server-
 // rendered pages, or out-of-band UIs in the same locale the OP picks
@@ -285,7 +285,7 @@ func (r *LocaleResolver) Default() Locale {
 }
 
 // Available returns the registered locales in registration order
-// (seed bundles first, then [WithLocale] additions). The slice is a
+// (seed bundles first, then [WithLocaleBundle] additions). The slice is a
 // fresh copy; mutating it does not affect the LocaleResolver.
 func (r *LocaleResolver) Available() []Locale {
 	if r == nil || r.inner == nil {
@@ -367,17 +367,17 @@ func injectHTMLTranslator(driver interaction.Driver, translator interaction.Mess
 	}
 }
 
-// WithLocale registers a [LocaleBundle] for the given locale. The
+// WithLocaleBundle registers a [LocaleBundle] for the given locale. The
 // bundle is merged on top of any previously registered bundle for the
 // same locale at key granularity: the embedder's keys win on
 // collision, but keys the embedder did not supply are preserved from
 // the existing layer (the seed en / ja catalogue, or earlier
-// [WithLocale] calls). Embedders therefore override only the strings
+// [WithLocaleBundle] calls). Embedders therefore override only the strings
 // they care about — typical brand-aligned overlays only redefine a
 // handful of titles or button labels and inherit everything else from
 // the seed catalogue.
 //
-// Repeated [WithLocale] calls for the same locale compose: each key is
+// Repeated [WithLocaleBundle] calls for the same locale compose: each key is
 // single-valued, so two calls may supply different keys of one locale,
 // but supplying the same key twice makes [New] fail. A key supplied
 // inside [WithDefaults] gives way to the same key supplied outside it.
@@ -402,15 +402,15 @@ func injectHTMLTranslator(driver interaction.Driver, translator interaction.Mess
 // it; it will not change the built-in screen.
 //
 // Stable since v1.0.
-func WithLocale(bundle LocaleBundle) Option {
+func WithLocaleBundle(bundle LocaleBundle) Option {
 	return optionFunc(func(c *config) error {
 		if bundle.internal == nil {
-			return newConfigurationError("WithLocale requires a non-empty bundle", nil)
+			return newConfigurationError("WithLocaleBundle requires a non-empty bundle", nil)
 		}
 		tag := string(bundle.internal.Tag())
 		var shadowed []string
 		for _, key := range bundle.internal.Keys() {
-			err := c.claimOnce("WithLocale (" + tag + " " + key + ")")
+			err := c.claimOnce("WithLocaleBundle (" + tag + " " + key + ")")
 			if errors.Is(err, errShadowedDefault) {
 				shadowed = append(shadowed, key)
 				continue

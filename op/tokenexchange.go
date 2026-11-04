@@ -19,7 +19,7 @@ const TokenExchangeGrantType = "urn:ietf:params:oauth:grant-type:token-exchange"
 
 // TokenExchangePolicy decides which subject / actor combinations may
 // exchange tokens, and what the issued credential may carry. The
-// interface is the embedder seam mandated by [WithTokenExchange];
+// interface is the embedder seam mandated by [WithTokenExchangeGrant];
 // the provider rejects op.New when the option is supplied with a nil
 // policy, so deployments cannot accidentally enable token-exchange
 // without a deny-by-default hook.
@@ -151,7 +151,7 @@ type TokenExchangeDecision struct {
 	// GrantedTTL, when positive, narrows the issued access-token
 	// lifetime below the provider-computed cap. A value greater than
 	// the cap is truncated to it and recorded with an
-	// [AuditTokenExchangeTTLCapped] event; a zero or negative value
+	// audit.TokenExchangeTTLCapped event; a zero or negative value
 	// leaves the provider-computed lifetime unchanged.
 	GrantedTTL time.Duration
 
@@ -180,8 +180,8 @@ type TokenExchangeDecision struct {
 	//	}
 	//
 	// A refresh token actually issued is audited via the
-	// [AuditTokenExchangeRefreshIssued] event; one an issuance gate
-	// withholds emits [AuditCustomGrantRefreshDropped] instead. The
+	// audit.TokenExchangeRefreshIssued event; one an issuance gate
+	// withholds emits audit.CustomGrantRefreshDropped instead. The
 	// opt-in contract is pinned by catalog row TX-021.
 	IssueRefreshToken *bool
 

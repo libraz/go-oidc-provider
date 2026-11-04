@@ -31,7 +31,7 @@ var checkedWhen = map[string]string{
 	"feature:par":              "`feature.PAR` is enabled",
 	"dcr":                      "`op.WithDynamicRegistration` is set",
 	"grant:device_code":        "The `device_code` grant is enabled or `op.WithDeviceCodeGrant` is set",
-	"grant:ciba":               "The CIBA grant is enabled or `op.WithCIBA` is set",
+	"grant:ciba":               "The CIBA grant is enabled or `op.WithCIBAGrant` is set",
 	"ssf":                      "`op.WithSharedSignals` is set",
 	"userstore":                "The adapter's `Users()` is passed to `PrimaryPassword.Store`, `StepEmailOTP.Users` or `op.WithUserStore`",
 	"factor:totp":              "The login flow has an `op.StepTOTP` backed by `Store.TOTPs()`",
@@ -168,7 +168,7 @@ var tableCatalog = []tableInfo{
 	},
 	{
 		"ciba_requests", "CIBARequests", "CIBA backchannel authentication requests.",
-		"`op.WithCIBA`.", "grant:ciba",
+		"`op.WithCIBAGrant`.", "grant:ciba",
 	},
 	{
 		"totp_secrets", "TOTPs", "Encrypted TOTP secrets.",

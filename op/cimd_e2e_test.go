@@ -348,7 +348,7 @@ func TestCIMD_E2E_TokenExchangeUnauthorized(t *testing.T) {
 	doc := newCIMDDocServer(t, map[string]any{
 		"grant_types": []string{"authorization_code", op.TokenExchangeGrantType},
 	})
-	tk := newCIMDProvider(t, op.WithTokenExchange(cimdAllowAllExchange{}))
+	tk := newCIMDProvider(t, op.WithTokenExchangeGrant(op.TokenExchangeGrant{Policy: cimdAllowAllExchange{}}))
 	f := newCIMDFlow(t, tk, doc.id)
 
 	loc := f.startAuthorize(t, f.authorizeQuery(true))

@@ -1,7 +1,7 @@
 // Package tokenexchange implements the RFC 8693 token-exchange
 // grant_type as a thin wrapper over the custom-grant dispatcher.
 // The wrapper satisfies the public op.CustomGrantHandler contract
-// and lives behind op.WithTokenExchange; embedders never
+// and lives behind op.WithTokenExchangeGrant; embedders never
 // import this package directly.
 //
 // Implementation responsibilities:

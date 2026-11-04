@@ -11,7 +11,7 @@ import "context"
 //
 // Implementing the interface is optional: a substore that does not
 // implement it leaves the cascade to the embedder's
-// [RegistrationOption.OnClientDeleted] hook. Once an adapter implements it the library invokes the
+// [DynamicRegistration.OnClientDeleted] hook. Once an adapter implements it the library invokes the
 // cascade unconditionally; a missing client is not an error and the
 // implementation MUST treat the case as a no-op.
 //

@@ -12,7 +12,7 @@
 // and never calls into next, so any audit / rate-limit / metrics
 // middleware mounted *inside* the CORS wrapper would silently miss
 // the request. The hardening pairs this constraint with the
-// `cors.preflight.allowed` audit event ([op.AuditCORSPreflightAllowed])
+// `cors.preflight.allowed` audit event (op/audit.CORSPreflightAllowed)
 // so SOC tooling sees the short-circuit even when the embedder's
 // middleware order is wrong.
 package cors
@@ -70,7 +70,7 @@ type Strict struct {
 // safe default when no SPA client is registered.
 //
 // emitter is the audit sink the strict preflight short-circuit fires
-// through ([op.AuditCORSPreflightAllowed]). A nil emitter is replaced
+// through (op/audit.CORSPreflightAllowed). A nil emitter is replaced
 // with [audit.Discard] so the wrapper still works in unit tests that
 // do not assert on audit output.
 func NewStrict(allow *csrf.Allowlist, emitter audit.Emitter) *Strict {
@@ -161,7 +161,7 @@ func (s *Strict) handler(next http.Handler, allowedMethodsForEndpoint []string) 
 // the browser's CORS check fails for that specific header without leaking a
 // list of known-good names.
 //
-// On accept the function fires [op.AuditCORSPreflightAllowed] through
+// On accept the function fires op/audit.CORSPreflightAllowed through
 // the configured emitter so SOC tooling sees the short-circuit even
 // when the embedder's outer middleware (rate-limit, audit) is mounted
 // inside the CORS wrapper and would otherwise miss the request.

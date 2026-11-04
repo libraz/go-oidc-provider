@@ -301,7 +301,7 @@ func TestVerify_IssuerMismatch(t *testing.T) {
 // [tokens.ErrAccessTokenSignature], indistinguishable from an unknown
 // kid. The wire response the resource server emits is RFC 6750
 // invalid_token regardless, but the audit observer (wired in op.New)
-// still fires [op.AuditKeyRetiredKidPresented] so SOC tooling sees the
+// still fires op/audit.KeyRetiredKidPresented so SOC tooling sees the
 // post-rotation forge attempt.
 //
 // The test also checks the observer fires exactly once per Verify

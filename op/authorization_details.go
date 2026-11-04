@@ -5,7 +5,6 @@ import (
 	"strconv"
 
 	"github.com/libraz/go-oidc-provider/internal/authorizationdetails"
-	"github.com/libraz/go-oidc-provider/op/feature"
 	"github.com/libraz/go-oidc-provider/op/store"
 )
 
@@ -36,10 +35,10 @@ type AuthorizationDetailType struct {
 }
 
 // WithAuthorizationDetailTypes registers the authorization_details types
-// the OP accepts (RFC 9396). Enabling this implicitly turns on
-// [feature.RAR]: the authorization_details parameter becomes acceptable at
-// /authorize, /par, and /token, the granted details are persisted and
-// echoed on the token response and introspection, and discovery advertises
+// the OP accepts (RFC 9396). The
+// authorization_details parameter becomes acceptable at /authorize, /par,
+// and /token, the granted details are persisted and echoed on the token
+// response and introspection, and discovery advertises
 // authorization_details_types_supported.
 //
 // Validation:
@@ -69,9 +68,6 @@ func WithAuthorizationDetailTypes(types ...AuthorizationDetailType) Option {
 				return newConfigurationError("WithAuthorizationDetailTypes: duplicate type "+strconv.Quote(dt.Type), nil)
 			}
 			c.authorizationDetailTypes = append(c.authorizationDetailTypes, dt)
-		}
-		if !featureEnabled(c.features, feature.RAR) {
-			c.features = append(c.features, feature.RAR)
 		}
 		return nil
 	})

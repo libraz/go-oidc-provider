@@ -74,7 +74,7 @@ func buildProvider() (*op.Provider, error) {
 		// Register the French bundle on top of the seed en / ja
 		// bundles, then make French the fallback when no signal in
 		// the priority chain matches a registered locale.
-		op.WithLocale(french),
+		op.WithLocaleBundle(french),
 		op.WithDefaultLocale("fr"),
 		op.WithStaticClients(
 			op.PublicClient{

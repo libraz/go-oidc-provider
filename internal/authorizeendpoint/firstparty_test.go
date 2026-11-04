@@ -22,6 +22,7 @@ import (
 	"github.com/libraz/go-oidc-provider/internal/csrf"
 	"github.com/libraz/go-oidc-provider/internal/sessions"
 	"github.com/libraz/go-oidc-provider/op"
+	opaudit "github.com/libraz/go-oidc-provider/op/audit"
 	"github.com/libraz/go-oidc-provider/op/interaction"
 	"github.com/libraz/go-oidc-provider/op/store"
 	"github.com/libraz/go-oidc-provider/op/storeadapter/inmem"
@@ -914,7 +915,7 @@ func startFirstPartyInteraction(
 	if interactionCk == nil {
 		t.Fatal("interaction cookie missing")
 	}
-	if findRecordedAuditEvent(h.emitter.snapshot(), string(op.AuditConsentGrantedFirstParty)) != nil {
+	if findRecordedAuditEvent(h.emitter.snapshot(), string(opaudit.ConsentGrantedFirstParty)) != nil {
 		t.Fatal("first-party auto-grant audited at /authorize, before any subject was bound")
 	}
 	return interactionStart{
@@ -1002,9 +1003,9 @@ func assertFirstPartyLoginSkippedConsent(t *testing.T, h *firstPartyHarness, rr 
 	var autoGrants []audit.Event
 	for _, ev := range h.emitter.snapshot() {
 		switch ev.Name {
-		case string(op.AuditConsentGrantedFirstParty):
+		case string(opaudit.ConsentGrantedFirstParty):
 			autoGrants = append(autoGrants, ev)
-		case string(op.AuditConsentGranted):
+		case string(opaudit.ConsentGranted):
 			t.Errorf("ordinary consent grant audited for an auto-granted chain: %+v", ev)
 		}
 	}
@@ -1032,7 +1033,7 @@ func assertFirstPartyConsentPrompted(t *testing.T, h *firstPartyHarness, rr *htt
 	if prompt.Type != "consent.scope" {
 		t.Fatalf("prompt type=%q; want consent.scope", prompt.Type)
 	}
-	if ev := findRecordedAuditEvent(h.emitter.snapshot(), string(op.AuditConsentGrantedFirstParty)); ev != nil {
+	if ev := findRecordedAuditEvent(h.emitter.snapshot(), string(opaudit.ConsentGrantedFirstParty)); ev != nil {
 		t.Fatalf("first-party auto-grant audited: %+v", ev)
 	}
 }

@@ -1142,7 +1142,7 @@ func TestScenario_DPOP_029_IntrospectionSurfacesCnfJkt(t *testing.T) {
 func TestScenario_DPOP_030_DeviceCodeBindingConfidential(t *testing.T) {
 	t.Parallel()
 
-	f := newDPoPAsyncFixture(t, false, op.WithDeviceCodeGrant(),
+	f := newDPoPAsyncFixture(t, false, op.WithDeviceCodeGrant(op.DeviceCodeGrant{}),
 		devURNDeviceCode, "dpop-device-confidential")
 	status, initiated := f.post(t, "/oidc/device_authorization",
 		url.Values{"scope": {"openid"}}, "dpop-030-init")
@@ -1177,7 +1177,7 @@ func TestScenario_DPOP_030_DeviceCodeBindingConfidential(t *testing.T) {
 func TestScenario_DPOP_031_DeviceCodeBindingPublic(t *testing.T) {
 	t.Parallel()
 
-	f := newDPoPAsyncFixture(t, true, op.WithDeviceCodeGrant(),
+	f := newDPoPAsyncFixture(t, true, op.WithDeviceCodeGrant(op.DeviceCodeGrant{}),
 		devURNDeviceCode, "dpop-device-public")
 	status, initiated := f.post(t, "/oidc/device_authorization",
 		url.Values{"scope": {"openid"}}, "dpop-031-init")
@@ -1214,7 +1214,7 @@ func TestScenario_DPOP_032_CIBABindingConfidential(t *testing.T) {
 	t.Parallel()
 
 	f := newDPoPAsyncFixture(t, false,
-		op.WithCIBA(op.WithCIBAHintResolver(cibaHintResolver{})),
+		op.WithCIBAGrant(op.CIBAGrant{HintResolver: cibaHintResolver{}}),
 		cibaURNGrant, "dpop-ciba-confidential")
 	status, initiated := f.post(t, "/oidc/bc-authorize", url.Values{
 		"scope":      {"openid"},
@@ -1252,7 +1252,7 @@ func TestScenario_DPOP_033_CIBABindingPublic(t *testing.T) {
 	t.Parallel()
 
 	f := newDPoPAsyncFixture(t, true,
-		op.WithCIBA(op.WithCIBAHintResolver(cibaHintResolver{})),
+		op.WithCIBAGrant(op.CIBAGrant{HintResolver: cibaHintResolver{}}),
 		cibaURNGrant, "dpop-ciba-public")
 	status, initiated := f.post(t, "/oidc/bc-authorize", url.Values{
 		"scope":      {"openid"},

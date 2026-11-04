@@ -17,6 +17,7 @@ import (
 	"github.com/libraz/go-oidc-provider/internal/cookie"
 	"github.com/libraz/go-oidc-provider/internal/sessions"
 	"github.com/libraz/go-oidc-provider/op"
+	"github.com/libraz/go-oidc-provider/op/audit"
 	"github.com/libraz/go-oidc-provider/op/interaction"
 	"github.com/libraz/go-oidc-provider/op/store"
 	"github.com/libraz/go-oidc-provider/op/testkit"
@@ -147,10 +148,10 @@ func TestAuthorize_BeforeTokenInteractionGatesFirstPartyAutoGrant(t *testing.T) 
 		t.Errorf("Grant.ACR=%q want urn:test:acr:loa1 (copied from session)", g.ACR)
 	}
 	events := h.emitter.snapshot()
-	if findRecordedAuditEvent(events, string(op.AuditConsentGrantedFirstParty)) == nil {
+	if findRecordedAuditEvent(events, string(audit.ConsentGrantedFirstParty)) == nil {
 		t.Errorf("no first-party auto-grant audit event in %+v", events)
 	}
-	if findRecordedAuditEvent(events, string(op.AuditConsentGranted)) != nil {
+	if findRecordedAuditEvent(events, string(audit.ConsentGranted)) != nil {
 		t.Errorf("a consent.granted event was emitted for an auto-granted chain: %+v", events)
 	}
 }

@@ -197,7 +197,7 @@ func TestScenario_NA_014_RegistrationRejectsNonLoopbackHTTPRedirect(t *testing.T
 	t.Parallel()
 
 	tk := testkit.NewProvider(t,
-		testkit.WithOptions(op.WithDynamicRegistration(op.RegistrationOption{})),
+		testkit.WithOptions(op.WithDynamicRegistration(op.DynamicRegistration{})),
 	)
 	issued, err := tk.OP.IssueInitialAccessToken(context.Background(), op.InitialAccessTokenSpec{})
 	if err != nil {
@@ -258,7 +258,7 @@ func TestScenario_NA_015_RegistrationRejectsNonLoopbackHTTPPostLogout(t *testing
 	t.Parallel()
 
 	tk := testkit.NewProvider(t,
-		testkit.WithOptions(op.WithDynamicRegistration(op.RegistrationOption{})),
+		testkit.WithOptions(op.WithDynamicRegistration(op.DynamicRegistration{})),
 	)
 	issued, err := tk.OP.IssueInitialAccessToken(context.Background(), op.InitialAccessTokenSpec{})
 	if err != nil {

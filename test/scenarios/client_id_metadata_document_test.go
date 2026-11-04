@@ -1837,7 +1837,7 @@ func TestScenario_CIMD_FLOW_05_TokenEndpointResolvesCIMD(t *testing.T) {
 
 func TestScenario_CIMD_FLOW_06_TokenExchangeUnauthorized(t *testing.T) {
 	t.Parallel()
-	e := newCDEnv(t, cdCfg{extra: []op.Option{op.WithTokenExchange(cdAllowAllExchange{})}})
+	e := newCDEnv(t, cdCfg{extra: []op.Option{op.WithTokenExchangeGrant(op.TokenExchangeGrant{Policy: cdAllowAllExchange{}})}})
 	_, id := newDoc(t, func(string) map[string]any {
 		return map[string]any{"grant_types": []string{"authorization_code", op.TokenExchangeGrantType}}
 	})

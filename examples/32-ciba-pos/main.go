@@ -2,7 +2,7 @@
 
 // Example 32-ciba-pos demonstrates a complete OpenID Connect Client-
 // Initiated Backchannel Authentication Flow (CIBA Core 1.0) round-trip
-// in poll mode: an OP with [op.WithCIBA] enabled, a [op.HintResolver]
+// in poll mode: an OP with [op.WithCIBAGrant] enabled, a [op.HintResolver]
 // that maps a login_hint to a stable subject, and an in-process
 // Relying Party that posts to /bc-authorize, simulates the embedder's
 // authentication device approving the request, and polls /token until
@@ -22,7 +22,7 @@
 //   - main.go   — entrypoint, package godoc, the high-level
 //     orchestration sequence (build → listen → bc-authorize →
 //     device approve → poll → decode).
-//   - op.go     — OP-side wiring: buildProvider with [op.WithCIBA]
+//   - op.go     — OP-side wiring: buildProvider with [op.WithCIBAGrant]
 //     enabled and the demo HintResolver.
 //   - rp.go     — POS-terminal-side RP: bc-authorize POST, polling
 //     loop with §10.1 retry classification, and id_token decode.

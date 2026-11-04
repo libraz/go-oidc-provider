@@ -57,7 +57,7 @@ func (l Level) slogLevel() slog.Level {
 type Event struct {
 	// Name is the canonical event identifier (e.g. "login.success",
 	// "dcr.client.registered"). internal/auditevent owns the closed
-	// vocabulary and op.AuditEventCatalog projects it publicly;
+	// vocabulary and op/audit.Catalog projects it publicly;
 	// handlers MUST select from that list.
 	Name string
 

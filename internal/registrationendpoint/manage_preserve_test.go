@@ -30,7 +30,7 @@ func TestManagePUT_PreviousSecret(t *testing.T) {
 	seeded := func(t *testing.T, method string) (*dcrFixture, dcrCreated) {
 		t.Helper()
 		ctx := context.Background()
-		f := newFixture(t, op.RegistrationOption{})
+		f := newFixture(t, op.DynamicRegistration{})
 		created := f.register(t, map[string]any{
 			"redirect_uris":              []string{callback},
 			"token_endpoint_auth_method": method,
@@ -167,7 +167,7 @@ func TestManage_Update_KeepsOperatorConfiguration(t *testing.T) {
 	t.Parallel()
 
 	ctx := context.Background()
-	f := newFixture(t, op.RegistrationOption{})
+	f := newFixture(t, op.DynamicRegistration{})
 	created := f.register(t, nil)
 
 	configured, err := f.prov.Store.GetClient(ctx, created.clientID)

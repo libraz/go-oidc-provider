@@ -484,7 +484,7 @@ func TestScenario_DIS_033_WebMessageResponseModeAdvertisedWhenOn(t *testing.T) {
 func TestScenario_DIS_034_DeviceAuthorizationEndpointWhenDeviceOn(t *testing.T) {
 	t.Parallel()
 
-	on := testkit.NewProvider(t, testkit.WithOptions(op.WithDeviceCodeGrant()))
+	on := testkit.NewProvider(t, testkit.WithOptions(op.WithDeviceCodeGrant(op.DeviceCodeGrant{})))
 	_, _, doc := fetchDiscovery(t, on.Server.URL)
 
 	deviceURL, ok := doc["device_authorization_endpoint"].(string)
@@ -719,15 +719,15 @@ func TestScenario_DIS_042_AdvertisedEndpointsAreRouted(t *testing.T) {
 	}
 
 	p := testkit.NewProvider(t, testkit.WithOptions(
-		op.WithDeviceCodeGrant(),
+		op.WithDeviceCodeGrant(op.DeviceCodeGrant{}),
 		op.WithFeature(feature.PAR),
 		op.WithFeature(feature.JAR),
 		op.WithFeature(feature.JARM),
 		op.WithFeature(feature.Introspect),
 		op.WithFeature(feature.Revoke),
 		op.WithFeature(feature.MTLS),
-		op.WithDynamicRegistration(op.RegistrationOption{}),
-		op.WithCIBA(op.WithCIBAHintResolver(cibaHintResolver{})),
+		op.WithDynamicRegistration(op.DynamicRegistration{}),
+		op.WithCIBAGrant(op.CIBAGrant{HintResolver: cibaHintResolver{}}),
 		op.WithGrantManagement(op.GrantManagement{Actions: []op.GrantManagementAction{
 			op.GrantActionCreate, op.GrantActionQuery, op.GrantActionRevoke,
 		}}),

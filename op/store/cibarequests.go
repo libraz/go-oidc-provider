@@ -232,7 +232,7 @@ type CIBARequest struct {
 //
 // Backends that have not yet provisioned the substore MAY fail to
 // satisfy [Store.CIBARequests]; the library detects nil at op.New and
-// rejects op.WithCIBA when the substore is missing.
+// rejects op.WithCIBAGrant when the substore is missing.
 type CIBARequestStore interface {
 	// Save persists a freshly created CIBA record. Backends MUST hash
 	// [CIBARequest.ID] before persisting it (see the type godoc) and

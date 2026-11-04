@@ -18,7 +18,7 @@ import (
 )
 
 // Audit event names. Values come from the same registry as the public
-// op.AuditCustomGrant* constants.
+// op/audit.CustomGrant* constants.
 const (
 	AuditEventRequested = string(auditevent.AuditCustomGrantRequested)
 	AuditEventFailed    = string(auditevent.AuditCustomGrantFailed)

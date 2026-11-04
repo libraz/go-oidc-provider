@@ -94,7 +94,7 @@ func TestRegister_SignedResponseAlgNamesTheShapeTheOPServes(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			f := newFixture(t, op.RegistrationOption{})
+			f := newFixture(t, op.DynamicRegistration{})
 			_, iat := f.issueIAT(t, op.InitialAccessTokenSpec{})
 
 			resp := f.post(t, tc.body, iat)
@@ -122,7 +122,7 @@ func TestRegister_SignedResponseAlgNamesTheShapeTheOPServes(t *testing.T) {
 func TestManage_Update_RefusesJARMSigningAlgTheOPWillNotUse(t *testing.T) {
 	t.Parallel()
 
-	f := newFixture(t, op.RegistrationOption{})
+	f := newFixture(t, op.DynamicRegistration{})
 	created := f.register(t, nil)
 
 	body := minimalMetadata()

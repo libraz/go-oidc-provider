@@ -178,7 +178,7 @@ type DiscoveryMetadata struct {
 	// RFC 8414 §2 "ui_locales_supported"). Nil and empty are
 	// equivalent — when omitted, the discovery builder falls back to
 	// every locale registered with the runtime resolver (seed
-	// bundles plus [WithLocale] additions). An explicit non-empty
+	// bundles plus [WithLocaleBundle] additions). An explicit non-empty
 	// list overrides the auto-derivation, so embedders that ship a
 	// bundle for internal use without exposing it to RPs can keep the
 	// shorter wire-form.

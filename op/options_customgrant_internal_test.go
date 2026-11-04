@@ -65,8 +65,8 @@ func TestBuiltinGrantTypeWires_CoversEveryInTreeExtensionGrant(t *testing.T) {
 	t.Parallel()
 
 	cfg := &config{}
-	if err := WithTokenExchange(stubTokenExchangePolicy{}).apply(cfg); err != nil {
-		t.Fatalf("WithTokenExchange: %v", err)
+	if err := WithTokenExchangeGrant(TokenExchangeGrant{Policy: stubTokenExchangePolicy{}}).apply(cfg); err != nil {
+		t.Fatalf("WithTokenExchangeGrant: %v", err)
 	}
 	names := customGrantNamesFor(cfg)
 	if len(names) == 0 {

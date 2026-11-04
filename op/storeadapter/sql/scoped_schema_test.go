@@ -294,17 +294,17 @@ func scopedCases() []scopedCase {
 		},
 		{
 			name: "dcr", tags: []string{"dcr"}, tables: []string{"initial_access_tokens", "registration_access_tokens"},
-			on: withDefault(op.WithDynamicRegistration(op.RegistrationOption{})), off: scopedDefault,
+			on: withDefault(op.WithDynamicRegistration(op.DynamicRegistration{})), off: scopedDefault,
 		},
 		{
 			name: "device_code", tags: []string{"grant:device_code"}, tables: []string{"device_codes"},
-			on: withDefault(op.WithDeviceCodeGrant()), off: scopedDefault,
+			on: withDefault(op.WithDeviceCodeGrant(op.DeviceCodeGrant{})), off: scopedDefault,
 		},
 		{
 			name: "ciba", tags: []string{"grant:ciba"}, tables: []string{"ciba_requests"},
-			on: withDefault(op.WithCIBA(op.WithCIBAHintResolver(op.HintResolverFunc(
+			on: withDefault(op.WithCIBAGrant(op.CIBAGrant{HintResolver: op.HintResolverFunc(
 				func(context.Context, op.HintKind, string) (string, error) { return scopedSubject, nil },
-			)))),
+			)})),
 			off: scopedDefault,
 		},
 		{

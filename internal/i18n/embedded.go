@@ -14,7 +14,7 @@ var embeddedFS embed.FS
 // and ja, both complete since v1.0 so an embedder gets a working
 // bilingual OP without registering anything. Embedders that
 // want to override an entry register their own bundle for the same
-// [Tag] through [op.WithLocale]; the registration order in
+// [Tag] through [op.WithLocaleBundle]; the registration order in
 // [NewResolver] determines which copy wins.
 func DefaultBundles() ([]*Bundle, error) {
 	tags := []Tag{English, Japanese}

@@ -17,9 +17,7 @@ import (
 // auto-enable contract [WithProfile] introduced so an embedder may write
 // `WithProfile(FAPI2Baseline)` plus `WithFeature(feature.PAR)` —
 // either order, before or after — without the second call failing
-// because the profile already activated the flag. The one exception is
-// [feature.DynamicRegistration]: [WithDynamicRegistration] owns that flag,
-// so passing it to WithFeature as well fails [New] in either order.
+// because the profile already activated the flag.
 // Stable since v1.0.
 func WithFeature(f feature.Flag) Option {
 	return optionFunc(func(c *config) error {

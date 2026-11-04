@@ -19,6 +19,7 @@ import (
 	"testing"
 
 	"github.com/libraz/go-oidc-provider/op"
+	opaudit "github.com/libraz/go-oidc-provider/op/audit"
 	"github.com/libraz/go-oidc-provider/op/store"
 	"github.com/libraz/go-oidc-provider/op/testkit"
 	"github.com/libraz/go-oidc-provider/test/scenarios/internal/scenariokit"
@@ -171,7 +172,7 @@ func TestScenario_RM_PUT_01_RequiresBearerRAT(t *testing.T) {
 	t.Parallel()
 
 	tk := testkit.NewProvider(t,
-		testkit.WithOptions(op.WithDynamicRegistration(op.RegistrationOption{})),
+		testkit.WithOptions(op.WithDynamicRegistration(op.DynamicRegistration{})),
 	)
 	created := rmRegisterClient(t, tk, nil)
 
@@ -204,7 +205,7 @@ func TestScenario_RM_PUT_02_InvalidRATIs401(t *testing.T) {
 	t.Parallel()
 
 	tk := testkit.NewProvider(t,
-		testkit.WithOptions(op.WithDynamicRegistration(op.RegistrationOption{})),
+		testkit.WithOptions(op.WithDynamicRegistration(op.DynamicRegistration{})),
 	)
 	created := rmRegisterClient(t, tk, nil)
 
@@ -234,7 +235,7 @@ func TestScenario_RM_PUT_03_SuccessReturns200NoStore(t *testing.T) {
 	t.Parallel()
 
 	tk := testkit.NewProvider(t,
-		testkit.WithOptions(op.WithDynamicRegistration(op.RegistrationOption{})),
+		testkit.WithOptions(op.WithDynamicRegistration(op.DynamicRegistration{})),
 	)
 	created := rmRegisterClient(t, tk, nil)
 
@@ -262,7 +263,7 @@ func TestScenario_RM_PUT_04_ResponseBodyShape(t *testing.T) {
 	t.Parallel()
 
 	tk := testkit.NewProvider(t,
-		testkit.WithOptions(op.WithDynamicRegistration(op.RegistrationOption{})),
+		testkit.WithOptions(op.WithDynamicRegistration(op.DynamicRegistration{})),
 	)
 	created := rmRegisterClient(t, tk, map[string]any{
 		"redirect_uris":              []string{"https://rp.test.invalid/cb"},
@@ -347,7 +348,7 @@ func rmAssertForbiddenField(t *testing.T, field string, value any, wantDescripti
 	t.Helper()
 
 	tk := testkit.NewProvider(t,
-		testkit.WithOptions(op.WithDynamicRegistration(op.RegistrationOption{})),
+		testkit.WithOptions(op.WithDynamicRegistration(op.DynamicRegistration{})),
 	)
 	created := rmRegisterClient(t, tk, nil)
 
@@ -379,7 +380,7 @@ func TestScenario_RM_PUT_09_OmittedPropertyIsDeleted(t *testing.T) {
 	t.Parallel()
 
 	tk := testkit.NewProvider(t,
-		testkit.WithOptions(op.WithDynamicRegistration(op.RegistrationOption{})),
+		testkit.WithOptions(op.WithDynamicRegistration(op.DynamicRegistration{})),
 	)
 	created := rmRegisterClient(t, tk, map[string]any{
 		"redirect_uris": []string{"https://rp.test.invalid/cb"},
@@ -410,7 +411,7 @@ func TestScenario_RM_PUT_10_NullSecretRejected(t *testing.T) {
 	t.Parallel()
 
 	tk := testkit.NewProvider(t,
-		testkit.WithOptions(op.WithDynamicRegistration(op.RegistrationOption{})),
+		testkit.WithOptions(op.WithDynamicRegistration(op.DynamicRegistration{})),
 	)
 	created := rmRegisterClient(t, tk, map[string]any{
 		"redirect_uris":              []string{"https://rp.test.invalid/cb"},
@@ -446,7 +447,7 @@ func TestScenario_RM_PUT_11_AuthMethodSwitchMintsSecret(t *testing.T) {
 	t.Parallel()
 
 	tk := testkit.NewProvider(t,
-		testkit.WithOptions(op.WithDynamicRegistration(op.RegistrationOption{})),
+		testkit.WithOptions(op.WithDynamicRegistration(op.DynamicRegistration{})),
 	)
 	created := rmRegisterClient(t, tk, map[string]any{
 		"redirect_uris":              []string{"https://rp.test.invalid/cb"},
@@ -491,7 +492,7 @@ func TestScenario_RM_PUT_12_RATRotationDestroysOld(t *testing.T) {
 	t.Parallel()
 
 	tk := testkit.NewProvider(t,
-		testkit.WithOptions(op.WithDynamicRegistration(op.RegistrationOption{})),
+		testkit.WithOptions(op.WithDynamicRegistration(op.DynamicRegistration{})),
 	)
 	created := rmRegisterClient(t, tk, nil)
 
@@ -538,14 +539,14 @@ func TestScenario_RM_PUT_13_EntitiesCarryRotationPair(t *testing.T) {
 // PUT emits the dcr.client.metadata_updated audit event carrying the
 // updated client_id.
 //
-// Spec: OP audit catalogue (op.AuditDCRClientMetadataUpdated).
+// Spec: OP audit catalogue (opaudit.DCRClientMetadataUpdated).
 func TestScenario_RM_PUT_14_UpdateAuditEmitted(t *testing.T) {
 	t.Parallel()
 
 	audit := scenariokit.NewAuditCapture()
 	tk := testkit.NewProvider(t,
 		testkit.WithOptions(
-			op.WithDynamicRegistration(op.RegistrationOption{}),
+			op.WithDynamicRegistration(op.DynamicRegistration{}),
 			op.WithAuditLogger(audit.Logger()),
 		),
 	)
@@ -560,7 +561,7 @@ func TestScenario_RM_PUT_14_UpdateAuditEmitted(t *testing.T) {
 		t.Fatalf("status=%d want 200 body=%s", resp.StatusCode, raw)
 	}
 
-	events := audit.EventsByName(string(op.AuditDCRClientMetadataUpdated))
+	events := audit.EventsByName(string(opaudit.DCRClientMetadataUpdated))
 	if len(events) != 1 {
 		t.Fatalf("dcr.client.metadata_updated emissions=%d want 1 (events=%v)", len(events), audit.Events())
 	}
@@ -577,7 +578,7 @@ func TestScenario_RM_PUT_15_StaticClientForbidden(t *testing.T) {
 	t.Parallel()
 
 	tk := testkit.NewProvider(t,
-		testkit.WithOptions(op.WithDynamicRegistration(op.RegistrationOption{})),
+		testkit.WithOptions(op.WithDynamicRegistration(op.DynamicRegistration{})),
 	)
 	staticClient := tk.RegisterClient(t, testkit.ClientFixture{
 		ID:           "rm-static-put",
@@ -613,7 +614,7 @@ func TestScenario_RM_PUT_16_ValidationFailsAsClientMetadata(t *testing.T) {
 	t.Parallel()
 
 	tk := testkit.NewProvider(t,
-		testkit.WithOptions(op.WithDynamicRegistration(op.RegistrationOption{})),
+		testkit.WithOptions(op.WithDynamicRegistration(op.DynamicRegistration{})),
 	)
 	created := rmRegisterClient(t, tk, nil)
 
@@ -642,7 +643,7 @@ func TestScenario_RM_PUT_17_ClientIDMismatchRejected(t *testing.T) {
 	t.Parallel()
 
 	tk := testkit.NewProvider(t,
-		testkit.WithOptions(op.WithDynamicRegistration(op.RegistrationOption{})),
+		testkit.WithOptions(op.WithDynamicRegistration(op.DynamicRegistration{})),
 	)
 	created := rmRegisterClient(t, tk, nil)
 
@@ -674,7 +675,7 @@ func TestScenario_RM_DEL_01_RequiresRAT(t *testing.T) {
 	t.Parallel()
 
 	tk := testkit.NewProvider(t,
-		testkit.WithOptions(op.WithDynamicRegistration(op.RegistrationOption{})),
+		testkit.WithOptions(op.WithDynamicRegistration(op.DynamicRegistration{})),
 	)
 	created := rmRegisterClient(t, tk, nil)
 
@@ -713,7 +714,7 @@ func TestScenario_RM_DEL_02_SuccessReturns204(t *testing.T) {
 	t.Parallel()
 
 	tk := testkit.NewProvider(t,
-		testkit.WithOptions(op.WithDynamicRegistration(op.RegistrationOption{})),
+		testkit.WithOptions(op.WithDynamicRegistration(op.DynamicRegistration{})),
 	)
 	created := rmRegisterClient(t, tk, nil)
 
@@ -739,7 +740,7 @@ func TestScenario_RM_DEL_03_RATDestroyedOnSuccess(t *testing.T) {
 	t.Parallel()
 
 	tk := testkit.NewProvider(t,
-		testkit.WithOptions(op.WithDynamicRegistration(op.RegistrationOption{})),
+		testkit.WithOptions(op.WithDynamicRegistration(op.DynamicRegistration{})),
 	)
 	created := rmRegisterClient(t, tk, nil)
 
@@ -770,7 +771,7 @@ func TestScenario_RM_DEL_03_RATDestroyedOnSuccess(t *testing.T) {
 // embedders maintain those indexes through the hook.
 //
 // Spec: RFC 7592 §2.3 / OIDC Core §16.21; v1.0 design
-// (RegistrationOption.OnClientDeleted).
+// (DynamicRegistration.OnClientDeleted).
 func TestScenario_RM_DEL_04_AssociatedTokensInvalidated(t *testing.T) {
 	t.Parallel()
 
@@ -783,7 +784,7 @@ func TestScenario_RM_DEL_04_AssociatedTokensInvalidated(t *testing.T) {
 	}
 
 	tk := testkit.NewProvider(t,
-		testkit.WithOptions(op.WithDynamicRegistration(op.RegistrationOption{
+		testkit.WithOptions(op.WithDynamicRegistration(op.DynamicRegistration{
 			OnClientDeleted: hook,
 		})),
 	)
@@ -816,7 +817,7 @@ func TestScenario_RM_DEL_05_StaticClientForbidden(t *testing.T) {
 	t.Parallel()
 
 	tk := testkit.NewProvider(t,
-		testkit.WithOptions(op.WithDynamicRegistration(op.RegistrationOption{})),
+		testkit.WithOptions(op.WithDynamicRegistration(op.DynamicRegistration{})),
 	)
 	staticClient := tk.RegisterClient(t, testkit.ClientFixture{
 		ID:           "rm-static-del",
@@ -848,14 +849,14 @@ func TestScenario_RM_DEL_05_StaticClientForbidden(t *testing.T) {
 // TestScenario_RM_DEL_06_DeleteAuditEmitted checks that DELETE emits
 // the dcr.client.deleted audit event carrying the deleted client_id.
 //
-// Spec: OP audit catalogue (op.AuditDCRClientDeleted).
+// Spec: OP audit catalogue (opaudit.DCRClientDeleted).
 func TestScenario_RM_DEL_06_DeleteAuditEmitted(t *testing.T) {
 	t.Parallel()
 
 	audit := scenariokit.NewAuditCapture()
 	tk := testkit.NewProvider(t,
 		testkit.WithOptions(
-			op.WithDynamicRegistration(op.RegistrationOption{}),
+			op.WithDynamicRegistration(op.DynamicRegistration{}),
 			op.WithAuditLogger(audit.Logger()),
 		),
 	)
@@ -868,7 +869,7 @@ func TestScenario_RM_DEL_06_DeleteAuditEmitted(t *testing.T) {
 		t.Fatalf("status=%d want 204 body=%s", resp.StatusCode, raw)
 	}
 
-	events := audit.EventsByName(string(op.AuditDCRClientDeleted))
+	events := audit.EventsByName(string(opaudit.DCRClientDeleted))
 	if len(events) != 1 {
 		t.Fatalf("dcr.client.deleted emissions=%d want 1", len(events))
 	}
@@ -898,7 +899,7 @@ func TestScenario_RM_EVT_01_RotationEmitsSavedAndDestroyed(t *testing.T) {
 	audit := scenariokit.NewAuditCapture()
 	tk := testkit.NewProvider(t,
 		testkit.WithOptions(
-			op.WithDynamicRegistration(op.RegistrationOption{}),
+			op.WithDynamicRegistration(op.DynamicRegistration{}),
 			op.WithAuditLogger(audit.Logger()),
 		),
 	)
@@ -913,7 +914,7 @@ func TestScenario_RM_EVT_01_RotationEmitsSavedAndDestroyed(t *testing.T) {
 		t.Fatalf("PUT status=%d want 200 body=%s", resp.StatusCode, raw)
 	}
 
-	updated := audit.EventsByName(string(op.AuditDCRClientMetadataUpdated))
+	updated := audit.EventsByName(string(opaudit.DCRClientMetadataUpdated))
 	if len(updated) != 1 {
 		t.Fatalf("dcr.client.metadata_updated emissions=%d want 1", len(updated))
 	}
@@ -926,7 +927,7 @@ func TestScenario_RM_EVT_01_RotationEmitsSavedAndDestroyed(t *testing.T) {
 	if stale.StatusCode != http.StatusUnauthorized {
 		t.Fatalf("stale RAT GET status=%d want 401", stale.StatusCode)
 	}
-	invalid := audit.EventsByName(string(op.AuditDCRRATInvalid))
+	invalid := audit.EventsByName(string(opaudit.DCRRATInvalid))
 	if len(invalid) < 1 {
 		t.Fatalf("dcr.rat.invalid emissions=%d want >=1 after stale RAT use", len(invalid))
 	}
@@ -952,7 +953,7 @@ func TestScenario_RM_RAT_01_CrossClientRATRejectedNotDestroyed(t *testing.T) {
 	t.Parallel()
 
 	tk := testkit.NewProvider(t,
-		testkit.WithOptions(op.WithDynamicRegistration(op.RegistrationOption{})),
+		testkit.WithOptions(op.WithDynamicRegistration(op.DynamicRegistration{})),
 	)
 	clientA := rmRegisterClient(t, tk, nil)
 	clientB := rmRegisterClient(t, tk, nil)
@@ -991,7 +992,7 @@ func TestScenario_RM_RAT_02_RATPersistedWithUniqueJTI(t *testing.T) {
 	t.Parallel()
 
 	tk := testkit.NewProvider(t,
-		testkit.WithOptions(op.WithDynamicRegistration(op.RegistrationOption{})),
+		testkit.WithOptions(op.WithDynamicRegistration(op.DynamicRegistration{})),
 	)
 	created := rmRegisterClient(t, tk, nil)
 
@@ -1021,7 +1022,7 @@ func TestScenario_RM_RAT_03_RATIsOpaqueToken(t *testing.T) {
 	t.Parallel()
 
 	tk := testkit.NewProvider(t,
-		testkit.WithOptions(op.WithDynamicRegistration(op.RegistrationOption{})),
+		testkit.WithOptions(op.WithDynamicRegistration(op.DynamicRegistration{})),
 	)
 	created := rmRegisterClient(t, tk, nil)
 

@@ -114,7 +114,7 @@ type SessionDurabilityReporter interface {
 // between establishment and /end_session silently removes the rows
 // the back-channel coordinator would walk, narrowing OIDC
 // Back-Channel Logout 1.0 §2.7's best-effort floor to zero. The
-// [github.com/libraz/go-oidc-provider/op.AuditBCLNoSessionsForSubject]
+// [github.com/libraz/go-oidc-provider/op/audit.BCLNoSessionsForSubject]
 // audit event surfaces the gap when it actually fires; declare
 // the chosen posture through
 // [github.com/libraz/go-oidc-provider/op.WithSessionDurabilityPosture]

@@ -19,7 +19,7 @@ import (
 )
 
 // Audit event names sourced from the typed registry that backs the public
-// op.AuditEvent catalog.
+// op/audit.Event catalog.
 const (
 	auditIntrospectionError = string(auditevent.AuditIntrospectionError)
 )

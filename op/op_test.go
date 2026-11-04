@@ -80,7 +80,7 @@ func (stubStore) Metadata() store.MetadataStore { return nil }
 func (stubStore) DeviceCodes() store.DeviceCodeStore { return nil }
 
 // CIBARequests returns nil; construction tests do not enable CIBA, so
-// the library never exercises this path. op.New rejects op.WithCIBA
+// the library never exercises this path. op.New rejects op.WithCIBAGrant
 // when the substore is missing.
 func (stubStore) CIBARequests() store.CIBARequestStore { return nil }
 

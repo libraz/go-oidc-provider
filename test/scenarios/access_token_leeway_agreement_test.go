@@ -28,6 +28,7 @@ import (
 
 	"github.com/libraz/go-oidc-provider/internal/tokens"
 	"github.com/libraz/go-oidc-provider/op"
+	"github.com/libraz/go-oidc-provider/op/audit"
 	"github.com/libraz/go-oidc-provider/op/feature"
 	"github.com/libraz/go-oidc-provider/op/store"
 	"github.com/libraz/go-oidc-provider/test/scenarios/internal/scenariokit"
@@ -212,9 +213,9 @@ func probeAllSurfaces(t *testing.T, p *txProvider, capture *scenariokit.AuditCap
 	// §2.2 forbids leaking the failure mode through the status), so the
 	// audit trail is the only place its answer is visible: the revoked
 	// event fires exactly when the token verified.
-	before := len(capture.EventsByName(string(op.AuditTokenRevoked)))
+	before := len(capture.EventsByName(string(audit.TokenRevoked)))
 	postRevoke(t, p.tk, token, txCallerID, txClientSecret)
-	out.Revoke = len(capture.EventsByName(string(op.AuditTokenRevoked))) > before
+	out.Revoke = len(capture.EventsByName(string(audit.TokenRevoked))) > before
 
 	return out
 }

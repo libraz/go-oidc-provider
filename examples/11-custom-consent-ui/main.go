@@ -11,7 +11,7 @@
 // Localization is not one of them. ConsentTemplateData carries no
 // locale and no message bundle, so the template renders one fixed
 // language. The two paths that do see the
-// OP's chosen locale today are [op.WithLocale] over the built-in
+// OP's chosen locale today are [op.WithLocaleBundle] over the built-in
 // consent screen, and a full [op.DriverUI] driver, which
 // receives it on Prompt.Locale. For surfaces outside the ceremony
 // (emails, out-of-band pages) the resolver is reachable through

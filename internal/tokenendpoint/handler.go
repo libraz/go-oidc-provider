@@ -26,7 +26,7 @@ import (
 )
 
 // Audit event names sourced from the typed registry that backs the public
-// op.AuditEvent catalog.
+// op/audit.Event catalog.
 const (
 	auditTokenIssued                         = string(auditevent.AuditTokenIssued)
 	auditTokenRefreshed                      = string(auditevent.AuditTokenRefreshed)
@@ -489,7 +489,7 @@ type Deps struct {
 	// before issuing credentials. A nil value disables the CIBA grant
 	// entirely: requests arriving with grant_type=urn:openid:params:
 	// grant-type:ciba are rejected with unsupported_grant_type. The
-	// op-layer wiring guards op.WithCIBA against the nil-substore case
+	// op-layer wiring guards op.WithCIBAGrant against the nil-substore case
 	// at construction time so a deployment that opts into the grant
 	// cannot reach the runtime nil-check.
 	CIBARequests store.CIBARequestStore

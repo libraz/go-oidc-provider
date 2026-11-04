@@ -3,7 +3,7 @@ package ciba
 import "github.com/libraz/go-oidc-provider/internal/auditevent"
 
 // Audit event names emitted across the CIBA flow. Values come from the shared
-// typed registry that also backs op.AuditCIBA*.
+// typed registry that also backs op/audit.CIBA*.
 //
 // The names group by surface:
 //

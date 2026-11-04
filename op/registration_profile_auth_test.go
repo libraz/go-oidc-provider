@@ -26,7 +26,7 @@ func TestIntegration_DCR_FAPI2_RefusesAuthMethodsOutsideProfile(t *testing.T) {
 	clock := dcrFixedClock()
 	provider, err := op.New(append(dcrBaseOpts(t, inmem.New(inmem.WithClock(clock)), clock),
 		op.WithProfile(profile.FAPI2Baseline),
-		op.WithDynamicRegistration(op.RegistrationOption{}),
+		op.WithDynamicRegistration(op.DynamicRegistration{}),
 	)...)
 	if err != nil {
 		t.Fatalf("op.New: %v", err)
@@ -101,7 +101,7 @@ func TestIntegration_FAPI2_ClientSigningAlgsAgreeAcrossSurfaces(t *testing.T) {
 	provider, err := op.New(append(dcrBaseOpts(t, inmem.New(inmem.WithClock(clock)), clock),
 		op.WithProfile(profile.FAPI2Baseline),
 		op.WithFeature(feature.JAR),
-		op.WithDynamicRegistration(op.RegistrationOption{}),
+		op.WithDynamicRegistration(op.DynamicRegistration{}),
 	)...)
 	if err != nil {
 		t.Fatalf("op.New: %v", err)

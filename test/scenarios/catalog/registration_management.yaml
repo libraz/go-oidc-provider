@@ -167,7 +167,7 @@ rows:
     spec: OP audit
     behaviour: |
       A dcr.client.metadata_updated audit event
-      (op.AuditDCRClientMetadataUpdated) is emitted on every
+      (audit.DCRClientMetadataUpdated) is emitted on every
       successful PUT /register/{client_id} carrying the client_id of
       the updated record.
     status: active
@@ -233,7 +233,7 @@ rows:
     spec: RFC 7592 §2.3 / OIDC Core §16.21
     behaviour: |
       The client record is destroyed and the OnClientDeleted cascade
-      hook (op.RegistrationOption.OnClientDeleted) is invoked with
+      hook (op.DynamicRegistration.OnClientDeleted) is invoked with
       the deleted client_id. v1.0's store interfaces do not publish
       a "by client" enumeration, so the library does NOT cascade
       access-token / refresh-token / session destruction itself —
@@ -253,7 +253,7 @@ rows:
     severity: P1
     spec: OP audit
     behaviour: |
-      A dcr.client.deleted audit event (op.AuditDCRClientDeleted) is
+      A dcr.client.deleted audit event (audit.DCRClientDeleted) is
       emitted on every successful DELETE /register/{client_id}
       carrying the deleted client_id.
     status: active

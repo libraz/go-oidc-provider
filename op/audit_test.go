@@ -9,29 +9,30 @@ import (
 	"time"
 
 	"github.com/libraz/go-oidc-provider/op"
+	"github.com/libraz/go-oidc-provider/op/audit"
 )
 
 func TestAuditEventCatalog_ContainsOperationalAndCustomGrantEvents(t *testing.T) {
 	t.Parallel()
 
-	want := map[op.AuditEvent]bool{
-		op.AuditSessionAlreadyAbsent:                    false,
-		op.AuditSessionDestroyFailed:                    false,
-		op.AuditLogoutTokenRevokeFailed:                 false,
-		op.AuditLogoutBackChannelResolveFailed:          false,
-		op.AuditLogoutBackChannelOverflow:               false,
-		op.AuditDCRCascadeRefreshRevokeFailed:           false,
-		op.AuditDCRCascadeGrantRevokeFailed:             false,
-		op.AuditDCRCascadeAccessTokenRevokeFailed:       false,
-		op.AuditDCRCascadeOpaqueAccessTokenRevokeFailed: false,
-		op.AuditGrantManagementRevokeFailed:             false,
-		op.AuditRefreshPriorAccessTokenRevokeFailed:     false,
-		op.AuditCustomGrantRequested:                    false,
-		op.AuditCustomGrantFailed:                       false,
-		op.AuditCustomGrantRefreshDropped:               false,
+	want := map[audit.Event]bool{
+		audit.SessionAlreadyAbsent:                    false,
+		audit.SessionDestroyFailed:                    false,
+		audit.LogoutTokenRevokeFailed:                 false,
+		audit.LogoutBackChannelResolveFailed:          false,
+		audit.LogoutBackChannelOverflow:               false,
+		audit.DCRCascadeRefreshRevokeFailed:           false,
+		audit.DCRCascadeGrantRevokeFailed:             false,
+		audit.DCRCascadeAccessTokenRevokeFailed:       false,
+		audit.DCRCascadeOpaqueAccessTokenRevokeFailed: false,
+		audit.GrantManagementRevokeFailed:             false,
+		audit.RefreshPriorAccessTokenRevokeFailed:     false,
+		audit.CustomGrantRequested:                    false,
+		audit.CustomGrantFailed:                       false,
+		audit.CustomGrantRefreshDropped:               false,
 	}
-	seen := make(map[op.AuditEvent]struct{}, len(op.AuditEventCatalog()))
-	for _, definition := range op.AuditEventCatalog() {
+	seen := make(map[audit.Event]struct{}, len(audit.Catalog()))
+	for _, definition := range audit.Catalog() {
 		if _, duplicate := seen[definition.Event]; duplicate {
 			t.Fatalf("duplicate public audit event %q", definition.Event)
 		}
@@ -47,7 +48,7 @@ func TestAuditEventCatalog_ContainsOperationalAndCustomGrantEvents(t *testing.T)
 	}
 }
 
-// TestAuditEvent_BCLMirror keeps the public op.AuditBCLNoSessionsForSubject
+// TestAuditEvent_BCLMirror keeps the public audit.BCLNoSessionsForSubject
 // constant aligned with the raw string that
 // internal/backchannel/coordinator.go emits. Same drift-guard pattern
 // as TestAuditEvent_DCRMirror: the internal package cannot import op
@@ -56,8 +57,8 @@ func TestAuditEventCatalog_ContainsOperationalAndCustomGrantEvents(t *testing.T)
 func TestAuditEvent_BCLMirror(t *testing.T) {
 	t.Parallel()
 
-	want := map[string]op.AuditEvent{
-		"bcl.no_sessions_for_subject": op.AuditBCLNoSessionsForSubject,
+	want := map[string]audit.Event{
+		"bcl.no_sessions_for_subject": audit.BCLNoSessionsForSubject,
 	}
 	for s, ev := range want {
 		if string(ev) != s {
@@ -73,14 +74,14 @@ func TestAuditEvent_BCLMirror(t *testing.T) {
 func TestAuditEvent_TokenMirror(t *testing.T) {
 	t.Parallel()
 
-	want := map[string]op.AuditEvent{
-		"code.issued":          op.AuditCodeIssued,
-		"code.consumed":        op.AuditCodeConsumed,
-		"code.replay_detected": op.AuditCodeReplayDetected,
-		"token.issued":         op.AuditTokenIssued,
-		"token.refreshed":      op.AuditTokenRefreshed,
-		"token.revoked":        op.AuditTokenRevoked,
-		"token.revoke_failed":  op.AuditTokenRevokeFailed,
+	want := map[string]audit.Event{
+		"code.issued":          audit.CodeIssued,
+		"code.consumed":        audit.CodeConsumed,
+		"code.replay_detected": audit.CodeReplayDetected,
+		"token.issued":         audit.TokenIssued,
+		"token.refreshed":      audit.TokenRefreshed,
+		"token.revoked":        audit.TokenRevoked,
+		"token.revoke_failed":  audit.TokenRevokeFailed,
 	}
 	for s, ev := range want {
 		if string(ev) != s {
@@ -92,10 +93,10 @@ func TestAuditEvent_TokenMirror(t *testing.T) {
 func TestAuditEvent_ConsentSessionMirror(t *testing.T) {
 	t.Parallel()
 
-	want := map[string]op.AuditEvent{
-		"consent.granted":   op.AuditConsentGranted,
-		"session.created":   op.AuditSessionCreated,
-		"session.destroyed": op.AuditSessionDestroyed,
+	want := map[string]audit.Event{
+		"consent.granted":   audit.ConsentGranted,
+		"session.created":   audit.SessionCreated,
+		"session.destroyed": audit.SessionDestroyed,
 	}
 	for s, ev := range want {
 		if string(ev) != s {
@@ -105,7 +106,7 @@ func TestAuditEvent_ConsentSessionMirror(t *testing.T) {
 }
 
 // TestAuditEvent_GrantManagementMirror keeps the public
-// op.AuditGrantManagementRevoked constant aligned with the raw string
+// audit.GrantManagementRevoked constant aligned with the raw string
 // the grant-management endpoint emits. The internal handler cannot
 // import op/, so the value is duplicated as a string
 // (auditGrantManagementRevoked in internal/grantmgmtendpoint/handler.go)
@@ -113,9 +114,9 @@ func TestAuditEvent_ConsentSessionMirror(t *testing.T) {
 func TestAuditEvent_GrantManagementMirror(t *testing.T) {
 	t.Parallel()
 
-	want := map[string]op.AuditEvent{
-		"grant_management.revoked":       op.AuditGrantManagementRevoked,
-		"grant_management.revoke_failed": op.AuditGrantManagementRevokeFailed,
+	want := map[string]audit.Event{
+		"grant_management.revoked":       audit.GrantManagementRevoked,
+		"grant_management.revoke_failed": audit.GrantManagementRevokeFailed,
 	}
 	for s, ev := range want {
 		if string(ev) != s {
@@ -125,7 +126,7 @@ func TestAuditEvent_GrantManagementMirror(t *testing.T) {
 }
 
 // TestAuditEvent_RefreshChainRevokeMirror keeps the public
-// op.AuditRefreshChainRevokeFailed / op.AuditRefreshGrantRevokeFailed
+// audit.RefreshChainRevokeFailed / audit.RefreshGrantRevokeFailed
 // constants aligned with the raw strings the refresh exchanger emits
 // when the post-replay cascade encounters a transport fault. The
 // internal package cannot import op/, so the strings are duplicated
@@ -134,10 +135,10 @@ func TestAuditEvent_GrantManagementMirror(t *testing.T) {
 func TestAuditEvent_RefreshChainRevokeMirror(t *testing.T) {
 	t.Parallel()
 
-	want := map[string]op.AuditEvent{
-		"refresh.chain_revoke_failed":              op.AuditRefreshChainRevokeFailed,
-		"refresh.grant_revoke_failed":              op.AuditRefreshGrantRevokeFailed,
-		"refresh.prior_access_token_revoke_failed": op.AuditRefreshPriorAccessTokenRevokeFailed,
+	want := map[string]audit.Event{
+		"refresh.chain_revoke_failed":              audit.RefreshChainRevokeFailed,
+		"refresh.grant_revoke_failed":              audit.RefreshGrantRevokeFailed,
+		"refresh.prior_access_token_revoke_failed": audit.RefreshPriorAccessTokenRevokeFailed,
 	}
 	for s, ev := range want {
 		if string(ev) != s {
@@ -147,7 +148,7 @@ func TestAuditEvent_RefreshChainRevokeMirror(t *testing.T) {
 }
 
 // TestAuditEvent_IntrospectionMirror keeps the public
-// op.AuditIntrospectionError constant aligned with the raw string the
+// audit.IntrospectionError constant aligned with the raw string the
 // introspection endpoint emits. The internal handler cannot import op/,
 // so the value is duplicated as a string (auditIntrospectionError in
 // internal/introspectendpoint/handler.go) and this test pins them
@@ -155,8 +156,8 @@ func TestAuditEvent_RefreshChainRevokeMirror(t *testing.T) {
 func TestAuditEvent_IntrospectionMirror(t *testing.T) {
 	t.Parallel()
 
-	want := map[string]op.AuditEvent{
-		"introspection.error": op.AuditIntrospectionError,
+	want := map[string]audit.Event{
+		"introspection.error": audit.IntrospectionError,
 	}
 	for s, ev := range want {
 		if string(ev) != s {
@@ -166,7 +167,7 @@ func TestAuditEvent_IntrospectionMirror(t *testing.T) {
 }
 
 // TestAuditEvent_DeviceCodeMirror keeps the public
-// op.AuditDeviceAuthorization* / op.AuditDeviceCode* constants aligned
+// audit.DeviceAuthorization* / audit.DeviceCode* constants aligned
 // with the raw strings the device-flow surfaces emit. The internal
 // devicecode helpers (internal/devicecode/audit.go) and the
 // devicecodeendpoint / token-endpoint device_code handler all consume
@@ -175,18 +176,18 @@ func TestAuditEvent_IntrospectionMirror(t *testing.T) {
 func TestAuditEvent_DeviceCodeMirror(t *testing.T) {
 	t.Parallel()
 
-	want := map[string]op.AuditEvent{
-		"device_authorization.issued":                    op.AuditDeviceAuthorizationIssued,
-		"device_authorization.rejected":                  op.AuditDeviceAuthorizationRejected,
-		"device_authorization.unbound_rejected":          op.AuditDeviceAuthorizationUnboundRejected,
-		"device_code.verification.approved":              op.AuditDeviceCodeVerificationApproved,
-		"device_code.verification.denied":                op.AuditDeviceCodeVerificationDenied,
-		"device_code.verification.user_code_brute_force": op.AuditDeviceCodeUserCodeBruteForce,
-		"device_code.token.issued":                       op.AuditDeviceCodeTokenIssued,
-		"device_code.token.rejected":                     op.AuditDeviceCodeTokenRejected,
-		"device_code.token.slow_down":                    op.AuditDeviceCodeTokenSlowDown,
-		"device_code.revoked":                            op.AuditDeviceCodeRevoked,
-		"device_code.poll_observation.failed":            op.AuditDeviceCodePollObservationFailed,
+	want := map[string]audit.Event{
+		"device_authorization.issued":                    audit.DeviceAuthorizationIssued,
+		"device_authorization.rejected":                  audit.DeviceAuthorizationRejected,
+		"device_authorization.unbound_rejected":          audit.DeviceAuthorizationUnboundRejected,
+		"device_code.verification.approved":              audit.DeviceCodeVerificationApproved,
+		"device_code.verification.denied":                audit.DeviceCodeVerificationDenied,
+		"device_code.verification.user_code_brute_force": audit.DeviceCodeUserCodeBruteForce,
+		"device_code.token.issued":                       audit.DeviceCodeTokenIssued,
+		"device_code.token.rejected":                     audit.DeviceCodeTokenRejected,
+		"device_code.token.slow_down":                    audit.DeviceCodeTokenSlowDown,
+		"device_code.revoked":                            audit.DeviceCodeRevoked,
+		"device_code.poll_observation.failed":            audit.DeviceCodePollObservationFailed,
 	}
 	for s, ev := range want {
 		if string(ev) != s {
@@ -195,7 +196,7 @@ func TestAuditEvent_DeviceCodeMirror(t *testing.T) {
 	}
 }
 
-// TestAuditEvent_CIBAMirror keeps the public op.AuditCIBA* constants
+// TestAuditEvent_CIBAMirror keeps the public audit.CIBA* constants
 // aligned with the raw strings the CIBA surfaces emit. The internal
 // ciba helpers (internal/ciba/audit.go) and the cibaendpoint /
 // token-endpoint CIBA handler all consume the raw strings; the public
@@ -203,17 +204,17 @@ func TestAuditEvent_DeviceCodeMirror(t *testing.T) {
 func TestAuditEvent_CIBAMirror(t *testing.T) {
 	t.Parallel()
 
-	want := map[string]op.AuditEvent{
-		"ciba.authorization.issued":           op.AuditCIBAAuthorizationIssued,
-		"ciba.authorization.rejected":         op.AuditCIBAAuthorizationRejected,
-		"ciba.authorization.unbound_rejected": op.AuditCIBAAuthorizationUnboundRejected,
-		"ciba.auth_device.approved":           op.AuditCIBAAuthDeviceApproved,
-		"ciba.auth_device.denied":             op.AuditCIBAAuthDeviceDenied,
-		"ciba.poll_abuse.lockout":             op.AuditCIBAPollAbuseLockout,
-		"ciba.token.issued":                   op.AuditCIBATokenIssued,
-		"ciba.token.rejected":                 op.AuditCIBATokenRejected,
-		"ciba.token.slow_down":                op.AuditCIBATokenSlowDown,
-		"ciba.poll_observation.failed":        op.AuditCIBAPollObservationFailed,
+	want := map[string]audit.Event{
+		"ciba.authorization.issued":           audit.CIBAAuthorizationIssued,
+		"ciba.authorization.rejected":         audit.CIBAAuthorizationRejected,
+		"ciba.authorization.unbound_rejected": audit.CIBAAuthorizationUnboundRejected,
+		"ciba.auth_device.approved":           audit.CIBAAuthDeviceApproved,
+		"ciba.auth_device.denied":             audit.CIBAAuthDeviceDenied,
+		"ciba.poll_abuse.lockout":             audit.CIBAPollAbuseLockout,
+		"ciba.token.issued":                   audit.CIBATokenIssued,
+		"ciba.token.rejected":                 audit.CIBATokenRejected,
+		"ciba.token.slow_down":                audit.CIBATokenSlowDown,
+		"ciba.poll_observation.failed":        audit.CIBAPollObservationFailed,
 	}
 	for s, ev := range want {
 		if string(ev) != s {
@@ -222,7 +223,7 @@ func TestAuditEvent_CIBAMirror(t *testing.T) {
 	}
 }
 
-// TestAuditEvent_TokenExchangeMirror keeps the public op.AuditTokenExchange*
+// TestAuditEvent_TokenExchangeMirror keeps the public audit.TokenExchange*
 // constants aligned with the raw strings the in-tree RFC 8693 handler
 // emits. The internal customgrant/tokenexchange package cannot import
 // op (one-way import graph), so the values are duplicated as raw
@@ -231,23 +232,23 @@ func TestAuditEvent_CIBAMirror(t *testing.T) {
 func TestAuditEvent_TokenExchangeMirror(t *testing.T) {
 	t.Parallel()
 
-	want := map[string]op.AuditEvent{
-		"token_exchange.requested":                    op.AuditTokenExchangeRequested,
-		"token_exchange.granted":                      op.AuditTokenExchangeGranted,
-		"token_exchange.policy_denied":                op.AuditTokenExchangePolicyDenied,
-		"token_exchange.policy_error":                 op.AuditTokenExchangePolicyError,
-		"token_exchange.scope_inflation_blocked":      op.AuditTokenExchangeScopeInflationBlocked,
-		"token_exchange.audience_blocked":             op.AuditTokenExchangeAudienceBlocked,
-		"token_exchange.ttl_capped":                   op.AuditTokenExchangeTTLCapped,
-		"token_exchange.act_chain_too_deep":           op.AuditTokenExchangeActChainTooDeep,
-		"token_exchange.empty_scope_rejected":         op.AuditTokenExchangeEmptyScopeRejected,
-		"token_exchange.actor_equals_subject":         op.AuditTokenExchangeActorEqualsSubject,
-		"token_exchange.subject_token_external":       op.AuditTokenExchangeSubjectTokenExternal,
-		"token_exchange.actor_token_external":         op.AuditTokenExchangeActorTokenExternal,
-		"token_exchange.subject_token_invalid":        op.AuditTokenExchangeSubjectTokenInvalid,
-		"token_exchange.refresh_issued":               op.AuditTokenExchangeRefreshIssued,
-		"token_exchange.self_exchange":                op.AuditTokenExchangeSelfExchange,
-		"token_exchange.subject_token_registry_error": op.AuditTokenExchangeSubjectTokenRegistryError,
+	want := map[string]audit.Event{
+		"token_exchange.requested":                    audit.TokenExchangeRequested,
+		"token_exchange.granted":                      audit.TokenExchangeGranted,
+		"token_exchange.policy_denied":                audit.TokenExchangePolicyDenied,
+		"token_exchange.policy_error":                 audit.TokenExchangePolicyError,
+		"token_exchange.scope_inflation_blocked":      audit.TokenExchangeScopeInflationBlocked,
+		"token_exchange.audience_blocked":             audit.TokenExchangeAudienceBlocked,
+		"token_exchange.ttl_capped":                   audit.TokenExchangeTTLCapped,
+		"token_exchange.act_chain_too_deep":           audit.TokenExchangeActChainTooDeep,
+		"token_exchange.empty_scope_rejected":         audit.TokenExchangeEmptyScopeRejected,
+		"token_exchange.actor_equals_subject":         audit.TokenExchangeActorEqualsSubject,
+		"token_exchange.subject_token_external":       audit.TokenExchangeSubjectTokenExternal,
+		"token_exchange.actor_token_external":         audit.TokenExchangeActorTokenExternal,
+		"token_exchange.subject_token_invalid":        audit.TokenExchangeSubjectTokenInvalid,
+		"token_exchange.refresh_issued":               audit.TokenExchangeRefreshIssued,
+		"token_exchange.self_exchange":                audit.TokenExchangeSelfExchange,
+		"token_exchange.subject_token_registry_error": audit.TokenExchangeSubjectTokenRegistryError,
 	}
 	for s, ev := range want {
 		if string(ev) != s {
@@ -257,7 +258,7 @@ func TestAuditEvent_TokenExchangeMirror(t *testing.T) {
 }
 
 // TestAuditEvent_DPoPLooseMethodCaseMirror keeps the public
-// op.AuditDPoPLooseMethodCaseAdmitted constant aligned with the raw
+// audit.DPoPLooseMethodCaseAdmitted constant aligned with the raw
 // string that the DPoP verifier emits when the
 // AllowLooseMethodCase bridge admits a case-mismatched proof. The
 // internal package cannot import op/, so the value is duplicated as
@@ -266,8 +267,8 @@ func TestAuditEvent_TokenExchangeMirror(t *testing.T) {
 func TestAuditEvent_DPoPLooseMethodCaseMirror(t *testing.T) {
 	t.Parallel()
 
-	want := map[string]op.AuditEvent{
-		"dpop.loose_method_case_admitted": op.AuditDPoPLooseMethodCaseAdmitted,
+	want := map[string]audit.Event{
+		"dpop.loose_method_case_admitted": audit.DPoPLooseMethodCaseAdmitted,
 	}
 	for s, ev := range want {
 		if string(ev) != s {
@@ -286,8 +287,8 @@ func TestAuditEvent_DPoPLooseMethodCaseMirror(t *testing.T) {
 func TestAuditEvent_KeyRetiredKidValuePin(t *testing.T) {
 	t.Parallel()
 
-	want := map[string]op.AuditEvent{
-		"key.retired_kid_presented": op.AuditKeyRetiredKidPresented,
+	want := map[string]audit.Event{
+		"key.retired_kid_presented": audit.KeyRetiredKidPresented,
 	}
 	for s, ev := range want {
 		if string(ev) != s {
@@ -297,7 +298,7 @@ func TestAuditEvent_KeyRetiredKidValuePin(t *testing.T) {
 }
 
 // TestAuditEvent_ClientAuthnMirror keeps the public
-// op.AuditClientAuthnFailure constant aligned with the raw string the
+// audit.ClientAuthnFailure constant aligned with the raw string the
 // token and PAR endpoints emit. The internal handlers cannot import
 // op/, so the value is duplicated as a string
 // (auditClientAuthnFailure in internal/tokenendpoint/handler.go and
@@ -305,9 +306,9 @@ func TestAuditEvent_KeyRetiredKidValuePin(t *testing.T) {
 func TestAuditEvent_ClientAuthnMirror(t *testing.T) {
 	t.Parallel()
 
-	want := map[string]op.AuditEvent{
-		"client_authn.failure":         op.AuditClientAuthnFailure,
-		"client_authn.previous_secret": op.AuditClientAuthnPreviousSecret,
+	want := map[string]audit.Event{
+		"client_authn.failure":         audit.ClientAuthnFailure,
+		"client_authn.previous_secret": audit.ClientAuthnPreviousSecret,
 	}
 	for s, ev := range want {
 		if string(ev) != s {
@@ -319,16 +320,16 @@ func TestAuditEvent_ClientAuthnMirror(t *testing.T) {
 // TestAuditEvent_LockoutStalledMirror pins the public constant to the
 // wire string the cross-factor brute-force counter emits. The counter
 // lives under internal/authn/lockout and cannot import op/, so an
-// embedder filtering its audit stream on op.AuditLockoutStalled is
+// embedder filtering its audit stream on audit.LockoutStalled is
 // matching against a value only this test keeps aligned. A silent drift
 // would leave the filter matching nothing — and the event it exists to
 // catch reports a brute-force gate that has stopped counting.
 func TestAuditEvent_LockoutStalledMirror(t *testing.T) {
 	t.Parallel()
 
-	want := map[string]op.AuditEvent{
-		"lockout.stalled": op.AuditLockoutStalled,
-		"lockout.engaged": op.AuditLockoutEngaged,
+	want := map[string]audit.Event{
+		"lockout.stalled": audit.LockoutStalled,
+		"lockout.engaged": audit.LockoutEngaged,
 	}
 	for s, ev := range want {
 		if string(ev) != s {
@@ -338,7 +339,7 @@ func TestAuditEvent_LockoutStalledMirror(t *testing.T) {
 }
 
 // TestAuditEvent_FirstPartyMirror keeps the public
-// op.AuditConsentGrantedFirstParty constant aligned with the raw
+// audit.ConsentGrantedFirstParty constant aligned with the raw
 // string the authorize endpoint emits when the [WithFirstPartyClients]
 // auto-consent path fires. The internal handler cannot import op/, so
 // the value is duplicated as a string
@@ -348,8 +349,8 @@ func TestAuditEvent_LockoutStalledMirror(t *testing.T) {
 func TestAuditEvent_FirstPartyMirror(t *testing.T) {
 	t.Parallel()
 
-	want := map[string]op.AuditEvent{
-		"consent.granted.first_party": op.AuditConsentGrantedFirstParty,
+	want := map[string]audit.Event{
+		"consent.granted.first_party": audit.ConsentGrantedFirstParty,
 	}
 	for s, ev := range want {
 		if string(ev) != s {
@@ -358,25 +359,25 @@ func TestAuditEvent_FirstPartyMirror(t *testing.T) {
 	}
 }
 
-// TestAuditEvent_DCRMirror keeps the public op.AuditDCR* constants
+// TestAuditEvent_DCRMirror keeps the public audit.DCR* constants
 // aligned with the strings that the registration endpoint emits.
-// The internal handler cannot reference op.AuditEvent (no
+// The internal handler cannot reference audit.Event (no
 // internal-→-op import), so this guard ensures a rename in either
 // list produces a loud test failure rather than silent drift.
 func TestAuditEvent_DCRMirror(t *testing.T) {
 	t.Parallel()
 
-	want := map[string]op.AuditEvent{
-		"dcr.iat.consumed":               op.AuditDCRIATConsumed,
-		"dcr.iat.expired":                op.AuditDCRIATExpired,
-		"dcr.iat.invalid":                op.AuditDCRIATInvalid,
-		"dcr.open_registration_used":     op.AuditDCROpenRegistrationUsed,
-		"dcr.client.registered":          op.AuditDCRClientRegistered,
-		"dcr.client.metadata_read":       op.AuditDCRClientMetadataRead,
-		"dcr.client.metadata_updated":    op.AuditDCRClientMetadataUpdated,
-		"dcr.client.deleted":             op.AuditDCRClientDeleted,
-		"dcr.rat.invalid":                op.AuditDCRRATInvalid,
-		"dcr.metadata.validation_failed": op.AuditDCRMetadataValidation,
+	want := map[string]audit.Event{
+		"dcr.iat.consumed":               audit.DCRIATConsumed,
+		"dcr.iat.expired":                audit.DCRIATExpired,
+		"dcr.iat.invalid":                audit.DCRIATInvalid,
+		"dcr.open_registration_used":     audit.DCROpenRegistrationUsed,
+		"dcr.client.registered":          audit.DCRClientRegistered,
+		"dcr.client.metadata_read":       audit.DCRClientMetadataRead,
+		"dcr.client.metadata_updated":    audit.DCRClientMetadataUpdated,
+		"dcr.client.deleted":             audit.DCRClientDeleted,
+		"dcr.rat.invalid":                audit.DCRRATInvalid,
+		"dcr.metadata.validation_failed": audit.DCRMetadataValidation,
 	}
 	for s, ev := range want {
 		if string(ev) != s {
@@ -450,7 +451,7 @@ func TestWithClock_StampsAuditRecords(t *testing.T) {
 		if err := json.Unmarshal([]byte(line), &rec); err != nil {
 			t.Fatalf("decode %q: %v", line, err)
 		}
-		if rec["event"] != string(op.AuditStartupProfile) {
+		if rec["event"] != string(audit.StartupProfile) {
 			continue
 		}
 		found = true
@@ -463,6 +464,6 @@ func TestWithClock_StampsAuditRecords(t *testing.T) {
 		}
 	}
 	if !found {
-		t.Fatalf("no %s record on the audit stream: %s", op.AuditStartupProfile, buf.String())
+		t.Fatalf("no %s record on the audit stream: %s", audit.StartupProfile, buf.String())
 	}
 }

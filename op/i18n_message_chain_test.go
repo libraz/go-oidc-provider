@@ -17,7 +17,7 @@ func TestProviderLocaleResolver_MessageEndsAtEnglish(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LocaleBundleFromMap(fr): %v", err)
 	}
-	provider, err := op.New(append(validBaseOpts(t), op.WithLocale(french), op.WithDefaultLocale("fr"))...)
+	provider, err := op.New(append(validBaseOpts(t), op.WithLocaleBundle(french), op.WithDefaultLocale("fr"))...)
 	if err != nil {
 		t.Fatalf("op.New: %v", err)
 	}

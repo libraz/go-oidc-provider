@@ -160,7 +160,7 @@ const (
 // WithSessionDurabilityPosture records the embedder's declaration
 // of [op/store.SessionStore] durability so the back-channel logout
 // coordinator can stamp the value into the
-// `bcl.no_sessions_for_subject` audit event ([AuditBCLNoSessionsForSubject]).
+// `bcl.no_sessions_for_subject` audit event (audit.BCLNoSessionsForSubject).
 // The flag does not change runtime gates; it is a typed declaration
 // that lets SOC dashboards filter expected gaps under volatile
 // placement from unexpected gaps under durable placement.

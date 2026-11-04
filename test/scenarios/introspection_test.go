@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/libraz/go-oidc-provider/op"
+	"github.com/libraz/go-oidc-provider/op/audit"
 	"github.com/libraz/go-oidc-provider/op/feature"
 	"github.com/libraz/go-oidc-provider/op/store"
 	"github.com/libraz/go-oidc-provider/op/testkit"
@@ -1462,10 +1463,10 @@ func TestScenario_INT_020_BadClientAuthEmitsAuditError(t *testing.T) {
 		t.Fatalf("status=%d want 401 body=%s", resp.StatusCode, raw)
 	}
 
-	events := auditCap.EventsByName(string(op.AuditIntrospectionError))
+	events := auditCap.EventsByName(string(audit.IntrospectionError))
 	if len(events) != 1 {
 		t.Fatalf("got %d %q events, want exactly 1; all=%+v",
-			len(events), op.AuditIntrospectionError, auditCap.Events())
+			len(events), audit.IntrospectionError, auditCap.Events())
 	}
 	ev := events[0]
 	var gotClientID string

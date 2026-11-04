@@ -107,16 +107,16 @@
 //     [WithLoginFlow] join them while the authorization_code grant is enabled.
 //   - Login and UI: [WithCookieKeys], [WithLoginFlow], [WithMFAEncryptionKeys],
 //     [WithAuthnLockoutStore], [WithLoginAttemptObserver], [WithUserStore],
-//     [WithUI], [WithInteractions], [WithLogoutUI], [WithDefaultLocale], [WithLocale],
-//     [WithPreferredLocaleStore].
+//     [WithUI], [WithInteractions], [WithLogoutUI], [WithDefaultLocale],
+//     [WithLocaleBundle], [WithPreferredLocaleStore].
 //   - Clients: [WithStaticClients], [WithHighEntropyClientSecrets],
 //     [WithFirstPartyClients], [WithDynamicRegistration],
 //     [WithClientIDMetadataDocuments], [WithProtectedResources], [WithScope],
 //     [WithSubjectGenerator], [WithPairwiseSubject].
-//   - Grants and flows: [WithGrants], [WithFeature], [WithCIBA],
+//   - Grants and flows: [WithGrants], [WithFeature], [WithCIBAGrant],
 //     [WithDeviceCodeGrant], [WithJWTBearerGrant], [WithIDJAGIssuance],
-//     [WithCustomGrant], [WithTokenExchange], [WithAuthorizationDetailTypes],
-//     [WithGrantManagement], [WithPARTTL].
+//     [WithCustomGrant], [WithTokenExchangeGrant],
+//     [WithAuthorizationDetailTypes], [WithGrantManagement], [WithPARTTL].
 //   - Tokens and hardening: [WithProfile], [WithSigningAlgorithm],
 //     [WithAccessTokenTTL], [WithRefreshTokenTTL], [WithRefreshTokenOfflineTTL],
 //     [WithRefreshGracePeriod], [WithStrictOfflineAccess],
@@ -142,7 +142,7 @@
 //
 // Grant types are enabled three ways. [WithGrants] selects the core set
 // (authorization_code, refresh_token, client_credentials). Grants that carry
-// configuration have a dedicated option instead: [WithCIBA],
+// configuration have a dedicated option instead: [WithCIBAGrant],
 // [WithDeviceCodeGrant], [WithJWTBearerGrant] and [WithCustomGrant]. Protocol
 // features that extend the core grants, such as PAR, DPoP and JAR, are switched
 // on with [WithFeature].

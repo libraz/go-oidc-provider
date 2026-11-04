@@ -251,7 +251,7 @@ func (s *Set) Active() Entry { return s.entries[0] }
 // and lies on or before the [Set]'s configured clock reading is
 // rejected as if the kid were unknown. The configured
 // [RetiredKidObserver] is notified with ctx so the audit pipeline can
-// fire [op.AuditKeyRetiredKidPresented] with the rejected kid; the
+// fire op/audit.KeyRetiredKidPresented with the rejected kid; the
 // notification fires once per call.
 //
 // The retirement comparison uses `!After(now)` (i.e., now >= NotAfter)

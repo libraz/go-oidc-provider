@@ -100,7 +100,7 @@ func run() error {
 		op.WithCookieKeys(keys.CookieKey),
 		op.WithProfile(profile.OAuth21),
 		op.WithLoginFlow(flow),
-		op.WithDynamicRegistration(op.RegistrationOption{
+		op.WithDynamicRegistration(op.DynamicRegistration{
 			Open:    false,
 			IATTTL:  1 * time.Hour,
 			IATUses: 5,

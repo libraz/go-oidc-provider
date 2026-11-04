@@ -256,15 +256,15 @@ const (
 	AuditThingReserved Name = "thing.reserved"
 )
 `,
-		"op/audit.go": `package op
+		"op/audit/audit.go": `package audit
 
 import "github.com/libraz/go-oidc-provider/internal/auditevent"
 
-type AuditEvent string
+type Event string
 
 const (
-	AuditThingHappened = AuditEvent(auditevent.AuditThingHappened)
-` + aliasDoc + `	AuditThingReserved = AuditEvent(auditevent.AuditThingReserved)
+	AuditThingHappened = Event(auditevent.AuditThingHappened)
+` + aliasDoc + `	AuditThingReserved = Event(auditevent.AuditThingReserved)
 )
 `,
 		"internal/authn/emit.go": `package authn
@@ -328,16 +328,16 @@ const (
 	AuditTwo Name = "two.reserved"
 )
 `,
-		"op/audit.go": `package op
+		"op/audit/audit.go": `package audit
 
 import "github.com/libraz/go-oidc-provider/internal/auditevent"
 
-type AuditEvent string
+type Event string
 
 // Reserved vocabulary: the library emits neither of these.
 const (
-	AuditOne = AuditEvent(auditevent.AuditOne)
-	AuditTwo = AuditEvent(auditevent.AuditTwo)
+	AuditOne = Event(auditevent.AuditOne)
+	AuditTwo = Event(auditevent.AuditTwo)
 )
 `,
 	})
@@ -355,14 +355,14 @@ type Name string
 
 const AuditOrphan Name = "orphan.event"
 `,
-		"op/audit.go": `package op
+		"op/audit/audit.go": `package audit
 
-type AuditEvent string
+type Event string
 `,
 	})
 	findings := checkEvents(ix, emptyAllowlist(t))
 	wantIDs(t, findings, "orphan.event")
-	if !strings.Contains(findings[0].detail, "no public op constant") {
+	if !strings.Contains(findings[0].detail, "no public op/audit constant") {
 		t.Fatalf("unexpected detail: %s", findings[0].detail)
 	}
 }

@@ -1,9 +1,7 @@
 package op
 
 import (
-	"errors"
 	"net/url"
-	"strconv"
 	"strings"
 	"time"
 
@@ -12,8 +10,51 @@ import (
 	"github.com/libraz/go-oidc-provider/op/grant"
 )
 
-// WithDeviceCodeGrant enables the RFC 8628 device-authorization grant.
-// The option:
+// DeviceCodeGrant configures the RFC 8628 device-authorization grant
+// enabled by [WithDeviceCodeGrant]. Zero-valued fields keep the
+// library defaults.
+//
+// Stable since v1.5.
+type DeviceCodeGrant struct {
+	// VerificationURI is the verification URI advertised on the
+	// device's display in the §3.2 device-authorization response. The
+	// library default is `<issuer>/device`; the field exists for
+	// embedders whose verification page lives outside the OP's mount
+	// prefix or under a separate hostname (e.g. a marketing landing
+	// page that proxies to the OP).
+	//
+	// A non-empty value MUST be an absolute URL with a non-empty
+	// authority; relative paths are rejected so the device-side wire
+	// shape cannot drift from the spec's "complete URI" requirement.
+	// The value is not checked for reachability; embedders SHOULD
+	// ensure their verification page is served at the supplied URL
+	// before activating the grant.
+	VerificationURI string
+
+	// TTL is the lifetime advertised to the device as `expires_in` on
+	// the RFC 8628 §3.2 device-authorization response, and stamped on
+	// the persisted device_code record.
+	//
+	// This knob is intentionally independent of [WithAccessTokenTTL]:
+	// RFC 8628 leaves the device_code lifetime unspecified, and a
+	// deployment running a short access-token TTL (seconds to a couple
+	// of minutes) would otherwise make the device flow impractical — a
+	// user needs time to reach a secondary device, read the user_code,
+	// and complete the verification ceremony. Zero falls back to
+	// [devicecode.DefaultExpiresIn] (10 minutes); a negative value is
+	// rejected.
+	TTL time.Duration
+
+	// PollInterval is the value advertised to the device as `interval`
+	// on the RFC 8628 §3.2 device-authorization response — the minimum
+	// number of seconds the device MUST wait between polls of the
+	// token endpoint. Zero falls back to [devicecode.DefaultInterval]
+	// (5 seconds); a negative value is rejected.
+	PollInterval time.Duration
+}
+
+// WithDeviceCodeGrant enables the RFC 8628 device-authorization grant,
+// configured by g. The option:
 //
 //   - adds [grant.DeviceCode] to the resolved grant set. The addition
 //     composes rather than replaces: a deployment that calls only this
@@ -36,156 +77,68 @@ import (
 // embedder (consent UI, brute-force lockout policy, audit emission)
 // and wired through the [interaction.Driver] hook the OP already
 // exposes. The verification URI advertised on the device's display
-// defaults to `<issuer>/device`; embedders override it via
-// [WithDeviceVerificationURI].
+// defaults to `<issuer>/device`; embedders override it through
+// [DeviceCodeGrant.VerificationURI].
 //
-// The grant's settings are passed as [DeviceCodeOption] values, the same
-// shape [WithCIBA] takes:
+//	op.WithDeviceCodeGrant(op.DeviceCodeGrant{
+//		TTL:          15 * time.Minute,
+//		PollInterval: 5 * time.Second,
+//	})
 //
-//	op.WithDeviceCodeGrant(
-//		op.WithDeviceCodeTTL(15*time.Minute),
-//		op.WithDeviceCodePollInterval(5*time.Second),
-//	)
-//
-// WithDeviceCodeGrant itself may be supplied more than once; each
-// [DeviceCodeOption] is single-valued across all of them.
+// WithDeviceCodeGrant may be supplied at most once.
 //
 // Stable since v1.0.
-func WithDeviceCodeGrant(opts ...DeviceCodeOption) Option {
+func WithDeviceCodeGrant(g DeviceCodeGrant) Option {
 	return optionFunc(func(c *config) error {
-		// Only the opt-in bit is recorded here; the grant set is
-		// assembled in [config.applyDefaults] once every option has
-		// run, so the result cannot depend on whether this option or
-		// [WithGrants] was applied first.
-		c.deviceCodeGrantEnabled = true
-		for i, sub := range opts {
-			if nilcheck.IsNil(sub) {
-				return newConfigurationError("WithDeviceCodeGrant received nil DeviceCodeOption at position "+strconv.Itoa(i), nil)
-			}
-			err := sub.applyDeviceCode(c)
-			if errors.Is(err, errShadowedDefault) {
-				continue
-			}
-			if err != nil {
-				return err
-			}
-		}
-		return nil
-	})
-}
-
-// DeviceCodeOption configures the device-authorization grant beyond the
-// bare [WithDeviceCodeGrant] opt-in. Pass values produced by
-// [WithDeviceVerificationURI], [WithDeviceCodeTTL] and
-// [WithDeviceCodePollInterval] to [WithDeviceCodeGrant].
-//
-// Stable since v1.5.
-type DeviceCodeOption interface {
-	applyDeviceCode(c *config) error
-}
-
-type deviceCodeOptionFunc func(*config) error
-
-func (f deviceCodeOptionFunc) applyDeviceCode(c *config) error { return f(c) }
-
-// WithDeviceVerificationURI overrides the verification URI advertised
-// on the device's display in the §3.2 device-authorization response.
-// The library default is `<issuer>/device`; the option exists for
-// embedders whose verification page lives outside the OP's mount
-// prefix or under a separate hostname (e.g. a marketing landing page
-// that proxies to the OP).
-//
-// The supplied value MUST be an absolute URL with a non-empty
-// authority; relative paths are rejected at the option site so the
-// device-side wire shape cannot drift from the spec's "complete URI"
-// requirement. The option does not validate that the URL is
-// reachable; embedders SHOULD ensure their verification page is
-// served at the supplied URL before activating the option.
-//
-// Pass it to [WithDeviceCodeGrant].
-//
-// Stable since v1.0.
-func WithDeviceVerificationURI(uri string) DeviceCodeOption {
-	return deviceCodeOptionFunc(func(c *config) error {
-		if err := c.claimOnce("WithDeviceVerificationURI"); err != nil {
+		if err := c.claimOnce("WithDeviceCodeGrant"); err != nil {
 			return err
 		}
-		trimmed := strings.TrimSpace(uri)
-		if trimmed == "" {
-			return newConfigurationError("WithDeviceVerificationURI requires a non-empty URI", nil)
-		}
-		u, err := url.Parse(trimmed)
+		verificationURI, err := deviceVerificationURI(g.VerificationURI)
 		if err != nil {
-			return newConfigurationError("WithDeviceVerificationURI received an unparseable URI", err)
+			return err
 		}
-		if !u.IsAbs() || u.Host == "" {
-			return newConfigurationError("WithDeviceVerificationURI requires an absolute URI with a host", nil)
+		if g.TTL < 0 {
+			return newConfigurationError("WithDeviceCodeGrant: DeviceCodeGrant.TTL must be zero or positive", nil)
 		}
-		c.deviceVerificationURI = trimmed
+		if g.PollInterval < 0 {
+			return newConfigurationError("WithDeviceCodeGrant: DeviceCodeGrant.PollInterval must be zero or positive", nil)
+		}
+		// Only the opt-in bit and the settings are recorded here; the
+		// grant set is assembled in [config.applyDefaults] once every
+		// option has run, so the result cannot depend on whether this
+		// option or [WithGrants] was applied first.
+		c.deviceCodeGrantEnabled = true
+		c.deviceVerificationURI = verificationURI
+		c.deviceCodeExpiry = g.TTL
+		c.deviceCodePollInterval = g.PollInterval
 		return nil
 	})
 }
 
-// WithDeviceCodeTTL overrides the lifetime advertised to the
-// device as `expires_in` on the RFC 8628 §3.2 device-authorization
-// response, and stamped on the persisted device_code record.
-//
-// This knob is intentionally independent of [WithAccessTokenTTL]:
-// RFC 8628 leaves the device_code lifetime unspecified, and a
-// deployment running a short access-token TTL (seconds to a couple
-// of minutes) would otherwise make the device flow impractical — a
-// user needs time to reach a secondary device, read the user_code,
-// and complete the verification ceremony. The library default is
-// [devicecode.DefaultExpiresIn] (10 minutes) when this option is
-// not called.
-//
-// A non-positive duration is rejected at the option site.
-//
-// Pass it to [WithDeviceCodeGrant].
-//
-// Stable since v1.5.
-func WithDeviceCodeTTL(ttl time.Duration) DeviceCodeOption {
-	return deviceCodeOptionFunc(func(c *config) error {
-		if err := c.claimOnce("WithDeviceCodeTTL"); err != nil {
-			return err
-		}
-		if ttl <= 0 {
-			return newConfigurationError("WithDeviceCodeTTL requires a positive duration", nil)
-		}
-		c.deviceCodeExpiry = ttl
-		return nil
-	})
-}
-
-// WithDeviceCodePollInterval overrides the value advertised to the
-// device as `interval` on the RFC 8628 §3.2 device-authorization
-// response — the minimum number of seconds the device MUST wait
-// between polls of the token endpoint. The library default is
-// [devicecode.DefaultInterval] (5 seconds) when this option is not
-// called.
-//
-// A non-positive duration is rejected at the option site.
-//
-// Pass it to [WithDeviceCodeGrant].
-//
-// Stable since v1.0.
-func WithDeviceCodePollInterval(interval time.Duration) DeviceCodeOption {
-	return deviceCodeOptionFunc(func(c *config) error {
-		if err := c.claimOnce("WithDeviceCodePollInterval"); err != nil {
-			return err
-		}
-		if interval <= 0 {
-			return newConfigurationError("WithDeviceCodePollInterval requires a positive duration", nil)
-		}
-		c.deviceCodePollInterval = interval
-		return nil
-	})
+// deviceVerificationURI trims raw and checks it is an absolute URI with a
+// host. Empty leaves the OP's own verification page in place.
+func deviceVerificationURI(raw string) (string, error) {
+	uri := strings.TrimSpace(raw)
+	if raw == "" {
+		return "", nil
+	}
+	if uri == "" {
+		return "", newConfigurationError("WithDeviceCodeGrant: DeviceCodeGrant.VerificationURI must not be blank", nil)
+	}
+	u, err := url.Parse(uri)
+	if err != nil {
+		return "", newConfigurationError("WithDeviceCodeGrant: DeviceCodeGrant.VerificationURI is unparseable", err)
+	}
+	if !u.IsAbs() || u.Host == "" {
+		return "", newConfigurationError("WithDeviceCodeGrant: DeviceCodeGrant.VerificationURI must be an absolute URI with a host", nil)
+	}
+	return uri, nil
 }
 
 // effectiveDeviceCodeExpiry returns the device_code lifetime the
 // /device_authorization handler advertises, resolved against the
 // library default when the embedder has not called
-// [WithDeviceCodeTTL].
+// [DeviceCodeGrant.TTL].
 func (c *config) effectiveDeviceCodeExpiry() time.Duration {
 	if c.deviceCodeExpiry <= 0 {
 		return devicecode.DefaultExpiresIn
@@ -196,7 +149,7 @@ func (c *config) effectiveDeviceCodeExpiry() time.Duration {
 // effectiveDeviceCodePollInterval returns the poll interval the
 // /device_authorization handler advertises, resolved against the
 // library default when the embedder has not called
-// [WithDeviceCodePollInterval].
+// [DeviceCodeGrant.PollInterval].
 func (c *config) effectiveDeviceCodePollInterval() time.Duration {
 	if c.deviceCodePollInterval <= 0 {
 		return devicecode.DefaultInterval

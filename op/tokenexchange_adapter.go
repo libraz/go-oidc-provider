@@ -13,7 +13,7 @@ import (
 
 // buildExtensionDispatcher wires the customgrant dispatcher with both
 // embedder-supplied custom-grant handlers and the in-tree token-
-// exchange handler when [WithTokenExchange] or [WithIDJAGIssuance]
+// exchange handler when [WithTokenExchangeGrant] or [WithIDJAGIssuance]
 // was invoked. The
 // helper is the single seam through which the token endpoint reaches
 // the extension grants so a future addition (CIBA / device-code / ...)

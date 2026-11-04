@@ -69,7 +69,7 @@ type Endpoints struct {
 
 	// Backchannel overrides the CIBA Core 1.0 §7
 	// backchannel-authentication endpoint. Default: "/bc-authorize".
-	// Only mounted when the CIBA grant is configured via [WithCIBA]
+	// Only mounted when the CIBA grant is configured via [WithCIBAGrant]
 	// (or by including [grant.CIBA] in [WithGrants]); the discovery
 	// document advertises "backchannel_authentication_endpoint" with
 	// the same gating.

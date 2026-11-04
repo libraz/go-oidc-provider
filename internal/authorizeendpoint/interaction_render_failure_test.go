@@ -16,6 +16,7 @@ import (
 	"github.com/libraz/go-oidc-provider/internal/clientauth"
 	"github.com/libraz/go-oidc-provider/internal/cookie"
 	"github.com/libraz/go-oidc-provider/op"
+	"github.com/libraz/go-oidc-provider/op/audit"
 	"github.com/libraz/go-oidc-provider/op/interaction"
 	"github.com/libraz/go-oidc-provider/op/testkit"
 )
@@ -158,9 +159,9 @@ func TestEndToEnd_InteractionRenderFailureIsNotAnEmptyOK(t *testing.T) {
 	// The wire response is deliberately generic, so the audit record is
 	// the only place the cause survives. Without it an operator sees a
 	// 500 rate with no way to tell which prompt stopped rendering.
-	failures := auditExtrasFor(t, sink.String(), string(op.AuditInteractionRenderFailed))
+	failures := auditExtrasFor(t, sink.String(), string(audit.InteractionRenderFailed))
 	if len(failures) != 1 {
-		t.Fatalf("%s emitted %d times, want exactly 1", op.AuditInteractionRenderFailed, len(failures))
+		t.Fatalf("%s emitted %d times, want exactly 1", audit.InteractionRenderFailed, len(failures))
 	}
 	if got := failures[0]["prompt_type"]; got != consent.PromptType {
 		t.Errorf("extras.prompt_type=%v, want %q (the prompt that could not be rendered)", got, consent.PromptType)

@@ -109,7 +109,7 @@ func newDeliveryScopeProvider(t *testing.T, sink *auditSink, opts ...Option) *Pr
 		WithStore(inmem.New()),
 		WithKeyset(Keyset{SigningKey{KeyID: "sig-1", Signer: priv}}),
 		WithGrants(grant.ClientCredentials),
-		WithDynamicRegistration(RegistrationOption{}),
+		WithDynamicRegistration(DynamicRegistration{}),
 		WithBackchannelLogout(BackchannelLogout{Timeout: 2 * time.Second}),
 		WithAuditLogger(slog.New(sink)),
 	}

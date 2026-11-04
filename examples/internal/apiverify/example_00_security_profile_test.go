@@ -67,7 +67,7 @@ func TestExample00SecurityProfile(t *testing.T) {
 		`"pkce_required":false`,
 		`"pkce_required":true`,
 		`"profiles":["oidc-core"]`,
-		`"profiles":["baseline"]`,
+		`"profiles":["oauth21"]`,
 	} {
 		if !strings.Contains(logs, want) {
 			t.Fatalf("startup audit output missing %s:\n%s", want, logs)

@@ -42,7 +42,7 @@ const AccessTokenTTLMax = 24 * time.Hour
 
 // RegistrationIATTTLDefault is the validity window applied to an
 // Initial Access Token (RFC 7591) when the embedder leaves
-// [op.RegistrationOption.IATTTL] at its zero value. Twenty-four hours
+// [op.DynamicRegistration.IATTTL] at its zero value. Twenty-four hours
 // is short enough that an exfiltrated IAT cannot be replayed for long
 // while still spanning a typical onboarding window.
 const RegistrationIATTTLDefault = 24 * time.Hour

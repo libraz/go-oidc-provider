@@ -33,7 +33,7 @@ func TestRequiredFeatures(t *testing.T) {
 			profile.FAPICIBA,
 			[]feature.Flag{feature.JAR},
 		},
-		{"baseline", profile.OAuth21, nil},
+		{"oauth21", profile.OAuth21, nil},
 		{"zero", profile.Profile(0), nil},
 		{"unknown", profile.Profile(99), nil},
 	}
@@ -56,7 +56,7 @@ func TestRequiresPKCE(t *testing.T) {
 		in   profile.Profile
 		want bool
 	}{
-		{"baseline", profile.OAuth21, true},
+		{"oauth21", profile.OAuth21, true},
 		{"fapi2-baseline", profile.FAPI2Baseline, true},
 		{"fapi2-message-signing", profile.FAPI2MessageSigning, true},
 		{"fapi-ciba", profile.FAPICIBA, false},
@@ -82,7 +82,7 @@ func TestRequiredGrants(t *testing.T) {
 		want []grant.Type
 	}{
 		{"fapi-ciba", profile.FAPICIBA, []grant.Type{grant.CIBA}},
-		{"baseline", profile.OAuth21, nil},
+		{"oauth21", profile.OAuth21, nil},
 		{"fapi2-baseline", profile.FAPI2Baseline, nil},
 		{"fapi2-message-signing", profile.FAPI2MessageSigning, nil},
 		{"zero", profile.Profile(0), nil},
@@ -170,7 +170,7 @@ func TestMaxAccessTokenTTL(t *testing.T) {
 		{"fapi2-baseline", profile.FAPI2Baseline, 10 * time.Minute},
 		{"fapi2-message-signing", profile.FAPI2MessageSigning, 10 * time.Minute},
 		{"fapi-ciba", profile.FAPICIBA, 10 * time.Minute},
-		{"baseline", profile.OAuth21, 0},
+		{"oauth21", profile.OAuth21, 0},
 		{"zero", profile.Profile(0), 0},
 		{"unknown", profile.Profile(99), 0},
 	}
@@ -196,7 +196,7 @@ func TestPARLifetimeCeiling(t *testing.T) {
 		{"fapi2-baseline", profile.FAPI2Baseline, 600 * time.Second},
 		{"fapi2-message-signing", profile.FAPI2MessageSigning, 600 * time.Second},
 		{"fapi-ciba", profile.FAPICIBA, 600 * time.Second},
-		{"baseline", profile.OAuth21, 0},
+		{"oauth21", profile.OAuth21, 0},
 		{"zero", profile.Profile(0), 0},
 		{"unknown", profile.Profile(99), 0},
 	}
@@ -226,7 +226,7 @@ func TestMaxRequestObjectAge(t *testing.T) {
 		{"fapi2-baseline", profile.FAPI2Baseline, 60 * time.Minute},
 		{"fapi2-message-signing", profile.FAPI2MessageSigning, 60 * time.Minute},
 		{"fapi-ciba", profile.FAPICIBA, 60 * time.Minute},
-		{"baseline", profile.OAuth21, 0},
+		{"oauth21", profile.OAuth21, 0},
 		{"zero", profile.Profile(0), 0},
 		{"unknown", profile.Profile(99), 0},
 	}
@@ -254,7 +254,7 @@ func TestAllowedClientAuthMethods(t *testing.T) {
 		{"fapi2-baseline", profile.FAPI2Baseline, fapi2Allowed},
 		{"fapi2-message-signing", profile.FAPI2MessageSigning, fapi2Allowed},
 		{"fapi-ciba", profile.FAPICIBA, fapi2Allowed},
-		{"baseline", profile.OAuth21, nil},
+		{"oauth21", profile.OAuth21, nil},
 		{"zero", profile.Profile(0), nil},
 		{"unknown", profile.Profile(99), nil},
 	}
@@ -294,7 +294,7 @@ func TestAllowedClientSigningAlgs(t *testing.T) {
 		{"fapi2-baseline", profile.FAPI2Baseline, fapiAllowed},
 		{"fapi2-message-signing", profile.FAPI2MessageSigning, fapiAllowed},
 		{"fapi-ciba", profile.FAPICIBA, fapiAllowed},
-		{"baseline", profile.OAuth21, nil},
+		{"oauth21", profile.OAuth21, nil},
 		{"zero", profile.Profile(0), nil},
 		{"unknown", profile.Profile(99), nil},
 	}
@@ -317,7 +317,7 @@ func TestRequiresNonce(t *testing.T) {
 		in   profile.Profile
 		want bool
 	}{
-		{"baseline", profile.OAuth21, false},
+		{"oauth21", profile.OAuth21, false},
 		{"fapi2-baseline", profile.FAPI2Baseline, false},
 		{"fapi2-message-signing", profile.FAPI2MessageSigning, false},
 		{"fapi-ciba", profile.FAPICIBA, false},
@@ -342,7 +342,7 @@ func TestRequiresStateOrNonce(t *testing.T) {
 		in   profile.Profile
 		want bool
 	}{
-		{"baseline", profile.OAuth21, false},
+		{"oauth21", profile.OAuth21, false},
 		{"fapi2-baseline", profile.FAPI2Baseline, true},
 		{"fapi2-message-signing", profile.FAPI2MessageSigning, true},
 		{"fapi-ciba", profile.FAPICIBA, false},
@@ -367,7 +367,7 @@ func TestRequiresPAR(t *testing.T) {
 		in   profile.Profile
 		want bool
 	}{
-		{"baseline", profile.OAuth21, false},
+		{"oauth21", profile.OAuth21, false},
 		{"fapi2-baseline", profile.FAPI2Baseline, true},
 		{"fapi2-message-signing", profile.FAPI2MessageSigning, true},
 		{"fapi-ciba", profile.FAPICIBA, false},

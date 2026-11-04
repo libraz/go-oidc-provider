@@ -391,7 +391,7 @@ func sigAlgAssertDCRDefault(t *testing.T, alg, other op.SigningAlgorithm) {
 	t.Helper()
 	tk := testkit.NewProvider(t,
 		testkit.WithSigningAlgorithm(alg),
-		testkit.WithOptions(op.WithDynamicRegistration(op.RegistrationOption{})),
+		testkit.WithOptions(op.WithDynamicRegistration(op.DynamicRegistration{})),
 	)
 	f := &dcrFixture{tk: tk, endpoint: tk.Server.URL + "/oidc/register"}
 

@@ -156,7 +156,7 @@ func TestWithDynamicRegistration_AcceptsCompositeStore(t *testing.T) {
 		op.WithKeyset(validKeyset(t)),
 		op.WithCookieKeys(newRandomCookieKey(t)),
 		fixtureAuthenticator(),
-		op.WithDynamicRegistration(op.RegistrationOption{}),
+		op.WithDynamicRegistration(op.DynamicRegistration{}),
 	)
 	if err != nil {
 		t.Fatalf("op.New with composite store and dynamic registration: %v", err)
@@ -230,7 +230,7 @@ func TestWithDynamicRegistration_RejectsCompositeWithReadOnlyClients(t *testing.
 		op.WithKeyset(validKeyset(t)),
 		op.WithCookieKeys(newRandomCookieKey(t)),
 		fixtureAuthenticator(),
-		op.WithDynamicRegistration(op.RegistrationOption{}),
+		op.WithDynamicRegistration(op.DynamicRegistration{}),
 	)
 	if err == nil {
 		t.Fatal("expected a configuration error for a read-only Clients route, got nil")

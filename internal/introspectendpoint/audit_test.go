@@ -13,6 +13,7 @@ import (
 
 	"github.com/libraz/go-oidc-provider/internal/clientauth"
 	"github.com/libraz/go-oidc-provider/op"
+	"github.com/libraz/go-oidc-provider/op/audit"
 	"github.com/libraz/go-oidc-provider/op/feature"
 	"github.com/libraz/go-oidc-provider/op/testkit"
 )
@@ -111,7 +112,7 @@ func TestAudit_IntrospectionError_BadSecretEmitsEvent(t *testing.T) {
 		t.Fatalf("status=%d want 401", resp.StatusCode)
 	}
 
-	events := capture.findEvents(t, string(op.AuditIntrospectionError))
+	events := capture.findEvents(t, string(audit.IntrospectionError))
 	if len(events) != 1 {
 		t.Fatalf("got %d introspection.error events, want exactly 1; capture=%s",
 			len(events), capture.buf.String())

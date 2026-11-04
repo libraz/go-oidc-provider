@@ -495,12 +495,12 @@ func buildOptions(ctx context.Context, cfg runConfig, users store.UserPasswordSt
 		// a developer binary, not a production deployment, so the
 		// open-registration trade-off (higher pre-auth surface, audit
 		// log noise) is acceptable here. Production embedders MUST
-		// leave [op.RegistrationOption.Open] at false and gate
+		// leave [op.DynamicRegistration.Open] at false and gate
 		// registration with the [Provider.IssueInitialAccessToken]
 		// flow op-demo prints to stdout below; the 24 h TTL and
 		// single-use cap keep that path usable for manual operator
 		// testing of the IAT-required dialect.
-		opts = append(opts, op.WithDynamicRegistration(op.RegistrationOption{
+		opts = append(opts, op.WithDynamicRegistration(op.DynamicRegistration{
 			Open:    true,
 			IATTTL:  24 * time.Hour,
 			IATUses: 1,

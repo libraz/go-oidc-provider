@@ -83,7 +83,7 @@ func (c *config) enabledGrantWires() map[string]struct{} {
 // given wire form.
 func seedGrantActivation(wire string) string {
 	if wire == TokenExchangeGrantType {
-		return "WithTokenExchange(...)"
+		return "WithTokenExchangeGrant(...)"
 	}
 	for _, g := range []grant.Type{
 		grant.AuthorizationCode, grant.RefreshToken, grant.ClientCredentials,
@@ -144,7 +144,7 @@ func (c *config) privateNetworkReaches() []privateNetworkReach {
 func (c *config) unauthenticatedRegistrationSources() []string {
 	var out []string
 	if c.dcr != nil && c.dcr.Open {
-		out = append(out, "open dynamic registration (RegistrationOption.Open)")
+		out = append(out, "open dynamic registration (DynamicRegistration.Open)")
 	}
 	if c.cimd != nil {
 		out = append(out, "Client ID Metadata Documents (WithClientIDMetadataDocuments)")

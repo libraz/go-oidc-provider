@@ -61,6 +61,7 @@ import (
 	authnpassword "github.com/libraz/go-oidc-provider/internal/authn/password"
 	authntotp "github.com/libraz/go-oidc-provider/internal/authn/totp"
 	"github.com/libraz/go-oidc-provider/op"
+	opaudit "github.com/libraz/go-oidc-provider/op/audit"
 	"github.com/libraz/go-oidc-provider/op/interaction"
 	"github.com/libraz/go-oidc-provider/op/store"
 	"github.com/libraz/go-oidc-provider/op/storeadapter/inmem"
@@ -603,7 +604,7 @@ func (s *ucAuditSink) Handle(_ context.Context, rec slog.Record) error {
 }
 
 // named returns the captured records of event.
-func (s *ucAuditSink) named(event op.AuditEvent) []ucAuditRecord {
+func (s *ucAuditSink) named(event opaudit.Event) []ucAuditRecord {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	var out []ucAuditRecord
@@ -618,12 +619,12 @@ func (s *ucAuditSink) named(event op.AuditEvent) []ucAuditRecord {
 // requireBeginFailed asserts exactly one step_begin_failed for kind with reason.
 func (f *ucFixture) requireBeginFailed(kind op.StepKind, reason string) {
 	f.t.Helper()
-	got := f.audit.named(op.AuditStepBeginFailed)
+	got := f.audit.named(opaudit.StepBeginFailed)
 	if len(got) != 1 {
-		f.t.Fatalf("%s events = %d (%v), want 1", op.AuditStepBeginFailed, len(got), got)
+		f.t.Fatalf("%s events = %d (%v), want 1", opaudit.StepBeginFailed, len(got), got)
 	}
 	if got[0].extras["step_kind"] != string(kind) || got[0].extras["reason"] != reason {
-		f.t.Fatalf("%s extras = %v, want step_kind=%s reason=%s", op.AuditStepBeginFailed, got[0].extras, kind, reason)
+		f.t.Fatalf("%s extras = %v, want step_kind=%s reason=%s", opaudit.StepBeginFailed, got[0].extras, kind, reason)
 	}
 }
 

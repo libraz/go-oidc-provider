@@ -137,14 +137,14 @@ type config struct {
 	// the post-validate config.
 	scopeIndex map[string]Scope
 
-	// dcr carries the [RegistrationOption] supplied through
+	// dcr carries the [DynamicRegistration] supplied through
 	// [WithDynamicRegistration]. Nil when the option is absent;
 	// non-nil when the feature is configured (defaults populated by
 	// [config.applyDefaults]). The library reads dcr to decide
 	// whether to mount /register, advertise registration_endpoint in
 	// discovery, and accept calls to
 	// [Provider.IssueInitialAccessToken].
-	dcr *RegistrationOption
+	dcr *DynamicRegistration
 
 	// loginObservers carries the [LoginAttemptObserver] values
 	// registered through [WithLoginAttemptObserver]. Multiple
@@ -398,7 +398,7 @@ type config struct {
 
 	// authorizationDetailTypes carries the RFC 9396 authorization_details
 	// types registered through [WithAuthorizationDetailTypes], in
-	// registration order. A non-empty slice implies [feature.RAR]. The
+	// registration order. A non-empty slice enables RFC 9396. The
 	// registered validators are consulted when parsing
 	// authorization_details at /authorize, /par, and /token.
 	authorizationDetailTypes []AuthorizationDetailType
@@ -583,11 +583,11 @@ type config struct {
 	customGrants []CustomGrantHandler
 
 	// tokenExchangePolicy stores the [TokenExchangePolicy] the embedder
-	// supplied through [WithTokenExchange]. Nil means token-exchange
+	// supplied through [WithTokenExchangeGrant]. Nil means token-exchange
 	// is not enabled on this provider; non-nil means the dispatcher
 	// hosts the in-tree RFC 8693 handler with the policy as its admission
 	// hook. At most one policy may be registered; a second
-	// [WithTokenExchange] call yields [ErrTokenExchangeDuplicate].
+	// [WithTokenExchangeGrant] call yields [ErrTokenExchangeDuplicate].
 	tokenExchangePolicy TokenExchangePolicy
 
 	// idjagIssuancePolicy stores the [IDJAGIssuancePolicy] supplied
@@ -625,17 +625,17 @@ type config struct {
 	// leaves the device_code lifetime unspecified, and a deployment
 	// that runs a short access-token TTL must still give a
 	// distracted user enough time to reach a secondary device.
-	// See [WithDeviceCodeTTL].
+	// See [DeviceCodeGrant.TTL].
 	deviceCodeExpiry time.Duration
 
 	// deviceCodePollInterval is the value advertised to the device
 	// as `interval` (RFC 8628 §3.2). Zero before
 	// [config.applyDefaults] runs; the defaults pass populates it
 	// with [devicecode.DefaultInterval]. See
-	// [WithDeviceCodePollInterval].
+	// [DeviceCodeGrant.PollInterval].
 	deviceCodePollInterval time.Duration
 
-	// cibaGrantEnabled records the explicit [WithCIBA] opt-in. When
+	// cibaGrantEnabled records the explicit [WithCIBAGrant] opt-in. When
 	// true the construction-time validator requires the configured
 	// [store.Store] to expose a non-nil [store.CIBARequestStore]
 	// substore AND a non-nil [HintResolver]; when false the CIBA
@@ -646,7 +646,7 @@ type config struct {
 
 	// cibaHintResolver maps the inbound CIBA hint (login_hint,
 	// id_token_hint, or login_hint_token) to a stable end-user
-	// subject. Required by [WithCIBA] because the /bc-authorize
+	// subject. Required by [WithCIBAGrant] because the /bc-authorize
 	// handler returns login_required when the resolver is nil.
 	cibaHintResolver HintResolver
 
@@ -1193,7 +1193,7 @@ func WithJWKSRotationActive(predicate func() bool) Option {
 // WithAuditLogger injects the [*slog.Logger] the library routes
 // audit events on. Audit records carry the slog attribute
 // "audit"="true" so log shippers can split them onto a dedicated
-// retention bucket without parsing the [AuditEvent] name — the
+// retention bucket without parsing the audit.Event name — the
 // attribute keeps the routing decision independent of the event
 // vocabulary, which may grow in a minor release.
 // If unset, the [Provider] uses the operational logger from
@@ -1217,7 +1217,7 @@ func WithJWKSRotationActive(predicate func() bool) Option {
 //
 // The supplied logger's handler is wrapped with the same redaction
 // hook as [WithLogger] so a regression that puts a token into an
-// [AuditEvent] extras map cannot escape the wire posture.
+// audit.Event extras map cannot escape the wire posture.
 // Stable since v1.0.
 func WithAuditLogger(logger *slog.Logger) Option {
 	return optionFunc(func(c *config) error {
@@ -1291,7 +1291,7 @@ func WithEndpoints(e Endpoints) Option {
 // (authorization_code + refresh_token) entirely; pass every grant the
 // deployment needs in a single call.
 //
-// The grants that own a dedicated option — [WithCIBA] and
+// The grants that own a dedicated option — [WithCIBAGrant] and
 // [WithDeviceCodeGrant], which also wire the collaborators those
 // grants need — compose on top of this list rather than competing
 // with it. Enabling one of them adds its grant to whatever this

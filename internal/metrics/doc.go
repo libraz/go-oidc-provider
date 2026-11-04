@@ -19,7 +19,7 @@
 //     the slog audit stream and the metric counter without the call
 //     site needing to know. Exact event-to-counter mappings come from
 //     internal/auditevent, the same typed registry projected by
-//     op.AuditEventCatalog; unknown extension names remain audit-only.
+//     op/audit.Catalog; unknown extension names remain audit-only.
 //   - Cardinality safety: client_id is the only label whose value can
 //     arrive from the wire, and it is the only one gated at the
 //     bridge — it is projected through the closed static-client set,

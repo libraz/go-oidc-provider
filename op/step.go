@@ -693,7 +693,7 @@ const (
 	// UnenrolledSkip passes over the step without completing it: the
 	// login continues at the level the other steps reach, and the step
 	// adds no amr. The skip is reported as the audit event
-	// [AuditStepBeginFailed] with reason "not_enrolled_skipped".
+	// audit.StepBeginFailed with reason "not_enrolled_skipped".
 	//
 	// Stable since v1.5.
 	UnenrolledSkip = authn.UnenrolledSkip

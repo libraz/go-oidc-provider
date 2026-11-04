@@ -209,7 +209,7 @@ rows:
       client MUST present it via Authorization: Bearer <token>; an
       access_token field in the request body is not honoured.
     status: out-of-scope
-    out_of_scope_reason: "non-spec residue: 'initialAccessToken set to a fixed string' is an upstream's adminRegistration shortcut (a single hard-coded string in OP config grants registration). v1.0 has no fixed-string IAT mode — every IAT is adapter-managed via op.Provider.IssueInitialAccessToken; op.RegistrationOption has no string-shaped IAT field. The wire shape this row asserts is not exercisable at v1.0's surface."
+    out_of_scope_reason: "non-spec residue: 'initialAccessToken set to a fixed string' is an upstream's adminRegistration shortcut (a single hard-coded string in OP config grants registration). v1.0 has no fixed-string IAT mode — every IAT is adapter-managed via op.Provider.IssueInitialAccessToken; op.DynamicRegistration has no string-shaped IAT field. The wire shape this row asserts is not exercisable at v1.0's surface."
 
   - id: DCR-IAT-02
     severity: P0
@@ -229,7 +229,7 @@ rows:
       (new InitialAccessToken({expiresIn?, policies?}).save()); when
       expiresIn is absent the IAT never expires.
     status: out-of-scope
-    out_of_scope_reason: "non-spec residue: an upstream's IAT API exposes 'expiresIn' as an optional field with the contract 'absence means never expires'. v1.0's op.InitialAccessTokenSpec.TTL = 0 falls back to RegistrationOption.IATTTL (default 24h, never zero/never-expires). There is no v1.0 surface to mint an IAT with infinite lifetime — every adapter-managed IAT carries a finite ExpiresAt. The wire shape the row asserts is non-spec residue; finite-TTL IAT issuance is exercised by DCR-IAT-04 / DCR-IAT-07 and the registration_management catalog."
+    out_of_scope_reason: "non-spec residue: an upstream's IAT API exposes 'expiresIn' as an optional field with the contract 'absence means never expires'. v1.0's op.InitialAccessTokenSpec.TTL = 0 falls back to DynamicRegistration.IATTTL (default 24h, never zero/never-expires). There is no v1.0 surface to mint an IAT with infinite lifetime — every adapter-managed IAT carries a finite ExpiresAt. The wire shape the row asserts is non-spec residue; finite-TTL IAT issuance is exercised by DCR-IAT-04 / DCR-IAT-07 and the registration_management catalog."
 
   - id: DCR-IAT-04
     severity: P0
@@ -248,7 +248,7 @@ rows:
       ctx.oidc.entities.InitialAccessToken so downstream policies can
       reference it.
     status: out-of-scope
-    out_of_scope_reason: "non-spec residue: 'ctx.oidc.entities.InitialAccessToken' is an upstream koa-style request-context attachment so downstream policies can reference the IAT entity. v1.0 has no ctx.oidc.entities surface — request-scoped state lives in the handler's local variables and audit events carry the IAT identifier through audit.Event.Extras. There is no public hook that exposes the IAT entity to a policy callback during the registration request; downstream policy MUST be wired through op.RegistrationOption.ValidateMetadata which receives op.ClientMetadata only, not the IAT row."
+    out_of_scope_reason: "non-spec residue: 'ctx.oidc.entities.InitialAccessToken' is an upstream koa-style request-context attachment so downstream policies can reference the IAT entity. v1.0 has no ctx.oidc.entities surface — request-scoped state lives in the handler's local variables and audit events carry the IAT identifier through audit.Event.Extras. There is no public hook that exposes the IAT entity to a policy callback during the registration request; downstream policy MUST be wired through op.DynamicRegistration.ValidateMetadata which receives op.ClientMetadata only, not the IAT row."
 
   - id: DCR-IAT-06
     severity: P1
@@ -319,7 +319,7 @@ rows:
       When IAT is in use, ctx.oidc.entities also includes
       InitialAccessToken.
     status: out-of-scope
-    out_of_scope_reason: "Same root cause as DCR-CTX-01: v1.0 has no ctx.oidc.entities surface. The IAT entity is not exposed via a request-scoped context bag; downstream policy must be wired through op.RegistrationOption.ValidateMetadata (which sees op.ClientMetadata, not the IAT row). The wire shape this row asserts is non-spec residue."
+    out_of_scope_reason: "Same root cause as DCR-CTX-01: v1.0 has no ctx.oidc.entities surface. The IAT entity is not exposed via a request-scoped context bag; downstream policy must be wired through op.DynamicRegistration.ValidateMetadata (which sees op.ClientMetadata, not the IAT row). The wire shape this row asserts is non-spec residue."
 
   - id: DCR-CTX-03
     severity: P2

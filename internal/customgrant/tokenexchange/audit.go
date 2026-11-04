@@ -8,7 +8,7 @@ import (
 )
 
 // Audit event names emitted by the token-exchange handler. Values come from
-// the same registry as the public op.AuditTokenExchange* constants.
+// the same registry as the public op/audit.TokenExchange* constants.
 const (
 	auditRequested             = string(auditevent.AuditTokenExchangeRequested)
 	auditGranted               = string(auditevent.AuditTokenExchangeGranted)

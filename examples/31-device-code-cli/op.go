@@ -52,7 +52,7 @@ func buildProvider() (*op.Provider, *inmem.Store, error) {
 		// WithDeviceCodeGrant below is what mounts
 		// /device_authorization and requires the DeviceCodes substore.
 		op.WithGrants(grant.DeviceCode),
-		op.WithDeviceCodeGrant(),
+		op.WithDeviceCodeGrant(op.DeviceCodeGrant{}),
 		op.WithStaticClients(op.PublicClient{
 			ID: clientID,
 			// Device-code clients never visit /authorize so

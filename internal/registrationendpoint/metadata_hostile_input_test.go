@@ -63,7 +63,7 @@ func TestDCR_ClientMetadataIsTreatedAsAttackerInput(t *testing.T) {
 			for _, h := range hostileURIs {
 				t.Run(member+"/"+h.name, func(t *testing.T) {
 					t.Parallel()
-					f := newFixture(t, op.RegistrationOption{})
+					f := newFixture(t, op.DynamicRegistration{})
 					_, iat := f.issueIAT(t, op.InitialAccessTokenSpec{})
 					body := map[string]any{
 						"redirect_uris": []string{"https://rp.test.invalid/callback"},
@@ -131,7 +131,7 @@ func TestDCR_ClientMetadataIsTreatedAsAttackerInput(t *testing.T) {
 		for _, tc := range cases {
 			t.Run(tc.name, func(t *testing.T) {
 				t.Parallel()
-				f := newFixture(t, op.RegistrationOption{})
+				f := newFixture(t, op.DynamicRegistration{})
 				_, iat := f.issueIAT(t, tc.iat)
 				body := map[string]any{"redirect_uris": []string{"https://rp.test.invalid/callback"}}
 				for k, v := range tc.patch {
@@ -155,7 +155,7 @@ func TestDCR_ClientMetadataIsTreatedAsAttackerInput(t *testing.T) {
 		// would let a client believe it holds capabilities the OP will
 		// refuse at the token endpoint, and would hide the narrowing
 		// from anyone auditing the response.
-		f := newFixture(t, op.RegistrationOption{})
+		f := newFixture(t, op.DynamicRegistration{})
 		_, iat := f.issueIAT(t, op.InitialAccessTokenSpec{})
 		resp := f.post(t, map[string]any{
 			"redirect_uris": []string{"https://rp.test.invalid/callback"},

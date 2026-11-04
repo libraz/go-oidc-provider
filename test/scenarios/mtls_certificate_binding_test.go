@@ -487,7 +487,7 @@ func TestScenario_MTLS_007_ThumbprintAlgorithm(t *testing.T) {
 func TestScenario_MTLS_008_DeviceCodeBindingConfidential(t *testing.T) {
 	t.Parallel()
 
-	f := newMTLSAsyncFixture(t, false, op.WithDeviceCodeGrant(),
+	f := newMTLSAsyncFixture(t, false, op.WithDeviceCodeGrant(op.DeviceCodeGrant{}),
 		devURNDeviceCode, "rp-mtls-device-conf")
 	body := f.redeemDeviceCode(t, f.cert)
 	f.assertBoundTokens(t, body)
@@ -505,7 +505,7 @@ func TestScenario_MTLS_008_DeviceCodeBindingConfidential(t *testing.T) {
 func TestScenario_MTLS_009_DeviceCodeRequiresMTLS(t *testing.T) {
 	t.Parallel()
 
-	f := newMTLSAsyncFixture(t, false, op.WithDeviceCodeGrant(),
+	f := newMTLSAsyncFixture(t, false, op.WithDeviceCodeGrant(op.DeviceCodeGrant{}),
 		devURNDeviceCode, "rp-mtls-device-nocert")
 	status, body := f.redeemDeviceCodeStatus(t, nil)
 	assertMTLSGrantRejected(t, status, body)
@@ -521,7 +521,7 @@ func TestScenario_MTLS_009_DeviceCodeRequiresMTLS(t *testing.T) {
 func TestScenario_MTLS_010_DeviceCodeBindingPublic(t *testing.T) {
 	t.Parallel()
 
-	f := newMTLSAsyncFixture(t, true, op.WithDeviceCodeGrant(),
+	f := newMTLSAsyncFixture(t, true, op.WithDeviceCodeGrant(op.DeviceCodeGrant{}),
 		devURNDeviceCode, "rp-mtls-device-public")
 	body := f.redeemDeviceCode(t, f.cert)
 	f.assertBoundTokens(t, body)
@@ -538,7 +538,7 @@ func TestScenario_MTLS_011_CIBABindingConfidential(t *testing.T) {
 	t.Parallel()
 
 	f := newMTLSAsyncFixture(t, false,
-		op.WithCIBA(op.WithCIBAHintResolver(cibaHintResolver{})),
+		op.WithCIBAGrant(op.CIBAGrant{HintResolver: cibaHintResolver{}}),
 		cibaURNGrant, "rp-mtls-ciba-conf")
 	body := f.redeemCIBA(t, f.cert)
 	f.assertBoundTokens(t, body)
@@ -554,7 +554,7 @@ func TestScenario_MTLS_012_CIBARequiresMTLS(t *testing.T) {
 	t.Parallel()
 
 	f := newMTLSAsyncFixture(t, false,
-		op.WithCIBA(op.WithCIBAHintResolver(cibaHintResolver{})),
+		op.WithCIBAGrant(op.CIBAGrant{HintResolver: cibaHintResolver{}}),
 		cibaURNGrant, "rp-mtls-ciba-nocert")
 	status, body := f.redeemCIBAStatus(t, nil)
 	assertMTLSGrantRejected(t, status, body)
@@ -569,7 +569,7 @@ func TestScenario_MTLS_013_CIBABindingPublic(t *testing.T) {
 	t.Parallel()
 
 	f := newMTLSAsyncFixture(t, true,
-		op.WithCIBA(op.WithCIBAHintResolver(cibaHintResolver{})),
+		op.WithCIBAGrant(op.CIBAGrant{HintResolver: cibaHintResolver{}}),
 		cibaURNGrant, "rp-mtls-ciba-public")
 	body := f.redeemCIBA(t, f.cert)
 	f.assertBoundTokens(t, body)

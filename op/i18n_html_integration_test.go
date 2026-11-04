@@ -96,7 +96,7 @@ func localizedPasswordPromptFromWire(
 		op.WithLoginFlow(op.LoginFlow{
 			Primary: op.PrimaryPassword{Store: st.UserPasswords()},
 		}),
-		op.WithLocale(bundle),
+		op.WithLocaleBundle(bundle),
 		op.WithStaticClients(op.PublicClient{
 			ID:           "localized-html-client",
 			RedirectURIs: []string{"https://rp.example.com/cb"},

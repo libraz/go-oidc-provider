@@ -62,8 +62,8 @@ func TestGrantResolution_DedicatedOptionKeepsDefaults(t *testing.T) {
 		opt  op.Option
 		want grant.Type
 	}{
-		{"ciba", op.WithCIBA(op.WithCIBAHintResolver(stubCIBAHintResolver{})), grant.CIBA},
-		{"device-code", op.WithDeviceCodeGrant(), grant.DeviceCode},
+		{"ciba", op.WithCIBAGrant(op.CIBAGrant{HintResolver: stubCIBAHintResolver{}}), grant.CIBA},
+		{"device-code", op.WithDeviceCodeGrant(op.DeviceCodeGrant{}), grant.DeviceCode},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -86,7 +86,7 @@ func TestGrantResolution_DedicatedOptionKeepsDefaults(t *testing.T) {
 func TestGrantResolution_OrderIndependent(t *testing.T) {
 	t.Parallel()
 
-	ciba := func() op.Option { return op.WithCIBA(op.WithCIBAHintResolver(stubCIBAHintResolver{})) }
+	ciba := func() op.Option { return op.WithCIBAGrant(op.CIBAGrant{HintResolver: stubCIBAHintResolver{}}) }
 	grants := func() op.Option {
 		return op.WithGrants(grant.AuthorizationCode, grant.RefreshToken, grant.ClientCredentials)
 	}
@@ -132,7 +132,7 @@ func TestGrantResolution_NoDuplicateWhenNamedTwice(t *testing.T) {
 
 	got := discoveredGrants(t,
 		op.WithGrants(grant.AuthorizationCode, grant.RefreshToken, grant.CIBA),
-		op.WithCIBA(op.WithCIBAHintResolver(stubCIBAHintResolver{})),
+		op.WithCIBAGrant(op.CIBAGrant{HintResolver: stubCIBAHintResolver{}}),
 	)
 	seen := 0
 	for _, g := range got {

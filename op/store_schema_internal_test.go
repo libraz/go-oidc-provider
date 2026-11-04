@@ -276,9 +276,9 @@ func TestStoreSchema_FeaturesAddTheirStores(t *testing.T) {
 		added []string
 	}{
 		{"par", WithFeature(feature.PAR), []string{"PushedAuthRequests"}},
-		{"dcr", WithDynamicRegistration(RegistrationOption{}), []string{"InitialAccessTokens", "RegistrationAccessTokens"}},
-		{"device_code", WithDeviceCodeGrant(), []string{"DeviceCodes"}},
-		{"ciba", WithCIBA(), []string{"CIBARequests"}},
+		{"dcr", WithDynamicRegistration(DynamicRegistration{}), []string{"InitialAccessTokens", "RegistrationAccessTokens"}},
+		{"device_code", WithDeviceCodeGrant(DeviceCodeGrant{}), []string{"DeviceCodes"}},
+		{"ciba", WithCIBAGrant(CIBAGrant{}), []string{"CIBARequests"}},
 		{"ssf", WithSharedSignals(), []string{"SSFStreams", "SSFEvents"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

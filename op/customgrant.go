@@ -506,7 +506,7 @@ func cloneClaims(m map[string]any) map[string]any {
 
 // customGrantNamesFor returns the registered handler names in
 // registration order, plus the token-exchange URN when the embedder
-// invoked [WithTokenExchange] or [WithIDJAGIssuance]. The discovery builder consults the
+// invoked [WithTokenExchangeGrant] or [WithIDJAGIssuance]. The discovery builder consults the
 // result to extend grant_types_supported beyond the built-in catalogue.
 // The helper lives next to the dispatcher constructor so a future
 // change to the registration store updates both call sites at once.
@@ -531,7 +531,7 @@ func customGrantNamesFor(c *config) []string {
 // were registered so the caller can short-circuit the wiring instead
 // of mounting an empty dispatcher.
 //
-// The token-exchange handler (when [WithTokenExchange] was
+// The token-exchange handler (when [WithTokenExchangeGrant] was
 // invoked) rides on the same dispatcher: its [customgrant.Handler]
 // surface is appended to the embedder-supplied registrations so a
 // single grant_type lookup table answers every extension grant. The

@@ -42,7 +42,7 @@ func TestAuthorize_RequestObjectOuterParameters(t *testing.T) {
 			name: "fapi-object-only",
 			opts: []op.Option{
 				op.WithGrants(grant.AuthorizationCode, grant.RefreshToken),
-				op.WithCIBA(op.WithCIBAHintResolver(stubCIBAHintResolver{})),
+				op.WithCIBAGrant(op.CIBAGrant{HintResolver: stubCIBAHintResolver{}}),
 				op.WithProfile(profile.FAPICIBA),
 				op.WithFeature(feature.DPoP),
 				op.WithDPoPNonceSource(stubDPoPNonceSource{}),

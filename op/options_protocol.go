@@ -66,7 +66,7 @@ type BackchannelLogout struct {
 	// so the per-RP timeout alone would let a fully unresponsive audience
 	// occupy many multiples of itself. Deliveries abandoned when the budget
 	// elapses fail with the context error and raise
-	// [AuditLogoutBackChannelFailed], so an under-sized budget is visible
+	// audit.LogoutBackChannelFailed, so an under-sized budget is visible
 	// in the audit stream rather than silent.
 	//
 	// Zero selects the library default of 30 seconds, which suits an
@@ -96,7 +96,7 @@ type BackchannelLogout struct {
 // OIDC Back-Channel Logout 1.0 §2.7's best-effort floor to zero.
 // Embedders who require at-least-once delivery for every initiated
 // logout MUST route SessionStore to a durable backend; the
-// `bcl.no_sessions_for_subject` audit event ([AuditBCLNoSessionsForSubject])
+// `bcl.no_sessions_for_subject` audit event (audit.BCLNoSessionsForSubject)
 // surfaces the gap when it actually fires. Declare the chosen
 // posture through [WithSessionDurabilityPosture] so the audit
 // signal carries the embedder's intent.

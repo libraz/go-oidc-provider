@@ -171,7 +171,7 @@ func (c *config) allowPrivateNetwork(t OutboundTarget) {
 // special-use TLDs .localhost, .test, .invalid or .example. It logs a
 // warning per listed target on the operational logger and records the
 // opt-in on the audit stream, as insecure_backchannel_logout_for_dev and
-// insecure_shared_signals_push_for_dev on the [AuditStartupProfile]
+// insecure_shared_signals_push_for_dev on the audit.StartupProfile
 // event, so a deployment cannot silently leave it on after promoting from
 // CI to production.
 //

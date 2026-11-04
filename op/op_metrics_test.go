@@ -122,7 +122,7 @@ func TestProvider_WithPrometheus_TokenIssuedLabelsTheRedeemingGrant(t *testing.T
 
 	reg := prometheus.NewRegistry()
 	provider, err := op.New(append(validBaseOptsWithStore(t, st),
-		op.WithDeviceCodeGrant(),
+		op.WithDeviceCodeGrant(op.DeviceCodeGrant{}),
 		op.WithPrometheus(reg),
 	)...)
 	if err != nil {

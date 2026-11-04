@@ -9,10 +9,6 @@ github.com/libraz/go-oidc-provider/op	AccountDisabledReason
 github.com/libraz/go-oidc-provider/op	AccountEnabled
 github.com/libraz/go-oidc-provider/op	AccountPurged
 github.com/libraz/go-oidc-provider/op	AssertionProfileIDJAG
-github.com/libraz/go-oidc-provider/op	AuditCIMDClientDenied
-github.com/libraz/go-oidc-provider/op	AuditCIMDFetchFailed
-github.com/libraz/go-oidc-provider/op	AuditCIMDFetched
-github.com/libraz/go-oidc-provider/op	AuditTokenExchangeIDJAGIssued
 github.com/libraz/go-oidc-provider/op	ClientIDMetadataDocuments
 github.com/libraz/go-oidc-provider/op	ClientIDMetadataDocuments.Allow
 github.com/libraz/go-oidc-provider/op	CredentialCompromise
@@ -27,6 +23,10 @@ github.com/libraz/go-oidc-provider/op	OutboundClientIDMetadata
 github.com/libraz/go-oidc-provider/op	WithClientIDMetadataDocuments
 github.com/libraz/go-oidc-provider/op	WithGrantManagement
 github.com/libraz/go-oidc-provider/op	WithIDJAGIssuance
+github.com/libraz/go-oidc-provider/op/audit	CIMDClientDenied
+github.com/libraz/go-oidc-provider/op/audit	CIMDFetchFailed
+github.com/libraz/go-oidc-provider/op/audit	CIMDFetched
+github.com/libraz/go-oidc-provider/op/audit	TokenExchangeIDJAGIssued
 github.com/libraz/go-oidc-provider/op/interaction	ClientView.MetadataDocumentHost
 github.com/libraz/go-oidc-provider/op/interaction	ClientView.RedirectHost
 github.com/libraz/go-oidc-provider/op/interaction	ClientView.RedirectLoopback

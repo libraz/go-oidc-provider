@@ -17,7 +17,7 @@ import (
 )
 
 // opAuditConsentGrantedFirstParty mirrors the public
-// op.AuditConsentGrantedFirstParty constant. The internal package
+// op/audit.ConsentGrantedFirstParty constant. The internal package
 // cannot import op (one-way import graph), so the value is duplicated
 // here and pinned by TestAuditEvent_FirstPartyMirror in
 // op/audit_test.go.

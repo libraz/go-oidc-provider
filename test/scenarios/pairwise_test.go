@@ -61,7 +61,7 @@ func newPairwiseDCRProvider(t *testing.T) *testkit.Provider {
 	t.Helper()
 	return testkit.NewProvider(t, testkit.WithOptions(
 		op.WithPairwiseSubject(pwPairwiseSalt),
-		op.WithDynamicRegistration(op.RegistrationOption{}),
+		op.WithDynamicRegistration(op.DynamicRegistration{}),
 	))
 }
 
@@ -576,7 +576,7 @@ func TestScenario_PW_02_MissingSubjectTypeFallsBackToPublic(t *testing.T) {
 	t.Parallel()
 
 	tk := testkit.NewProvider(t,
-		testkit.WithOptions(op.WithDynamicRegistration(op.RegistrationOption{})),
+		testkit.WithOptions(op.WithDynamicRegistration(op.DynamicRegistration{})),
 	)
 
 	body := map[string]any{
@@ -609,7 +609,7 @@ func TestScenario_PW_03_PairwiseRequestRejectedWhenFeatureOff(t *testing.T) {
 	t.Parallel()
 
 	tk := testkit.NewProvider(t,
-		testkit.WithOptions(op.WithDynamicRegistration(op.RegistrationOption{})),
+		testkit.WithOptions(op.WithDynamicRegistration(op.DynamicRegistration{})),
 	)
 
 	body := map[string]any{
@@ -645,7 +645,7 @@ func TestScenario_PW_04_PairwiseUnimplementedRejectsRegistration(t *testing.T) {
 	t.Parallel()
 
 	tk := testkit.NewProvider(t,
-		testkit.WithOptions(op.WithDynamicRegistration(op.RegistrationOption{})),
+		testkit.WithOptions(op.WithDynamicRegistration(op.DynamicRegistration{})),
 	)
 
 	body := map[string]any{

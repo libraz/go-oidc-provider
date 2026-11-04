@@ -48,7 +48,7 @@ func TestRegister_InternalClientAttributesNotWritable(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 
-			f := newFixture(t, op.RegistrationOption{})
+			f := newFixture(t, op.DynamicRegistration{})
 			_, iat := f.issueIAT(t, op.InitialAccessTokenSpec{})
 			body := minimalMetadata()
 			body["token_endpoint_auth_method"] = tc.authMethod
@@ -214,7 +214,7 @@ func TestManage_ReadModifyWriteIsLossless(t *testing.T) {
 			t.Parallel()
 
 			ctx := context.Background()
-			f := newFixture(t, op.RegistrationOption{}, op.WithFeature(feature.MTLS))
+			f := newFixture(t, op.DynamicRegistration{}, op.WithFeature(feature.MTLS))
 			created := f.register(t, build(t))
 			stored0, err := f.prov.Store.GetClient(ctx, created.clientID)
 			if err != nil {

@@ -10,6 +10,7 @@ import (
 
 	"github.com/libraz/go-oidc-provider/internal/tokens"
 	"github.com/libraz/go-oidc-provider/op"
+	"github.com/libraz/go-oidc-provider/op/audit"
 	"github.com/libraz/go-oidc-provider/op/feature"
 	"github.com/libraz/go-oidc-provider/op/store"
 	"github.com/libraz/go-oidc-provider/op/storeadapter/inmem"
@@ -111,7 +112,7 @@ func TestHandler_GrantLookupFault_EmitsEventAndStaysInactive(t *testing.T) {
 			if resp.StatusCode != http.StatusOK || len(body) != 1 || body["active"] != false {
 				t.Fatalf("status=%d body=%v want 200 {\"active\":false}", resp.StatusCode, body)
 			}
-			events := capture.findEvents(t, string(op.AuditIntrospectionError))
+			events := capture.findEvents(t, string(audit.IntrospectionError))
 			if len(events) != 1 {
 				t.Fatalf("got %d introspection.error events, want exactly 1; capture=%s", len(events), capture.buf.String())
 			}

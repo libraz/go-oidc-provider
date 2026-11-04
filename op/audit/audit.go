@@ -1,8 +1,13 @@
-package op
+// Package audit is the closed catalogue of audit event names the OP emits
+// through the logger given to op.WithAuditLogger (or op.WithLogger), and the
+// catalogue rows that map each event onto its Prometheus counter.
+//
+// Stable since v1.5.
+package audit
 
 import "github.com/libraz/go-oidc-provider/internal/auditevent"
 
-// AuditEvent identifies a structured audit event the OP emits. The
+// Event identifies a structured audit event the OP emits. The
 // constants below are the closed catalogue handler code selects from;
 // new event names are added here once the handler that emits them
 // lands.
@@ -11,35 +16,35 @@ import "github.com/libraz/go-oidc-provider/internal/auditevent"
 // "<area>.<verb>.<qualifier>") so dashboards can pre-aggregate by
 // area without parsing a free-form message.
 //
-// When [WithPrometheus] is configured, a curated subset of these
+// When op.WithPrometheus is configured, a curated subset of these
 // events is mirrored onto Prometheus counters by the package-internal
 // metrics bridge — a single emission updates both the slog audit
 // stream and the matching counter.
 //
-// Stable since v1.0. New events MAY be added in a minor release;
+// Stable since v1.5. New events MAY be added in a minor release;
 // existing event names are part of the API surface and only renamed
 // in a major release with a deprecation notice.
-type AuditEvent string
+type Event string
 
-// AuditEventDefinition describes one row in the OP's closed audit-event
+// EventDefinition describes one row in the OP's closed audit-event
 // catalog. MetricName is empty for audit-only events. MetricLabel is the
 // bounded label value used by category or fixed-kind counters; it is empty for
 // scalar counters and counters whose labels come from structured event fields.
-type AuditEventDefinition struct {
-	Event       AuditEvent
+type EventDefinition struct {
+	Event       Event
 	MetricName  string
 	MetricLabel string
 }
 
-// AuditEventCatalog returns a copy of the complete audit-event catalog. The
+// Catalog returns a copy of the complete audit-event catalog. The
 // same internal registry drives the Prometheus bridge, so event discovery and
 // metric routing cannot drift.
-func AuditEventCatalog() []AuditEventDefinition {
+func Catalog() []EventDefinition {
 	internalCatalog := auditevent.Catalog()
-	out := make([]AuditEventDefinition, 0, len(internalCatalog))
+	out := make([]EventDefinition, 0, len(internalCatalog))
 	for _, definition := range internalCatalog {
-		out = append(out, AuditEventDefinition{
-			Event:       AuditEvent(definition.Name),
+		out = append(out, EventDefinition{
+			Event:       Event(definition.Name),
 			MetricName:  auditevent.MetricName(definition.Metric),
 			MetricLabel: definition.Label,
 		})
@@ -61,62 +66,62 @@ func AuditEventCatalog() []AuditEventDefinition {
 // account-management plane to this stream, not that no passkey was
 // registered.
 const (
-	AuditAccountCreated             = AuditEvent(auditevent.AuditAccountCreated)
-	AuditAccountDeleted             = AuditEvent(auditevent.AuditAccountDeleted)
-	AuditAccountEmailAdded          = AuditEvent(auditevent.AuditAccountEmailAdded)
-	AuditAccountEmailVerified       = AuditEvent(auditevent.AuditAccountEmailVerified)
-	AuditAccountEmailRemoved        = AuditEvent(auditevent.AuditAccountEmailRemoved)
-	AuditAccountEmailSetPrimary     = AuditEvent(auditevent.AuditAccountEmailSetPrimary)
-	AuditAccountPasskeyRegistered   = AuditEvent(auditevent.AuditAccountPasskeyRegistered)
-	AuditAccountPasskeyRemoved      = AuditEvent(auditevent.AuditAccountPasskeyRemoved)
-	AuditAccountTOTPEnabled         = AuditEvent(auditevent.AuditAccountTOTPEnabled)
-	AuditAccountTOTPDisabled        = AuditEvent(auditevent.AuditAccountTOTPDisabled)
-	AuditAccountPasswordChanged     = AuditEvent(auditevent.AuditAccountPasswordChanged)
-	AuditAccountRecoveryRegenerated = AuditEvent(auditevent.AuditAccountRecoveryRegenerated)
-	AuditRecoverySupportEscalation  = AuditEvent(auditevent.AuditRecoverySupportEscalation)
-	AuditAccountFederationLinked    = AuditEvent(auditevent.AuditAccountFederationLinked)
-	AuditAccountFederationUnlinked  = AuditEvent(auditevent.AuditAccountFederationUnlinked)
+	AccountCreated             = Event(auditevent.AuditAccountCreated)
+	AccountDeleted             = Event(auditevent.AuditAccountDeleted)
+	AccountEmailAdded          = Event(auditevent.AuditAccountEmailAdded)
+	AccountEmailVerified       = Event(auditevent.AuditAccountEmailVerified)
+	AccountEmailRemoved        = Event(auditevent.AuditAccountEmailRemoved)
+	AccountEmailSetPrimary     = Event(auditevent.AuditAccountEmailSetPrimary)
+	AccountPasskeyRegistered   = Event(auditevent.AuditAccountPasskeyRegistered)
+	AccountPasskeyRemoved      = Event(auditevent.AuditAccountPasskeyRemoved)
+	AccountTOTPEnabled         = Event(auditevent.AuditAccountTOTPEnabled)
+	AccountTOTPDisabled        = Event(auditevent.AuditAccountTOTPDisabled)
+	AccountPasswordChanged     = Event(auditevent.AuditAccountPasswordChanged)
+	AccountRecoveryRegenerated = Event(auditevent.AuditAccountRecoveryRegenerated)
+	RecoverySupportEscalation  = Event(auditevent.AuditRecoverySupportEscalation)
+	AccountFederationLinked    = Event(auditevent.AuditAccountFederationLinked)
+	AccountFederationUnlinked  = Event(auditevent.AuditAccountFederationUnlinked)
 )
 
 // Login / MFA events. One fires from the authenticator chain each
 // time a factor resolves: the login.* pair for the factor that first
 // identifies the user, the mfa.* pair for every factor after it. The
 // event carries the subject as ActorID on the failure path as well as
-// the success path — the [LoginAttemptObserver] feed withholds it
+// the success path — the op.LoginAttemptObserver feed withholds it
 // there so a policy hook cannot be turned into an enumeration oracle,
 // but this stream reaches the deployment's own audit sink and nothing
 // on the wire, and a failed-login record without the account being
 // guessed at answers no question worth asking.
 const (
-	AuditLoginSuccess = AuditEvent(auditevent.AuditLoginSuccess)
-	AuditLoginFailed  = AuditEvent(auditevent.AuditLoginFailed)
-	AuditMFASuccess   = AuditEvent(auditevent.AuditMFASuccess)
-	AuditMFAFailed    = AuditEvent(auditevent.AuditMFAFailed)
+	LoginSuccess = Event(auditevent.AuditLoginSuccess)
+	LoginFailed  = Event(auditevent.AuditLoginFailed)
+	MFASuccess   = Event(auditevent.AuditMFASuccess)
+	MFAFailed    = Event(auditevent.AuditMFAFailed)
 
-	// Reserved vocabulary: the library never emits AuditMFARequired,
-	// AuditStepUpRequired or AuditStepUpSuccess. The OP defines the
+	// Reserved vocabulary: the library never emits MFARequired,
+	// StepUpRequired or StepUpSuccess. The OP defines the
 	// names so a deployment's audit pipeline can carry them
 	// consistently; silence on these three is not evidence that the
 	// situation did not arise.
 	//
-	// Step-up is the embedder's decision. [StepUpChallenge] builds the
+	// Step-up is the embedder's decision. op.StepUpChallenge builds the
 	// RFC 9470 WWW-Authenticate value, and the resource server that
 	// sends it is the only party that knows which request needed a
 	// stronger authentication and whether the one that came back
 	// satisfied it; the OP sees an ordinary authorization request.
 	//
-	// AuditMFARequired has no once-per-attempt point to fire from. The
+	// MFARequired has no once-per-attempt point to fire from. The
 	// chain does not decide "MFA is now required" separately from
 	// prompting for the next factor, and a prompt is re-emitted on
 	// every retry of that factor, so emitting here would count a user
 	// mistyping one code as several demands for a second factor.
-	// [AuditMFASuccess] and [AuditMFAFailed] carry the same
+	// [MFASuccess] and [MFAFailed] carry the same
 	// information without that ambiguity.
-	AuditMFARequired    = AuditEvent(auditevent.AuditMFARequired)
-	AuditStepUpRequired = AuditEvent(auditevent.AuditStepUpRequired)
-	AuditStepUpSuccess  = AuditEvent(auditevent.AuditStepUpSuccess)
+	MFARequired    = Event(auditevent.AuditMFARequired)
+	StepUpRequired = Event(auditevent.AuditStepUpRequired)
+	StepUpSuccess  = Event(auditevent.AuditStepUpSuccess)
 
-	// AuditLockoutStalled fires when the cross-factor brute-force
+	// LockoutStalled fires when the cross-factor brute-force
 	// counter abandoned a failed attempt because its compare-and-swap
 	// lost too many times in a row. The attempt was rejected, but it
 	// was NOT counted: the subject's failure budget did not advance,
@@ -124,9 +129,9 @@ const (
 	// without ever reaching the lockout threshold. Sustained emissions
 	// for one ActorID are the signal that matters — an isolated one is
 	// ordinary contention under load.
-	AuditLockoutStalled = AuditEvent(auditevent.AuditLockoutStalled)
+	LockoutStalled = Event(auditevent.AuditLockoutStalled)
 
-	// AuditLockoutEngaged fires once when a failed attempt newly
+	// LockoutEngaged fires once when a failed attempt newly
 	// engages the cross-factor brute-force lock: the subject was not
 	// locked before the attempt and is locked after it. Attempts made
 	// while the lock is already running do not repeat it. ActorID is
@@ -135,9 +140,9 @@ const (
 	// identical to a wrong password so it cannot enumerate accounts.
 	//
 	// Stable since v1.5.
-	AuditLockoutEngaged = AuditEvent(auditevent.AuditLockoutEngaged)
+	LockoutEngaged = Event(auditevent.AuditLockoutEngaged)
 
-	// AuditStepBeginFailed fires once when a LoginFlow step could not
+	// StepBeginFailed fires once when a LoginFlow step could not
 	// begin, so a factor that refuses before prompting leaves a record.
 	// Extras carry "step_kind" and "reason", one of "not_enrolled",
 	// "aborted", "locked", "not_enrolled_skipped" (a one-of step passed
@@ -146,21 +151,21 @@ const (
 	// cancelled is not recorded.
 	//
 	// Stable since v1.5.
-	AuditStepBeginFailed = AuditEvent(auditevent.AuditLoginStepBeginFailed)
+	StepBeginFailed = Event(auditevent.AuditLoginStepBeginFailed)
 )
 
-// Consent events. AuditConsentGranted fires when the user approves a
-// consent prompt; AuditConsentGrantedFirstParty fires instead when
+// Consent events. ConsentGranted fires when the user approves a
+// consent prompt; ConsentGrantedFirstParty fires instead when
 // first-party auto-consent applies, so a grant recorded without the
 // user seeing a screen is distinguishable in the log from one they
 // approved.
 const (
-	AuditConsentGranted           = AuditEvent(auditevent.AuditConsentGranted)
-	AuditConsentGrantedFirstParty = AuditEvent(auditevent.AuditConsentGrantedFirstParty)
+	ConsentGranted           = Event(auditevent.AuditConsentGranted)
+	ConsentGrantedFirstParty = Event(auditevent.AuditConsentGrantedFirstParty)
 
 	// Reserved vocabulary: the library never emits
-	// AuditConsentGrantedDelta, AuditConsentSkippedExisting or
-	// AuditConsentRevoked. They name real distinctions — a re-prompt
+	// ConsentGrantedDelta, ConsentSkippedExisting or
+	// ConsentRevoked. They name real distinctions — a re-prompt
 	// forced by a newly requested sensitive scope, a prompt skipped
 	// because the stored grant already covered the request, and a
 	// consent withdrawal — and a deployment is free to carry them from
@@ -169,11 +174,11 @@ const (
 	// means the situation did not occur.
 	//
 	// A withdrawal driven through the OAuth 2.0 Grant Management
-	// endpoint does raise [AuditGrantManagementRevoked], which is the
+	// endpoint does raise [GrantManagementRevoked], which is the
 	// signal to use for the revocation case.
-	AuditConsentGrantedDelta    = AuditEvent(auditevent.AuditConsentGrantedDelta)
-	AuditConsentSkippedExisting = AuditEvent(auditevent.AuditConsentSkippedExisting)
-	AuditConsentRevoked         = AuditEvent(auditevent.AuditConsentRevoked)
+	ConsentGrantedDelta    = Event(auditevent.AuditConsentGrantedDelta)
+	ConsentSkippedExisting = Event(auditevent.AuditConsentSkippedExisting)
+	ConsentRevoked         = Event(auditevent.AuditConsentRevoked)
 )
 
 // Grant-management events. Fire from the OAuth 2.0 Grant Management
@@ -182,18 +187,18 @@ const (
 // authenticated. The failure event contains only fixed-stage evidence;
 // it never carries a token or storage error body.
 const (
-	AuditGrantManagementRevoked      = AuditEvent(auditevent.AuditGrantManagementRevoked)
-	AuditGrantManagementRevokeFailed = AuditEvent(auditevent.AuditGrantManagementRevokeFailed)
+	GrantManagementRevoked      = Event(auditevent.AuditGrantManagementRevoked)
+	GrantManagementRevokeFailed = Event(auditevent.AuditGrantManagementRevokeFailed)
 )
 
 // Code / token events. Fire from the authorize-code issuance path
-// and the token / revoke endpoints. AuditTokenRevokeFailed is the
-// /revoke companion to AuditTokenRevoked: the wire response stays
+// and the token / revoke endpoints. TokenRevokeFailed is the
+// /revoke companion to TokenRevoked: the wire response stays
 // HTTP 200 per RFC 7009 §2.2, but a non-NotFound storage fault
 // raises this event so SOC tooling can detect the silent-failure
 // class (GHSA-7mqr-2v3q-v2wm).
 //
-// AuditRefreshChainRevokeFailed and AuditRefreshGrantRevokeFailed fire
+// RefreshChainRevokeFailed and RefreshGrantRevokeFailed fire
 // when a refresh-token replay detection successfully observes the
 // replay (the wire response is invalid_grant) but the cascade side-
 // effects encounter a transport fault. The events are warn-level and
@@ -202,41 +207,41 @@ const (
 // rotation chain intact even though the wire response indicated
 // rejection, which is the audit gap these events close.
 const (
-	AuditCodeIssued                          = AuditEvent(auditevent.AuditCodeIssued)
-	AuditCodeConsumed                        = AuditEvent(auditevent.AuditCodeConsumed)
-	AuditCodeReplayDetected                  = AuditEvent(auditevent.AuditCodeReplayDetected)
-	AuditTokenIssued                         = AuditEvent(auditevent.AuditTokenIssued)
-	AuditTokenRefreshed                      = AuditEvent(auditevent.AuditTokenRefreshed)
-	AuditTokenRevoked                        = AuditEvent(auditevent.AuditTokenRevoked)
-	AuditTokenRevokeFailed                   = AuditEvent(auditevent.AuditTokenRevokeFailed)
-	AuditRefreshReplayDetected               = AuditEvent(auditevent.AuditRefreshReplayDetected)
-	AuditRefreshChainRevokeFailed            = AuditEvent(auditevent.AuditRefreshChainRevokeFailed)
-	AuditRefreshGrantRevokeFailed            = AuditEvent(auditevent.AuditRefreshGrantRevokeFailed)
-	AuditRefreshPriorAccessTokenRevokeFailed = AuditEvent(auditevent.AuditRefreshPriorAccessTokenRevokeFailed)
+	CodeIssued                          = Event(auditevent.AuditCodeIssued)
+	CodeConsumed                        = Event(auditevent.AuditCodeConsumed)
+	CodeReplayDetected                  = Event(auditevent.AuditCodeReplayDetected)
+	TokenIssued                         = Event(auditevent.AuditTokenIssued)
+	TokenRefreshed                      = Event(auditevent.AuditTokenRefreshed)
+	TokenRevoked                        = Event(auditevent.AuditTokenRevoked)
+	TokenRevokeFailed                   = Event(auditevent.AuditTokenRevokeFailed)
+	RefreshReplayDetected               = Event(auditevent.AuditRefreshReplayDetected)
+	RefreshChainRevokeFailed            = Event(auditevent.AuditRefreshChainRevokeFailed)
+	RefreshGrantRevokeFailed            = Event(auditevent.AuditRefreshGrantRevokeFailed)
+	RefreshPriorAccessTokenRevokeFailed = Event(auditevent.AuditRefreshPriorAccessTokenRevokeFailed)
 )
 
 // Session / logout events. Fire from the session manager and the
 // /end_session handler.
 const (
-	AuditSessionCreated                 = AuditEvent(auditevent.AuditSessionCreated)
-	AuditSessionDestroyed               = AuditEvent(auditevent.AuditSessionDestroyed)
-	AuditSessionAlreadyAbsent           = AuditEvent(auditevent.AuditSessionAlreadyAbsent)
-	AuditSessionDestroyFailed           = AuditEvent(auditevent.AuditSessionDestroyFailed)
-	AuditLogoutTokenRevokeFailed        = AuditEvent(auditevent.AuditLogoutTokenRevokeFailed)
-	AuditLogoutBackChannelDelivered     = AuditEvent(auditevent.AuditLogoutBackChannelDelivered)
-	AuditLogoutBackChannelFailed        = AuditEvent(auditevent.AuditLogoutBackChannelFailed)
-	AuditLogoutBackChannelResolveFailed = AuditEvent(auditevent.AuditLogoutBackChannelResolveFailed)
-	AuditLogoutBackChannelOverflow      = AuditEvent(auditevent.AuditLogoutBackChannelOverflow)
-	AuditLogoutClientLookupFailed       = AuditEvent(auditevent.AuditLogoutClientLookupFailed)
+	SessionCreated                 = Event(auditevent.AuditSessionCreated)
+	SessionDestroyed               = Event(auditevent.AuditSessionDestroyed)
+	SessionAlreadyAbsent           = Event(auditevent.AuditSessionAlreadyAbsent)
+	SessionDestroyFailed           = Event(auditevent.AuditSessionDestroyFailed)
+	LogoutTokenRevokeFailed        = Event(auditevent.AuditLogoutTokenRevokeFailed)
+	LogoutBackChannelDelivered     = Event(auditevent.AuditLogoutBackChannelDelivered)
+	LogoutBackChannelFailed        = Event(auditevent.AuditLogoutBackChannelFailed)
+	LogoutBackChannelResolveFailed = Event(auditevent.AuditLogoutBackChannelResolveFailed)
+	LogoutBackChannelOverflow      = Event(auditevent.AuditLogoutBackChannelOverflow)
+	LogoutClientLookupFailed       = Event(auditevent.AuditLogoutClientLookupFailed)
 
 	// Reserved vocabulary: the library never emits
-	// AuditLogoutRPInitiated. /end_session records what it did to the
-	// session — [AuditSessionDestroyed], [AuditSessionAlreadyAbsent] or
-	// [AuditSessionDestroyFailed] — rather than the fact that an RP
+	// LogoutRPInitiated. /end_session records what it did to the
+	// session — [SessionDestroyed], [SessionAlreadyAbsent] or
+	// [SessionDestroyFailed] — rather than the fact that an RP
 	// asked; those three are the signals to correlate on.
-	AuditLogoutRPInitiated = AuditEvent(auditevent.AuditLogoutRPInitiated)
+	LogoutRPInitiated = Event(auditevent.AuditLogoutRPInitiated)
 
-	// AuditBCLNoSessionsForSubject fires when a logout names a
+	// BCLNoSessionsForSubject fires when a logout names a
 	// session_id-bearing subject but the
 	// back-channel coordinator finds zero RPs to notify. Under a
 	// volatile SessionStore (Redis without persistence, Memcached,
@@ -246,51 +251,51 @@ const (
 	// best-effort delivery floor to zero. INFO-level: under volatile
 	// placement the gap is expected; SOC tooling alerts on elevated
 	// rates rather than per-event.
-	AuditBCLNoSessionsForSubject = AuditEvent(auditevent.AuditBCLNoSessionsForSubject)
+	BCLNoSessionsForSubject = Event(auditevent.AuditBCLNoSessionsForSubject)
 )
 
 // Defensive events. Fire from request-validation paths that detect
 // abuse signals or operator-visible policy hits.
 const (
 	// Reserved vocabulary: the library never emits
-	// AuditRateLimitExceeded or AuditRateLimitBypassed. They exist for
+	// RateLimitExceeded or RateLimitBypassed. They exist for
 	// embedder-emitted events from operator-side rate-limit middleware
 	// (reverse proxy, gateway, Go handler chains). The library does
 	// NOT implement a generic per-IP / per-endpoint HTTP rate limit —
 	// that responsibility lives with
 	// the embedder per the project charter. The OP only owns the
 	// authentication-flow brute-force gate wired through
-	// [WithAuthnLockoutStore], whose counted guesses — the one that
+	// op.WithAuthnLockoutStore, whose counted guesses — the one that
 	// engages the lock included — are reported under the login.* /
 	// mfa.* failure events, and the device-code user-code gate, which
-	// emits [AuditDeviceCodeUserCodeBruteForce]. These two constants exist so
+	// emits [DeviceCodeUserCodeBruteForce]. These two constants exist so
 	// audit pipelines can ingest embedder-side throttle decisions
 	// under a vocabulary consistent with the rest of the OIDC
 	// audit catalog.
-	AuditRateLimitExceeded = AuditEvent(auditevent.AuditRateLimitExceeded)
-	AuditRateLimitBypassed = AuditEvent(auditevent.AuditRateLimitBypassed)
+	RateLimitExceeded = Event(auditevent.AuditRateLimitExceeded)
+	RateLimitBypassed = Event(auditevent.AuditRateLimitBypassed)
 
-	// AuditPKCEViolation fires at the token endpoint when a code_verifier
+	// PKCEViolation fires at the token endpoint when a code_verifier
 	// fails: Extras carry endpoint "token" and reason "verifier_mismatch",
 	// "verifier_format" or "challenge_method_unsupported", never the
 	// verifier itself.
-	AuditPKCEViolation = AuditEvent(auditevent.AuditPKCEViolation)
+	PKCEViolation = Event(auditevent.AuditPKCEViolation)
 
-	// AuditRedirectURIMismatch fires when /authorize receives a
+	// RedirectURIMismatch fires when /authorize receives a
 	// redirect_uri the client never registered, and when the token
 	// endpoint receives one that differs from the authorization request.
 	// Extras carry endpoint ("authorize" or "token") and the presented
 	// redirect_uri. The wire answer stays generic at the token endpoint,
 	// so this event is where the cause is visible.
-	AuditRedirectURIMismatch = AuditEvent(auditevent.AuditRedirectURIMismatch)
+	RedirectURIMismatch = Event(auditevent.AuditRedirectURIMismatch)
 
-	// Reserved vocabulary: the library never emits AuditAlgLegacyUsed. A
+	// Reserved vocabulary: the library never emits AlgLegacyUsed. A
 	// request selecting a legacy algorithm is rejected on the wire and not
 	// raised on the audit stream, so an absent event means "not
 	// instrumented", not "did not happen".
-	AuditAlgLegacyUsed = AuditEvent(auditevent.AuditAlgLegacyUsed)
+	AlgLegacyUsed = Event(auditevent.AuditAlgLegacyUsed)
 
-	// AuditCORSPreflightAllowed fires every time the strict CORS layer
+	// CORSPreflightAllowed fires every time the strict CORS layer
 	// admits a cross-origin OPTIONS preflight (Origin in allowlist,
 	// Access-Control-Request-Method present). The event surfaces the
 	// short-circuit so SOC tooling can correlate dashboards that
@@ -301,26 +306,26 @@ const (
 	// outermost so embedder middleware (rate-limit, audit, metrics)
 	// observes the request before this short-circuit; the audit event
 	// makes the short-circuit visible regardless of wrapper order.
-	AuditCORSPreflightAllowed = AuditEvent(auditevent.AuditCORSPreflightAllowed)
+	CORSPreflightAllowed = Event(auditevent.AuditCORSPreflightAllowed)
 
-	// AuditDPoPLooseMethodCaseAdmitted fires when the DPoP verifier's
+	// DPoPLooseMethodCaseAdmitted fires when the DPoP verifier's
 	// loose-method-case bridge admits a proof whose "htm" claim
 	// differed from the request method only in ASCII case. The wire
 	// response is unchanged — the proof was admitted — but SOC tooling
 	// needs the signal so the bridge stays visible while the
 	// responsible RP library is fixed.
 	//
-	// No option on this package enables the bridge, so a [Provider]
-	// built through [New] verifies proofs in the RFC 9449 §4.3 strict
+	// No option on this package enables the bridge, so a op.Provider
+	// built through op.New verifies proofs in the RFC 9449 §4.3 strict
 	// posture and never emits this event; the Prometheus counter it
 	// mirrors onto therefore stays at zero. The constant and its
 	// counter are part of the catalog so the emission path is already
 	// wired if the opt-in is exposed. Warn-level when it does fire.
-	AuditDPoPLooseMethodCaseAdmitted = AuditEvent(auditevent.AuditDPoPLooseMethodCaseAdmitted)
+	DPoPLooseMethodCaseAdmitted = Event(auditevent.AuditDPoPLooseMethodCaseAdmitted)
 
-	// AuditKeyRetiredKidPresented fires when a JWS / JWE presented
+	// KeyRetiredKidPresented fires when a JWS / JWE presented
 	// for verification carries a "kid" header that matches an entry
-	// in the OP signing keyset whose [SigningKey.NotAfter] retirement
+	// in the OP signing keyset whose op.SigningKey.NotAfter retirement
 	// deadline has elapsed. The wire response is the existing
 	// signature-invalid taxonomy — the verifier treats the kid as if
 	// it were unknown — but SOC tooling needs the signal because a
@@ -329,15 +334,15 @@ const (
 	// captured the old private key before the rotation tries to ride
 	// past the JWKS grace window by minting a fresh JWS that names
 	// the retiring kid. The event is warn-level and carries the
-	// rejected kid in [Event.Extras] so dashboards can correlate
+	// rejected kid in the record's extras so dashboards can correlate
 	// against the rotation timeline without parsing the slog message.
-	AuditKeyRetiredKidPresented = AuditEvent(auditevent.AuditKeyRetiredKidPresented)
+	KeyRetiredKidPresented = Event(auditevent.AuditKeyRetiredKidPresented)
 )
 
 // Interaction ceremony events. Fire from /interaction/{uid}, where the
 // configured [interaction.Driver] owns the rendered surface.
 const (
-	// AuditInteractionRenderFailed fires when the Driver returns an
+	// InteractionRenderFailed fires when the Driver returns an
 	// error from Render without having written anything to the response.
 	// The OP answers the request with a server_error page of its own, so
 	// the wire response is honest, but only the audit stream carries the
@@ -354,7 +359,7 @@ const (
 	// A Driver that fails after committing its own status line does not
 	// raise this event: the response already belongs to the Driver, and
 	// the OP has nothing to add to what it already sent.
-	AuditInteractionRenderFailed = AuditEvent(auditevent.AuditInteractionRenderFailed)
+	InteractionRenderFailed = Event(auditevent.AuditInteractionRenderFailed)
 )
 
 // Introspection events. Fire from the /introspect endpoint. Only the
@@ -364,7 +369,7 @@ const (
 // 7662 §2.3 mandates the wire response stays at the generic
 // "invalid_client" code.
 const (
-	AuditIntrospectionError = AuditEvent(auditevent.AuditIntrospectionError)
+	IntrospectionError = Event(auditevent.AuditIntrospectionError)
 )
 
 // Client authentication events. Fire from every pre-issuance surface
@@ -376,9 +381,9 @@ const (
 // known), the auth method, and a short reason code for triage. This event
 // fills that gap; the wire shape is unchanged.
 const (
-	AuditClientAuthnFailure = AuditEvent(auditevent.AuditClientAuthnFailure)
+	ClientAuthnFailure = Event(auditevent.AuditClientAuthnFailure)
 
-	// AuditClientAuthnPreviousSecret fires when a client authenticates
+	// ClientAuthnPreviousSecret fires when a client authenticates
 	// with client_secret_basic or client_secret_post using its previous
 	// secret inside the rotation window. ClientID is the client and
 	// Extras["method"] the method used; the secret is never attached.
@@ -386,29 +391,29 @@ const (
 	// the window closes.
 	//
 	// Stable since v1.5.
-	AuditClientAuthnPreviousSecret = AuditEvent(auditevent.AuditClientAuthnPreviousSecret)
+	ClientAuthnPreviousSecret = Event(auditevent.AuditClientAuthnPreviousSecret)
 )
 
 // Dynamic Client Registration events. Fire from /register and
 // /register/{client_id}.
 const (
-	AuditDCRIATConsumed           = AuditEvent(auditevent.AuditDCRIATConsumed)
-	AuditDCRIATExpired            = AuditEvent(auditevent.AuditDCRIATExpired)
-	AuditDCRIATInvalid            = AuditEvent(auditevent.AuditDCRIATInvalid)
-	AuditDCROpenRegistrationUsed  = AuditEvent(auditevent.AuditDCROpenRegistrationUsed)
-	AuditDCRClientRegistered      = AuditEvent(auditevent.AuditDCRClientRegistered)
-	AuditDCRClientMetadataRead    = AuditEvent(auditevent.AuditDCRClientMetadataRead)
-	AuditDCRClientMetadataUpdated = AuditEvent(auditevent.AuditDCRClientMetadataUpdated)
-	AuditDCRClientDeleted         = AuditEvent(auditevent.AuditDCRClientDeleted)
-	AuditDCRRATInvalid            = AuditEvent(auditevent.AuditDCRRATInvalid)
-	AuditDCRMetadataValidation    = AuditEvent(auditevent.AuditDCRMetadataValidation)
+	DCRIATConsumed           = Event(auditevent.AuditDCRIATConsumed)
+	DCRIATExpired            = Event(auditevent.AuditDCRIATExpired)
+	DCRIATInvalid            = Event(auditevent.AuditDCRIATInvalid)
+	DCROpenRegistrationUsed  = Event(auditevent.AuditDCROpenRegistrationUsed)
+	DCRClientRegistered      = Event(auditevent.AuditDCRClientRegistered)
+	DCRClientMetadataRead    = Event(auditevent.AuditDCRClientMetadataRead)
+	DCRClientMetadataUpdated = Event(auditevent.AuditDCRClientMetadataUpdated)
+	DCRClientDeleted         = Event(auditevent.AuditDCRClientDeleted)
+	DCRRATInvalid            = Event(auditevent.AuditDCRRATInvalid)
+	DCRMetadataValidation    = Event(auditevent.AuditDCRMetadataValidation)
 
 	// Cascade failures are operational signals emitted after a client record
 	// has been deleted but one credential substore could not revoke its rows.
-	AuditDCRCascadeRefreshRevokeFailed           = AuditEvent(auditevent.AuditDCRCascadeRefreshRevokeFailed)
-	AuditDCRCascadeGrantRevokeFailed             = AuditEvent(auditevent.AuditDCRCascadeGrantRevokeFailed)
-	AuditDCRCascadeAccessTokenRevokeFailed       = AuditEvent(auditevent.AuditDCRCascadeAccessTokenRevokeFailed)
-	AuditDCRCascadeOpaqueAccessTokenRevokeFailed = AuditEvent(auditevent.AuditDCRCascadeOpaqueAccessTokenRevokeFailed)
+	DCRCascadeRefreshRevokeFailed           = Event(auditevent.AuditDCRCascadeRefreshRevokeFailed)
+	DCRCascadeGrantRevokeFailed             = Event(auditevent.AuditDCRCascadeGrantRevokeFailed)
+	DCRCascadeAccessTokenRevokeFailed       = Event(auditevent.AuditDCRCascadeAccessTokenRevokeFailed)
+	DCRCascadeOpaqueAccessTokenRevokeFailed = Event(auditevent.AuditDCRCascadeOpaqueAccessTokenRevokeFailed)
 )
 
 // Device-flow events. Fire from the /device_authorization endpoint,
@@ -419,20 +424,20 @@ const (
 // [github.com/libraz/go-oidc-provider/op/devicecodekit], which run in
 // the embedder's HTTP layer rather than in a handler the OP mounts.
 // They therefore ride the logger set on that package's dependency
-// bundle, not the one given to [WithAuditLogger]; a deployment that
+// bundle, not the one given to op.WithAuditLogger; a deployment that
 // wants them in its audit stream points both at the same sink.
 const (
-	AuditDeviceAuthorizationIssued          = AuditEvent(auditevent.AuditDeviceAuthorizationIssued)
-	AuditDeviceAuthorizationRejected        = AuditEvent(auditevent.AuditDeviceAuthorizationRejected)
-	AuditDeviceAuthorizationUnboundRejected = AuditEvent(auditevent.AuditDeviceAuthorizationUnboundRejected)
-	AuditDeviceCodeVerificationApproved     = AuditEvent(auditevent.AuditDeviceCodeVerificationApproved)
-	AuditDeviceCodeVerificationDenied       = AuditEvent(auditevent.AuditDeviceCodeVerificationDenied)
-	AuditDeviceCodeUserCodeBruteForce       = AuditEvent(auditevent.AuditDeviceCodeUserCodeBruteForce)
-	AuditDeviceCodeTokenIssued              = AuditEvent(auditevent.AuditDeviceCodeTokenIssued)
-	AuditDeviceCodeTokenRejected            = AuditEvent(auditevent.AuditDeviceCodeTokenRejected)
-	AuditDeviceCodeTokenSlowDown            = AuditEvent(auditevent.AuditDeviceCodeTokenSlowDown)
+	DeviceAuthorizationIssued          = Event(auditevent.AuditDeviceAuthorizationIssued)
+	DeviceAuthorizationRejected        = Event(auditevent.AuditDeviceAuthorizationRejected)
+	DeviceAuthorizationUnboundRejected = Event(auditevent.AuditDeviceAuthorizationUnboundRejected)
+	DeviceCodeVerificationApproved     = Event(auditevent.AuditDeviceCodeVerificationApproved)
+	DeviceCodeVerificationDenied       = Event(auditevent.AuditDeviceCodeVerificationDenied)
+	DeviceCodeUserCodeBruteForce       = Event(auditevent.AuditDeviceCodeUserCodeBruteForce)
+	DeviceCodeTokenIssued              = Event(auditevent.AuditDeviceCodeTokenIssued)
+	DeviceCodeTokenRejected            = Event(auditevent.AuditDeviceCodeTokenRejected)
+	DeviceCodeTokenSlowDown            = Event(auditevent.AuditDeviceCodeTokenSlowDown)
 
-	// AuditDeviceCodeRevoked fires from the public revoke helper
+	// DeviceCodeRevoked fires from the public revoke helper
 	// ([github.com/libraz/go-oidc-provider/op/devicecodekit.Revoke]).
 	// The helper atomically disables Pending / Approved records and
 	// cascade-revokes every configured credential store whose GrantID
@@ -448,9 +453,9 @@ const (
 	// revoked_access_tokens, grant_tombstone_written,
 	// revoked_opaque_access_tokens, and
 	// refresh_token_cascade_complete.
-	AuditDeviceCodeRevoked = AuditEvent(auditevent.AuditDeviceCodeRevoked)
+	DeviceCodeRevoked = Event(auditevent.AuditDeviceCodeRevoked)
 
-	// AuditDeviceCodePollObservationFailed fires when the
+	// DeviceCodePollObservationFailed fires when the
 	// token-endpoint device_code grant observed a substore fault
 	// while persisting the LastPolledAt stamp on a poll. The wire
 	// response is unchanged — the poll decision still proceeds,
@@ -459,35 +464,35 @@ const (
 	// signal so a transient store outage that quietly defeats the
 	// slow_down ladder is visible. Warn-level: a healthy deployment
 	// should never emit this event. Mirrors
-	// [AuditCIBAPollObservationFailed] for the device-flow surface.
-	AuditDeviceCodePollObservationFailed = AuditEvent(auditevent.AuditDeviceCodePollObservationFailed)
+	// [CIBAPollObservationFailed] for the device-flow surface.
+	DeviceCodePollObservationFailed = Event(auditevent.AuditDeviceCodePollObservationFailed)
 )
 
 // CIBA events. Fire from the /bc-authorize endpoint, the embedder's
 // authentication-device interaction, and the token-endpoint CIBA grant.
 const (
-	AuditCIBAAuthorizationIssued          = AuditEvent(auditevent.AuditCIBAAuthorizationIssued)
-	AuditCIBAAuthorizationRejected        = AuditEvent(auditevent.AuditCIBAAuthorizationRejected)
-	AuditCIBAAuthorizationUnboundRejected = AuditEvent(auditevent.AuditCIBAAuthorizationUnboundRejected)
+	CIBAAuthorizationIssued          = Event(auditevent.AuditCIBAAuthorizationIssued)
+	CIBAAuthorizationRejected        = Event(auditevent.AuditCIBAAuthorizationRejected)
+	CIBAAuthorizationUnboundRejected = Event(auditevent.AuditCIBAAuthorizationUnboundRejected)
 
 	// Reserved vocabulary: the library never emits
-	// AuditCIBAAuthDeviceApproved or AuditCIBAAuthDeviceDenied. The
+	// CIBAAuthDeviceApproved or CIBAAuthDeviceDenied. The
 	// approval and denial transitions are made by the embedder calling
 	// store.CIBARequestStore.Approve / Deny directly, and no library code
 	// path sits between that call and the store, so there is nowhere for
 	// the OP to observe the decision. The names are reserved so a
 	// deployment raising them from its own authentication device lands in
 	// the same vocabulary as the events the OP does raise for the request.
-	AuditCIBAAuthDeviceApproved = AuditEvent(auditevent.AuditCIBAAuthDeviceApproved)
-	AuditCIBAAuthDeviceDenied   = AuditEvent(auditevent.AuditCIBAAuthDeviceDenied)
+	CIBAAuthDeviceApproved = Event(auditevent.AuditCIBAAuthDeviceApproved)
+	CIBAAuthDeviceDenied   = Event(auditevent.AuditCIBAAuthDeviceDenied)
 
 	// Token-endpoint CIBA grant outcomes.
-	AuditCIBAPollAbuseLockout = AuditEvent(auditevent.AuditCIBAPollAbuseLockout)
-	AuditCIBATokenIssued      = AuditEvent(auditevent.AuditCIBATokenIssued)
-	AuditCIBATokenRejected    = AuditEvent(auditevent.AuditCIBATokenRejected)
-	AuditCIBATokenSlowDown    = AuditEvent(auditevent.AuditCIBATokenSlowDown)
+	CIBAPollAbuseLockout = Event(auditevent.AuditCIBAPollAbuseLockout)
+	CIBATokenIssued      = Event(auditevent.AuditCIBATokenIssued)
+	CIBATokenRejected    = Event(auditevent.AuditCIBATokenRejected)
+	CIBATokenSlowDown    = Event(auditevent.AuditCIBATokenSlowDown)
 
-	// AuditCIBAPollObservationFailed fires when the token-endpoint
+	// CIBAPollObservationFailed fires when the token-endpoint
 	// CIBA grant observed a substore fault while persisting the
 	// LastPolledAt stamp on a poll. The wire response is unchanged —
 	// the poll decision still proceeds, fail-open, because the
@@ -495,18 +500,18 @@ const (
 	// gate — but SOC tooling needs the signal so a transient store
 	// outage that quietly defeats the slow_down ladder is visible.
 	// Warn-level: a healthy deployment should never emit this event.
-	AuditCIBAPollObservationFailed = AuditEvent(auditevent.AuditCIBAPollObservationFailed)
+	CIBAPollObservationFailed = Event(auditevent.AuditCIBAPollObservationFailed)
 )
 
 // Custom-grant dispatch events. Requested and Failed describe dispatcher
 // outcomes; RefreshDropped records a successful response whose refresh token
 // was withheld by one of the issuance gates documented on
-// [CustomGrantResponse.IssueRefreshToken]. The event's extras name the gate
+// op.CustomGrantResponse.IssueRefreshToken. The event's extras name the gate
 // that fired under the "reason" key.
 const (
-	AuditCustomGrantRequested      = AuditEvent(auditevent.AuditCustomGrantRequested)
-	AuditCustomGrantFailed         = AuditEvent(auditevent.AuditCustomGrantFailed)
-	AuditCustomGrantRefreshDropped = AuditEvent(auditevent.AuditCustomGrantRefreshDropped)
+	CustomGrantRequested      = Event(auditevent.AuditCustomGrantRequested)
+	CustomGrantFailed         = Event(auditevent.AuditCustomGrantFailed)
+	CustomGrantRefreshDropped = Event(auditevent.AuditCustomGrantRefreshDropped)
 )
 
 // Token-exchange events. Fire from the in-tree RFC 8693 handler.
@@ -520,23 +525,23 @@ const (
 // an event renamed there moves the public constant and the handler's
 // together.
 const (
-	AuditTokenExchangeRequested             = AuditEvent(auditevent.AuditTokenExchangeRequested)
-	AuditTokenExchangeGranted               = AuditEvent(auditevent.AuditTokenExchangeGranted)
-	AuditTokenExchangePolicyDenied          = AuditEvent(auditevent.AuditTokenExchangePolicyDenied)
-	AuditTokenExchangePolicyError           = AuditEvent(auditevent.AuditTokenExchangePolicyError)
-	AuditTokenExchangeScopeInflationBlocked = AuditEvent(auditevent.AuditTokenExchangeScopeInflationBlocked)
-	AuditTokenExchangeAudienceBlocked       = AuditEvent(auditevent.AuditTokenExchangeAudienceBlocked)
-	AuditTokenExchangeTTLCapped             = AuditEvent(auditevent.AuditTokenExchangeTTLCapped)
-	AuditTokenExchangeActChainTooDeep       = AuditEvent(auditevent.AuditTokenExchangeActChainTooDeep)
-	AuditTokenExchangeEmptyScopeRejected    = AuditEvent(auditevent.AuditTokenExchangeEmptyScopeRejected)
-	AuditTokenExchangeActorEqualsSubject    = AuditEvent(auditevent.AuditTokenExchangeActorEqualsSubject)
-	AuditTokenExchangeSubjectTokenExternal  = AuditEvent(auditevent.AuditTokenExchangeSubjectTokenExternal)
-	AuditTokenExchangeActorTokenExternal    = AuditEvent(auditevent.AuditTokenExchangeActorTokenExternal)
-	AuditTokenExchangeSubjectTokenInvalid   = AuditEvent(auditevent.AuditTokenExchangeSubjectTokenInvalid)
-	AuditTokenExchangeRefreshIssued         = AuditEvent(auditevent.AuditTokenExchangeRefreshIssued)
-	AuditTokenExchangeSelfExchange          = AuditEvent(auditevent.AuditTokenExchangeSelfExchange)
+	TokenExchangeRequested             = Event(auditevent.AuditTokenExchangeRequested)
+	TokenExchangeGranted               = Event(auditevent.AuditTokenExchangeGranted)
+	TokenExchangePolicyDenied          = Event(auditevent.AuditTokenExchangePolicyDenied)
+	TokenExchangePolicyError           = Event(auditevent.AuditTokenExchangePolicyError)
+	TokenExchangeScopeInflationBlocked = Event(auditevent.AuditTokenExchangeScopeInflationBlocked)
+	TokenExchangeAudienceBlocked       = Event(auditevent.AuditTokenExchangeAudienceBlocked)
+	TokenExchangeTTLCapped             = Event(auditevent.AuditTokenExchangeTTLCapped)
+	TokenExchangeActChainTooDeep       = Event(auditevent.AuditTokenExchangeActChainTooDeep)
+	TokenExchangeEmptyScopeRejected    = Event(auditevent.AuditTokenExchangeEmptyScopeRejected)
+	TokenExchangeActorEqualsSubject    = Event(auditevent.AuditTokenExchangeActorEqualsSubject)
+	TokenExchangeSubjectTokenExternal  = Event(auditevent.AuditTokenExchangeSubjectTokenExternal)
+	TokenExchangeActorTokenExternal    = Event(auditevent.AuditTokenExchangeActorTokenExternal)
+	TokenExchangeSubjectTokenInvalid   = Event(auditevent.AuditTokenExchangeSubjectTokenInvalid)
+	TokenExchangeRefreshIssued         = Event(auditevent.AuditTokenExchangeRefreshIssued)
+	TokenExchangeSelfExchange          = Event(auditevent.AuditTokenExchangeSelfExchange)
 
-	// AuditTokenExchangeSubjectTokenRegistryError fires when the in-tree
+	// TokenExchangeSubjectTokenRegistryError fires when the in-tree
 	// RFC 8693 handler observed a non-NotFound fault from the access-
 	// token registry while looking up subject_token (or actor_token).
 	// The wire response is unchanged — the request still collapses to
@@ -547,134 +552,134 @@ const (
 	// deployment should never emit this event. Extras carry: reason
 	// ("registry_error"), is_subject (true when the failed lookup was
 	// for subject_token, false for actor_token).
-	AuditTokenExchangeSubjectTokenRegistryError = AuditEvent(auditevent.AuditTokenExchangeSubjectTokenRegistryError)
+	TokenExchangeSubjectTokenRegistryError = Event(auditevent.AuditTokenExchangeSubjectTokenRegistryError)
 
-	// AuditTokenExchangeIDJAGIssued fires when the token-exchange handler
+	// TokenExchangeIDJAGIssued fires when the token-exchange handler
 	// issues an Identity Assertion JWT Authorization Grant under
-	// [WithIDJAGIssuance].
+	// op.WithIDJAGIssuance.
 	//
 	// Experimental: tracks an IETF draft, so the event MAY change in a
 	// minor release on a wire-incompatible draft bump.
-	AuditTokenExchangeIDJAGIssued = AuditEvent(auditevent.AuditTokenExchangeIDJAGIssued)
+	TokenExchangeIDJAGIssued = Event(auditevent.AuditTokenExchangeIDJAGIssued)
 )
 
 // JWT bearer grant events. Fire from the token endpoint's RFC 7523
-// grant enabled by [WithJWTBearerGrant].
+// grant enabled by op.WithJWTBearerGrant.
 const (
-	// AuditJWTBearerGranted fires when an assertion is redeemed for an
+	// JWTBearerGranted fires when an assertion is redeemed for an
 	// access token.
 	//
 	// Stable since v1.5.
-	AuditJWTBearerGranted = AuditEvent(auditevent.AuditJWTBearerGranted)
+	JWTBearerGranted = Event(auditevent.AuditJWTBearerGranted)
 
-	// AuditJWTBearerRejected fires when an assertion is refused.
+	// JWTBearerRejected fires when an assertion is refused.
 	// Extras["reason"] names the verification stage that failed (parse,
 	// issuer, typ, signature, claims, idjag, replay), so an operator can
 	// tell a misconfigured issuer from a replayed assertion.
 	//
 	// Stable since v1.5.
-	AuditJWTBearerRejected = AuditEvent(auditevent.AuditJWTBearerRejected)
+	JWTBearerRejected = Event(auditevent.AuditJWTBearerRejected)
 )
 
 // Client ID Metadata Document events. Fire when the OP resolves a
-// URL-form client_id through [WithClientIDMetadataDocuments].
+// URL-form client_id through op.WithClientIDMetadataDocuments.
 const (
-	// AuditCIMDFetched fires when a client ID metadata document is
+	// CIMDFetched fires when a client ID metadata document is
 	// fetched and validated.
 	//
 	// Experimental: tracks an IETF draft, so the event MAY change in a
 	// minor release on a wire-incompatible draft bump.
-	AuditCIMDFetched = AuditEvent(auditevent.AuditCIMDFetched)
+	CIMDFetched = Event(auditevent.AuditCIMDFetched)
 
-	// AuditCIMDFetchFailed fires when the fetch or validation of a
+	// CIMDFetchFailed fires when the fetch or validation of a
 	// client ID metadata document fails. Extras["reason"] is one of
 	// status, network, too_large, content_type, json, validation; for
 	// validation, Extras["error_code"] carries the validation error code.
 	//
 	// Experimental: tracks an IETF draft, so the event MAY change in a
 	// minor release on a wire-incompatible draft bump.
-	AuditCIMDFetchFailed = AuditEvent(auditevent.AuditCIMDFetchFailed)
+	CIMDFetchFailed = Event(auditevent.AuditCIMDFetchFailed)
 
-	// AuditCIMDClientDenied fires when [ClientIDMetadataDocuments].Allow
+	// CIMDClientDenied fires when op.ClientIDMetadataDocuments.Allow
 	// refuses a client_id URL.
 	//
 	// Experimental: tracks an IETF draft, so the event MAY change in a
 	// minor release on a wire-incompatible draft bump.
-	AuditCIMDClientDenied = AuditEvent(auditevent.AuditCIMDClientDenied)
+	CIMDClientDenied = Event(auditevent.AuditCIMDClientDenied)
 )
 
 // Shared Signals Framework transmitter events. Fire when the OP runs as
-// an SSF 1.0 transmitter under [WithSharedSignals]. None of them updates
+// an SSF 1.0 transmitter under op.WithSharedSignals. None of them updates
 // a metric.
 const (
-	// AuditSSFStreamCreated fires when a receiver creates its stream.
+	// SSFStreamCreated fires when a receiver creates its stream.
 	//
 	// Stable since v1.5.
-	AuditSSFStreamCreated = AuditEvent(auditevent.AuditSSFStreamCreated)
+	SSFStreamCreated = Event(auditevent.AuditSSFStreamCreated)
 
-	// AuditSSFStreamUpdated fires when a receiver updates, replaces or
+	// SSFStreamUpdated fires when a receiver updates, replaces or
 	// changes the status of its stream.
 	//
 	// Stable since v1.5.
-	AuditSSFStreamUpdated = AuditEvent(auditevent.AuditSSFStreamUpdated)
+	SSFStreamUpdated = Event(auditevent.AuditSSFStreamUpdated)
 
-	// AuditSSFStreamDeleted fires when a receiver deletes its stream,
+	// SSFStreamDeleted fires when a receiver deletes its stream,
 	// dropping every event still queued for it.
 	//
 	// Stable since v1.5.
-	AuditSSFStreamDeleted = AuditEvent(auditevent.AuditSSFStreamDeleted)
+	SSFStreamDeleted = Event(auditevent.AuditSSFStreamDeleted)
 
-	// AuditSSFSETEnqueued fires when a Security Event Token is queued
+	// SSFSETEnqueued fires when a Security Event Token is queued
 	// for a stream.
 	//
 	// Stable since v1.5.
-	AuditSSFSETEnqueued = AuditEvent(auditevent.AuditSSFSETEnqueued)
+	SSFSETEnqueued = Event(auditevent.AuditSSFSETEnqueued)
 
-	// AuditSSFEnqueueFailed fires when a security event could not be
+	// SSFEnqueueFailed fires when a security event could not be
 	// queued for its receivers. The operation that raised the event is
 	// not failed. Extras["reason"] names the cause; fanout_capacity
 	// means the subject had more receivers than one fan-out reads.
 	//
 	// Stable since v1.5.
-	AuditSSFEnqueueFailed = AuditEvent(auditevent.AuditSSFEnqueueFailed)
+	SSFEnqueueFailed = Event(auditevent.AuditSSFEnqueueFailed)
 
-	// AuditSSFPushDelivered fires when a receiver accepts a pushed SET
+	// SSFPushDelivered fires when a receiver accepts a pushed SET
 	// with 202.
 	//
 	// Stable since v1.5.
-	AuditSSFPushDelivered = AuditEvent(auditevent.AuditSSFPushDelivered)
+	SSFPushDelivered = Event(auditevent.AuditSSFPushDelivered)
 
-	// AuditSSFPushRejected fires when a receiver answers a pushed SET
+	// SSFPushRejected fires when a receiver answers a pushed SET
 	// with 400. The SET is dropped without a retry.
 	//
 	// Stable since v1.5.
-	AuditSSFPushRejected = AuditEvent(auditevent.AuditSSFPushRejected)
+	SSFPushRejected = Event(auditevent.AuditSSFPushRejected)
 
-	// AuditSSFPushRetried fires when a push does not end in 202 or 400 (any
+	// SSFPushRetried fires when a push does not end in 202 or 400 (any
 	// other status, or a transport failure) and the SET is rescheduled.
 	//
 	// Stable since v1.5.
-	AuditSSFPushRetried = AuditEvent(auditevent.AuditSSFPushRetried)
+	SSFPushRetried = Event(auditevent.AuditSSFPushRetried)
 
-	// AuditSSFPushAbandoned fires when a SET is dropped after its last
+	// SSFPushAbandoned fires when a SET is dropped after its last
 	// retry, when its stream's authorization header can no longer be
 	// unsealed (Extras["reason"] = "seal"), or when its claims cannot be
 	// signed (Extras["reason"] = "claims").
 	//
 	// Stable since v1.5.
-	AuditSSFPushAbandoned = AuditEvent(auditevent.AuditSSFPushAbandoned)
+	SSFPushAbandoned = Event(auditevent.AuditSSFPushAbandoned)
 
-	// AuditSSFPollSETError fires when a polling receiver reports a SET
+	// SSFPollSETError fires when a polling receiver reports a SET
 	// it could not process (RFC 8936 setErrs). The SET is dropped.
 	//
 	// Stable since v1.5.
-	AuditSSFPollSETError = AuditEvent(auditevent.AuditSSFPollSETError)
+	SSFPollSETError = Event(auditevent.AuditSSFPollSETError)
 )
 
 // Provider lifecycle events.
 const (
-	// AuditStartupProfile fires once from [New], after validation
-	// succeeds and before the [Provider] is returned. It records the
+	// StartupProfile fires once from op.New, after validation
+	// succeeds and before the op.Provider is returned. It records the
 	// security posture the deployment declared and what that
 	// declaration resolved to, so an operator can answer "which
 	// profile is this OP running" from the audit stream and every
@@ -704,6 +709,6 @@ const (
 	// logger: the two are structurally separate so audit records
 	// never leak into the operational stream, and this record is the
 	// anchor of the audit stream. A Provider built with neither
-	// [WithAuditLogger] nor [WithLogger] emits nothing.
-	AuditStartupProfile = AuditEvent(auditevent.AuditStartupProfile)
+	// op.WithAuditLogger nor op.WithLogger emits nothing.
+	StartupProfile = Event(auditevent.AuditStartupProfile)
 )

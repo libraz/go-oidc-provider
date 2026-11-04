@@ -36,14 +36,12 @@ var composeAdditive = map[string]string{
 	"WithStaticClients":               "additive",
 	"WithTrustedProxies":              "additive",
 	"WithTrustedProxyHosts":           "additive",
-	"WithCIBA":                        "flag whose CIBAOptions claim their own settings",
-	"WithDeviceCodeGrant":             "flag whose DeviceCodeOptions claim their own settings",
 	"WithDefaults":                    "wrapper",
 	"WithSupportedEncryptionAlgs":     "claims one slot per half in applyAlgNarrowing / applyEncNarrowing",
 }
 
 // TestOptions_EveryOptionIsClassified walks every function in the package
-// that returns an Option or a CIBAOption and requires it to be a flag (no
+// that returns an Option and requires it to be a flag (no
 // parameters), to claim its setting through claimOnce / claimSlot, or to
 // be listed in composeAdditive. It keeps a new option from silently
 // reintroducing last-call-wins.
@@ -97,7 +95,7 @@ func returnsOption(fn *ast.FuncDecl) bool {
 		return false
 	}
 	id, ok := fn.Type.Results.List[0].Type.(*ast.Ident)
-	return ok && (id.Name == "Option" || id.Name == "CIBAOption")
+	return ok && id.Name == "Option"
 }
 
 func callsClaim(body *ast.BlockStmt) bool {
@@ -232,17 +230,17 @@ func TestWithLocale_KeyIsSingleValued(t *testing.T) {
 		}
 		return b
 	}
-	_, err := newConfig([]Option{WithLocale(bundle(map[string]string{"a": "1"})), WithLocale(bundle(map[string]string{"b": "2"}))})
+	_, err := newConfig([]Option{WithLocaleBundle(bundle(map[string]string{"a": "1"})), WithLocaleBundle(bundle(map[string]string{"b": "2"}))})
 	if err != nil {
 		t.Fatalf("disjoint keys: %v", err)
 	}
-	_, err = newConfig([]Option{WithLocale(bundle(map[string]string{"a": "1"})), WithLocale(bundle(map[string]string{"a": "2"}))})
-	if err == nil || !strings.Contains(err.Error(), "WithLocale (fr a) may be called at most once") {
+	_, err = newConfig([]Option{WithLocaleBundle(bundle(map[string]string{"a": "1"})), WithLocaleBundle(bundle(map[string]string{"a": "2"}))})
+	if err == nil || !strings.Contains(err.Error(), "WithLocaleBundle (fr a) may be called at most once") {
 		t.Fatalf("same key twice: err = %v", err)
 	}
 	c, err := newConfig([]Option{
-		WithDefaults(WithLocale(bundle(map[string]string{"a": "default", "b": "kept"}))),
-		WithLocale(bundle(map[string]string{"a": "explicit"})),
+		WithDefaults(WithLocaleBundle(bundle(map[string]string{"a": "default", "b": "kept"}))),
+		WithLocaleBundle(bundle(map[string]string{"a": "explicit"})),
 	})
 	if err != nil {
 		t.Fatalf("default key shadowed: %v", err)
@@ -370,18 +368,18 @@ func TestCheckReloadContinuity(t *testing.T) {
 	}
 }
 
-func TestWithDefaults_CIBASubOptionsYieldIndividually(t *testing.T) {
+func TestWithDefaults_CIBAGrantYieldsToExplicit(t *testing.T) {
 	t.Parallel()
 
 	c, err := newConfig([]Option{
-		WithDefaults(WithCIBA(WithCIBAPollInterval(5*time.Second), WithCIBAMaxPollViolations(3))),
-		WithCIBA(WithCIBAPollInterval(10 * time.Second)),
+		WithDefaults(WithCIBAGrant(CIBAGrant{PollInterval: 5 * time.Second, MaxPollViolations: 3})),
+		WithCIBAGrant(CIBAGrant{PollInterval: 10 * time.Second}),
 	})
 	if err != nil {
 		t.Fatalf("newConfig: %v", err)
 	}
-	if c.cibaPollInterval != 10*time.Second || c.cibaMaxPollViolations != 3 {
-		t.Fatalf("poll interval = %v, max violations = %d; want the explicit 10s and the default 3",
+	if c.cibaPollInterval != 10*time.Second || c.cibaMaxPollViolations != 0 {
+		t.Fatalf("poll interval = %v, max violations = %d; want the explicit 10s and no default merged in",
 			c.cibaPollInterval, c.cibaMaxPollViolations)
 	}
 }

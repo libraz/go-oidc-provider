@@ -2,8 +2,6 @@ package op
 
 import (
 	"context"
-	"errors"
-	"strconv"
 	"time"
 
 	"github.com/libraz/go-oidc-provider/internal/ciba"
@@ -111,143 +109,74 @@ func (f HintResolverFunc) Resolve(ctx context.Context, kind HintKind, value stri
 	return f(ctx, kind, value)
 }
 
-// CIBAOption configures the CIBA grant beyond the bare [WithCIBA]
-// opt-in. Pass values produced by the WithCIBA* helpers below.
-type CIBAOption interface {
-	applyCIBA(*config) error
+// CIBAGrant configures the CIBA Core 1.0 grant enabled by
+// [WithCIBAGrant]. Zero-valued fields keep the library defaults.
+//
+// Stable since v1.5.
+type CIBAGrant struct {
+	// HintResolver maps an inbound CIBA hint to a stable end-user
+	// subject. REQUIRED — [New] returns a configuration error when it
+	// is nil because the /bc-authorize handler would otherwise return
+	// login_required for every request.
+	HintResolver HintResolver
+
+	// DefaultRequestTTL is the auth_req_id lifetime the OP advertises
+	// in the /bc-authorize response when the client did not supply
+	// requested_expiry. Zero falls back to the library default (600
+	// seconds, matching CIBA Core 1.0 §7.3); a negative value is
+	// rejected.
+	//
+	// The value must not exceed MaxRequestTTL when both are
+	// configured; the combination fails [New]. When only the cap is
+	// configured, the library default is clamped down to it. Under
+	// the FAPI-CIBA profile a value above ten minutes fails [New].
+	DefaultRequestTTL time.Duration
+
+	// MaxRequestTTL caps the requested_expiry value the client
+	// supplies on /bc-authorize. Zero (the default) disables clamping;
+	// a positive value is the maximum auth_req_id lifetime the OP will
+	// honour regardless of the client's request. A negative value is
+	// rejected.
+	//
+	// The cap also bounds the lifetime applied when the client omits
+	// requested_expiry: a lower cap clamps the library default, and an
+	// explicitly configured DefaultRequestTTL above the cap fails
+	// [New]. Under the FAPI-CIBA profile a value above ten minutes
+	// fails [New].
+	MaxRequestTTL time.Duration
+
+	// PollInterval is the `interval` value advertised on the
+	// /bc-authorize response (CIBA Core 1.0 §7.3). Zero falls back to
+	// the library default (5 seconds); a negative value is rejected.
+	PollInterval time.Duration
+
+	// MaxPollViolations is the strike threshold above which the
+	// /token endpoint locks a CIBA record by calling Deny with reason
+	// "poll_abuse" (CIBA Core 1.0 §11 leaves the lockout cap
+	// implementation-defined). Zero falls back to the library default
+	// ([ciba.MaxPollViolations], currently 5).
+	//
+	// The knob exists for two reasons:
+	//
+	//  1. Conformance harnesses that exercise the slow_down ladder more
+	//     times than the default cap permits (e.g. the OFCS fapi-ciba
+	//     multiple-call-to-token-endpoint module) would otherwise see
+	//     the request lock to access_denied mid-test.
+	//  2. Embedders whose RP fleet legitimately races the slow_down
+	//     interval (clock skew, retry storms after a transient outage)
+	//     can raise the cap to absorb the bounce without revoking the
+	//     auth_req_id.
+	//
+	// To disable the lockout effectively, pass 255 — the strike counter
+	// is uint8 and never wraps past that value. Production embedders
+	// SHOULD prefer a finite cap because the lockout is the only defence
+	// against a client that ignores slow_down and burns through the
+	// auth_req_id's TTL with rapid polls.
+	MaxPollViolations uint8
 }
 
-type cibaOptionFunc func(*config) error
-
-func (f cibaOptionFunc) applyCIBA(c *config) error { return f(c) }
-
-// WithCIBAHintResolver registers the [HintResolver] the
-// /bc-authorize handler invokes to map an inbound CIBA hint to a
-// stable end-user subject. The resolver is REQUIRED — [WithCIBA]
-// returns a configuration error when no resolver is supplied
-// because the handler would otherwise return login_required for
-// every request.
-//
-// Stable since v1.0.
-func WithCIBAHintResolver(r HintResolver) CIBAOption {
-	return cibaOptionFunc(func(c *config) error {
-		if err := c.claimOnce("WithCIBAHintResolver"); err != nil {
-			return err
-		}
-		if nilcheck.IsNil(r) {
-			return newConfigurationError("WithCIBAHintResolver requires a non-nil HintResolver", nil)
-		}
-		c.cibaHintResolver = r
-		return nil
-	})
-}
-
-// WithCIBADefaultExpiresIn overrides the auth_req_id lifetime the
-// OP advertises in the /bc-authorize response when the client did
-// not supply requested_expiry. Zero falls back to the library default
-// (600 seconds, matching CIBA Core 1.0 §7.3); a negative value is
-// rejected at the option site.
-//
-// The value must not exceed [WithCIBAMaxExpiresIn] when both are
-// configured; the combination fails [New]. When only the cap is
-// configured, the library default is clamped down to it. Under
-// the FAPI-CIBA profile a value above ten minutes fails [New].
-//
-// Stable since v1.0.
-func WithCIBADefaultExpiresIn(d time.Duration) CIBAOption {
-	return cibaOptionFunc(func(c *config) error {
-		if err := c.claimOnce("WithCIBADefaultExpiresIn"); err != nil {
-			return err
-		}
-		if d < 0 {
-			return newConfigurationError("WithCIBADefaultExpiresIn must be zero or positive", nil)
-		}
-		c.cibaDefaultExpiresIn = d
-		return nil
-	})
-}
-
-// WithCIBAMaxExpiresIn caps the requested_expiry value the client
-// supplies on /bc-authorize. Zero (the default) disables clamping;
-// a positive value is the maximum auth_req_id lifetime the OP will
-// honour regardless of the client's request. Negative values are
-// rejected at the option site.
-//
-// The cap also bounds the lifetime applied when the client omits
-// requested_expiry: a lower cap clamps the library default, and an
-// explicitly configured [WithCIBADefaultExpiresIn] above the cap
-// fails [New]. Under the FAPI-CIBA profile a value above ten minutes
-// fails [New].
-//
-// Stable since v1.0.
-func WithCIBAMaxExpiresIn(d time.Duration) CIBAOption {
-	return cibaOptionFunc(func(c *config) error {
-		if err := c.claimOnce("WithCIBAMaxExpiresIn"); err != nil {
-			return err
-		}
-		if d < 0 {
-			return newConfigurationError("WithCIBAMaxExpiresIn must be zero or positive", nil)
-		}
-		c.cibaMaxExpiresIn = d
-		return nil
-	})
-}
-
-// WithCIBAPollInterval overrides the `interval` value advertised on
-// the /bc-authorize response (CIBA Core 1.0 §7.3). Zero falls back to
-// the library default (5 seconds); a negative value is rejected at the
-// option site.
-//
-// Stable since v1.0.
-func WithCIBAPollInterval(d time.Duration) CIBAOption {
-	return cibaOptionFunc(func(c *config) error {
-		if err := c.claimOnce("WithCIBAPollInterval"); err != nil {
-			return err
-		}
-		if d < 0 {
-			return newConfigurationError("WithCIBAPollInterval must be zero or positive", nil)
-		}
-		c.cibaPollInterval = d
-		return nil
-	})
-}
-
-// WithCIBAMaxPollViolations overrides the strike threshold above
-// which the /token endpoint locks a CIBA record by calling Deny with
-// reason "poll_abuse" (CIBA Core 1.0 §11 leaves the lockout cap
-// implementation-defined). Zero falls back to the library default
-// ([ciba.MaxPollViolations], currently 5).
-//
-// The knob exists for two reasons:
-//
-//  1. Conformance harnesses that exercise the slow_down ladder more
-//     times than the default cap permits (e.g. the OFCS fapi-ciba
-//     multiple-call-to-token-endpoint module) would otherwise see
-//     the request lock to access_denied mid-test.
-//  2. Embedders whose RP fleet legitimately races the slow_down
-//     interval (clock skew, retry storms after a transient outage)
-//     can raise the cap to absorb the bounce without revoking the
-//     auth_req_id.
-//
-// To disable the lockout effectively, pass 255 — the strike counter
-// is uint8 and never wraps past that value. Production embedders
-// SHOULD prefer a finite cap because the lockout is the only defence
-// against a client that ignores slow_down and burns through the
-// auth_req_id's TTL with rapid polls.
-//
-// Stable since v1.0.
-func WithCIBAMaxPollViolations(n uint8) CIBAOption {
-	return cibaOptionFunc(func(c *config) error {
-		if err := c.claimOnce("WithCIBAMaxPollViolations"); err != nil {
-			return err
-		}
-		c.cibaMaxPollViolations = n
-		return nil
-	})
-}
-
-// WithCIBA enables the CIBA Core 1.0 grant
-// (urn:openid:params:grant-type:ciba). The option:
+// WithCIBAGrant enables the CIBA Core 1.0 grant
+// (urn:openid:params:grant-type:ciba), configured by g. The option:
 //
 //   - adds [grant.CIBA] to the resolved grant set. The addition
 //     composes rather than replaces: a deployment that calls only
@@ -270,40 +199,47 @@ func WithCIBAMaxPollViolations(n uint8) CIBAOption {
 //     fields and the OP to mount /bc-authorize at the configured
 //     endpoint path.
 //
-// At least one [WithCIBAHintResolver] sub-option MUST be supplied;
-// [op.New] returns a configuration error otherwise. The resolver is
-// the embedder's surface for mapping login_hint / id_token_hint /
-// login_hint_token to a stable subject and is required for the
-// endpoint to be useful.
+// [CIBAGrant.HintResolver] MUST be set; [op.New] returns a
+// configuration error otherwise. The resolver is the embedder's
+// surface for mapping login_hint / id_token_hint / login_hint_token
+// to a stable subject and is required for the endpoint to be useful.
 //
 // The library implements CIBA poll mode only; ping and push delivery
 // modes are reserved for a future release. Discovery advertises
 // `backchannel_token_delivery_modes_supported: ["poll"]` exclusively
 // so a client cannot negotiate an unsupported delivery mode.
 //
-// WithCIBA itself may be supplied more than once; each [CIBAOption] is
-// single-valued across all of them.
+// WithCIBAGrant may be supplied at most once.
 //
-// Stable since v1.0.
-func WithCIBA(opts ...CIBAOption) Option {
+// Stable since v1.5.
+func WithCIBAGrant(g CIBAGrant) Option {
 	return optionFunc(func(c *config) error {
-		// Only the opt-in bit is recorded here; the grant set is
-		// assembled in [config.applyDefaults] once every option has
-		// run, so the result cannot depend on whether this option or
-		// [WithGrants] was applied first.
-		c.cibaGrantEnabled = true
-		for i, sub := range opts {
-			if nilcheck.IsNil(sub) {
-				return newConfigurationError("WithCIBA received nil CIBAOption at position "+strconv.Itoa(i), nil)
-			}
-			err := sub.applyCIBA(c)
-			if errors.Is(err, errShadowedDefault) {
-				continue
-			}
-			if err != nil {
-				return err
-			}
+		if err := c.claimOnce("WithCIBAGrant"); err != nil {
+			return err
 		}
+		// A missing resolver surfaces in validateCIBAGrant; a typed nil
+		// is a wiring slip caught here, where the option is named.
+		if g.HintResolver != nil && nilcheck.IsNil(g.HintResolver) {
+			return newConfigurationError("WithCIBAGrant: CIBAGrant.HintResolver must not be a typed nil", nil)
+		}
+		switch {
+		case g.DefaultRequestTTL < 0:
+			return newConfigurationError("WithCIBAGrant: CIBAGrant.DefaultRequestTTL must be zero or positive", nil)
+		case g.MaxRequestTTL < 0:
+			return newConfigurationError("WithCIBAGrant: CIBAGrant.MaxRequestTTL must be zero or positive", nil)
+		case g.PollInterval < 0:
+			return newConfigurationError("WithCIBAGrant: CIBAGrant.PollInterval must be zero or positive", nil)
+		}
+		// Only the opt-in bit and the settings are recorded here; the
+		// grant set is assembled in [config.applyDefaults] once every
+		// option has run, so the result cannot depend on whether this
+		// option or [WithGrants] was applied first.
+		c.cibaGrantEnabled = true
+		c.cibaHintResolver = g.HintResolver
+		c.cibaDefaultExpiresIn = g.DefaultRequestTTL
+		c.cibaMaxExpiresIn = g.MaxRequestTTL
+		c.cibaPollInterval = g.PollInterval
+		c.cibaMaxPollViolations = g.MaxPollViolations
 		return nil
 	})
 }
@@ -311,7 +247,7 @@ func WithCIBA(opts ...CIBAOption) Option {
 // validateCIBAGrant enforces the substore-presence and
 // resolver-presence invariants the CIBA flow depends on: any
 // embedder that activates the grant — through the dedicated
-// [WithCIBA] option OR by listing [grant.CIBA] in [WithGrants] —
+// [WithCIBAGrant] option OR by listing [grant.CIBA] in [WithGrants] —
 // MUST have a [store.CIBARequestStore] substore wired AND a
 // [HintResolver] configured. Without the substore the
 // /bc-authorize handler's Save call would reach a nil substore on
@@ -334,7 +270,7 @@ func (c *config) validateCIBAGrant() error {
 	}
 	if nilcheck.IsNil(c.cibaHintResolver) {
 		return newConfigurationError("the CIBA grant requires a HintResolver; supply one through "+
-			"WithCIBA(WithCIBAHintResolver(...)) (the resolver maps "+
+			"WithCIBAGrant(CIBAGrant{HintResolver: ...}) (the resolver maps "+
 			"login_hint / id_token_hint / login_hint_token to a stable subject)", nil)
 	}
 	// The cap only clamps a client-supplied requested_expiry, so a
@@ -345,7 +281,7 @@ func (c *config) validateCIBAGrant() error {
 	// in [config.effectiveCIBADefaultExpiresIn], since the cap states
 	// the intent unambiguously.
 	if c.cibaMaxExpiresIn > 0 && c.cibaDefaultExpiresIn > c.cibaMaxExpiresIn {
-		return newConfigurationError("WithCIBADefaultExpiresIn must not exceed WithCIBAMaxExpiresIn; "+
+		return newConfigurationError("CIBAGrant.DefaultRequestTTL must not exceed CIBAGrant.MaxRequestTTL; "+
 			"the default applies when the client omits requested_expiry and "+
 			"would otherwise outlive the value a client may ask for", nil)
 	}

@@ -27,7 +27,7 @@ import (
 type Clock = timex.Clock
 
 // Audit event names. The strings here MUST agree with the public
-// op.AuditEvent constants in op/audit.go; the registrationendpoint_test
+// op/audit.Event constants in op/audit.go; the registrationendpoint_test
 // package contains a guard that compares both lists.
 const (
 	auditDCRIATConsumed           = string(auditevent.AuditDCRIATConsumed)

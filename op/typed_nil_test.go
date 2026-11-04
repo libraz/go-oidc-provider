@@ -284,8 +284,8 @@ func TestPublicAuthnOptions_RejectTypedNilDependencies(t *testing.T) {
 		},
 		{
 			name:   "token-exchange-policy",
-			field:  "WithTokenExchange",
-			option: op.WithTokenExchange(typedNilFrom[op.TokenExchangePolicy](t, &typedNilTokenExchangePolicy{})),
+			field:  "WithTokenExchangeGrant",
+			option: op.WithTokenExchangeGrant(op.TokenExchangeGrant{Policy: typedNilFrom[op.TokenExchangePolicy](t, &typedNilTokenExchangePolicy{})}),
 		},
 		{
 			name:   "static-client-seed",
@@ -294,15 +294,10 @@ func TestPublicAuthnOptions_RejectTypedNilDependencies(t *testing.T) {
 		},
 		{
 			name:  "ciba-hint-resolver",
-			field: "WithCIBAHintResolver",
-			option: op.WithCIBA(op.WithCIBAHintResolver(
-				typedNilFrom[op.HintResolver](t, &stubHintResolver{}),
-			)),
-		},
-		{
-			name:   "ciba-option",
-			field:  "WithCIBA",
-			option: op.WithCIBA(typedNilFrom[op.CIBAOption](t, op.WithCIBADefaultExpiresIn(time.Minute))),
+			field: "WithCIBAGrant",
+			option: op.WithCIBAGrant(op.CIBAGrant{
+				HintResolver: typedNilFrom[op.HintResolver](t, &stubHintResolver{}),
+			}),
 		},
 	}
 
@@ -424,19 +419,19 @@ func TestNew_RejectsTypedNilSubstores(t *testing.T) {
 		{
 			"initial-access-tokens",
 			func(s *inmem.Store) store.Store { return typedNilIATStore{s} },
-			[]op.Option{op.WithDynamicRegistration(op.RegistrationOption{})},
+			[]op.Option{op.WithDynamicRegistration(op.DynamicRegistration{})},
 			"InitialAccessTokens",
 		},
 		{
 			"registration-access-tokens",
 			func(s *inmem.Store) store.Store { return typedNilRATStore{s} },
-			[]op.Option{op.WithDynamicRegistration(op.RegistrationOption{})},
+			[]op.Option{op.WithDynamicRegistration(op.DynamicRegistration{})},
 			"RegistrationAccessTokens",
 		},
 		{
 			"device-codes",
 			func(s *inmem.Store) store.Store { return typedNilDeviceCodesStore{s} },
-			[]op.Option{op.WithDeviceCodeGrant()},
+			[]op.Option{op.WithDeviceCodeGrant(op.DeviceCodeGrant{})},
 			"DeviceCodes",
 		},
 	}

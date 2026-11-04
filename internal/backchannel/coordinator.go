@@ -48,7 +48,7 @@ const DefaultFanOutBudget = 30 * time.Second
 // an unbounded pile of long-lived outbound connections.
 const DefaultMaxInflightFanOuts = 256
 
-// auditEvent names lifted from op.AuditEvent. The internal package
+// auditEvent names lifted from op/audit.Event. The internal package
 // references them as raw strings so the import graph stays one-way
 // (op depends on internal, not the reverse). The op package guards
 // the values with a mirror test (op/audit_test.go).

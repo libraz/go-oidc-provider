@@ -23,7 +23,7 @@ import (
 // ASCII case. The wire response is unchanged — the proof was admitted
 // — but SOC tooling needs a signal so it can pin the bridge while
 // the responsible RP library is fixed. The value comes from the registry
-// exposed publicly as [op.AuditDPoPLooseMethodCaseAdmitted].
+// exposed publicly as op/audit.DPoPLooseMethodCaseAdmitted.
 const AuditEventLooseMethodCaseAdmitted = string(auditevent.AuditDPoPLooseMethodCaseAdmitted)
 
 // DefaultIatWindow is the symmetric tolerance applied to the proof

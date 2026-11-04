@@ -408,7 +408,7 @@ type Deps struct {
 	FirstPartyClients map[string]struct{}
 
 	// Audit is the [audit.Emitter] the handler raises events on. The
-	// authorize surface emits [op.AuditConsentGrantedFirstParty]
+	// authorize surface emits op/audit.ConsentGrantedFirstParty
 	// when the first-party skip applies. A nil value collapses
 	// every emit to a no-op, matching the rest of the code base.
 	Audit audit.Emitter

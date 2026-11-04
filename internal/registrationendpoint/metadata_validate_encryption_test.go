@@ -135,7 +135,7 @@ func TestRegister_JWEAlgEncPair_Matrix(t *testing.T) {
 			for _, tc := range cases {
 				t.Run(tc.name, func(t *testing.T) {
 					t.Parallel()
-					f := newFixture(t, op.RegistrationOption{})
+					f := newFixture(t, op.DynamicRegistration{})
 					_, iat := f.issueIAT(t, op.InitialAccessTokenSpec{})
 					body := minimalMetadata()
 					tc.mutate(body)
@@ -170,7 +170,7 @@ func TestRegister_JWEAlgEncPair_Matrix(t *testing.T) {
 func TestRegister_JWEAlgEncPair_HalfPairErrorMessage(t *testing.T) {
 	t.Parallel()
 
-	f := newFixture(t, op.RegistrationOption{})
+	f := newFixture(t, op.DynamicRegistration{})
 	_, iat := f.issueIAT(t, op.InitialAccessTokenSpec{})
 	body := minimalMetadata()
 	body["id_token_encrypted_response_alg"] = "RSA-OAEP-256"

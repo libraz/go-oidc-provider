@@ -12,6 +12,7 @@ import (
 
 	"github.com/libraz/go-oidc-provider/internal/tokens"
 	"github.com/libraz/go-oidc-provider/op"
+	"github.com/libraz/go-oidc-provider/op/audit"
 	"github.com/libraz/go-oidc-provider/op/feature"
 	"github.com/libraz/go-oidc-provider/op/store"
 	"github.com/libraz/go-oidc-provider/op/storeadapter/inmem"
@@ -134,7 +135,7 @@ func TestAudit_IntrospectionRevocationFault_EmitsEventAndStaysInactive(t *testin
 		t.Errorf("inactive response has %d members, want exactly 1 per RFC 7662 §2.2; body=%v", len(body), body)
 	}
 
-	events := capture.findEvents(t, string(op.AuditIntrospectionError))
+	events := capture.findEvents(t, string(audit.IntrospectionError))
 	if len(events) != 1 {
 		t.Fatalf("got %d introspection.error events, want exactly 1; capture=%s", len(events), capture.buf.String())
 	}

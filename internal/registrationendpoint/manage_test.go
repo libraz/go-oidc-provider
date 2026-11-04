@@ -103,7 +103,7 @@ func (f *dcrFixture) manage(tb testing.TB, method, path, bearer string, body any
 func TestManage_Read_HappyPath(t *testing.T) {
 	t.Parallel()
 
-	f := newFixture(t, op.RegistrationOption{})
+	f := newFixture(t, op.DynamicRegistration{})
 	created := f.register(t, nil)
 
 	resp := f.manage(t, http.MethodGet, created.registrationClientURI, created.registrationAccessToken, nil)
@@ -130,7 +130,7 @@ func TestManage_Read_HappyPath(t *testing.T) {
 func TestManage_UpdateRetainsIATScopeCeilingAcrossRATRotation(t *testing.T) {
 	t.Parallel()
 
-	f := newFixture(t, op.RegistrationOption{})
+	f := newFixture(t, op.DynamicRegistration{})
 	_, iat := f.issueIAT(t, op.InitialAccessTokenSpec{AllowedScopes: []string{"openid"}})
 	createdResp := f.post(t, map[string]any{
 		"redirect_uris": []string{"https://rp.test.invalid/callback"},
@@ -197,7 +197,7 @@ func TestManage_UpdateWithoutScopeMemberDoesNotWidenScopes(t *testing.T) {
 	t.Parallel()
 
 	ctx := context.Background()
-	f := newFixture(t, op.RegistrationOption{})
+	f := newFixture(t, op.DynamicRegistration{})
 	_, iat := f.issueIAT(t, op.InitialAccessTokenSpec{})
 	createdResp := f.post(t, map[string]any{
 		"redirect_uris": []string{"https://rp.test.invalid/callback"},
@@ -323,7 +323,7 @@ func TestManage_Read_4xx(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			f := newFixture(t, op.RegistrationOption{})
+			f := newFixture(t, op.DynamicRegistration{})
 			c := f.register(t, nil)
 			path, bearer := tc.buildRequest(t, f, c)
 			resp := f.manage(t, http.MethodGet, path, bearer, nil)
@@ -369,7 +369,7 @@ func TestManage_Read_StaticClientWithFakeRAT(t *testing.T) {
 func TestManage_Update_HappyPath_RotatesRAT(t *testing.T) {
 	t.Parallel()
 
-	f := newFixture(t, op.RegistrationOption{})
+	f := newFixture(t, op.DynamicRegistration{})
 	created := f.register(t, nil)
 	updated := minimalMetadata()
 	updated["redirect_uris"] = []string{"https://rp.test.invalid/cb-new"}
@@ -416,7 +416,7 @@ func TestManage_Update_HappyPath_RotatesRAT(t *testing.T) {
 func TestManage_Update_IgnoresStandardUnstoredMetadata(t *testing.T) {
 	t.Parallel()
 
-	f := newFixture(t, op.RegistrationOption{})
+	f := newFixture(t, op.DynamicRegistration{})
 	created := f.register(t, nil)
 	updated := minimalMetadata()
 	updated["client_name"] = "Client With Ignored Metadata"
@@ -465,7 +465,7 @@ func TestManage_Update_IgnoresStandardUnstoredMetadata(t *testing.T) {
 func TestManage_Update_PublicToConfidential_MintsClientSecret(t *testing.T) {
 	t.Parallel()
 
-	f := newFixture(t, op.RegistrationOption{})
+	f := newFixture(t, op.DynamicRegistration{})
 	created := f.register(t, map[string]any{
 		"redirect_uris":              []string{"https://rp.test.invalid/cb"},
 		"token_endpoint_auth_method": "none",
@@ -508,7 +508,7 @@ func TestManage_Update_PublicToConfidential_MintsClientSecret(t *testing.T) {
 func TestManage_Update_AllowsOptionalPropertiesToBeDeleted(t *testing.T) {
 	t.Parallel()
 
-	f := newFixture(t, op.RegistrationOption{})
+	f := newFixture(t, op.DynamicRegistration{})
 	created := f.register(t, map[string]any{
 		"redirect_uris": []string{"https://rp.test.invalid/cb"},
 		"client_name":   "example client",
@@ -540,7 +540,7 @@ func TestManage_Update_AllowsOptionalPropertiesToBeDeleted(t *testing.T) {
 func TestManage_Update_AllowsOptionalPropertiesToBeDeletedByOmission(t *testing.T) {
 	t.Parallel()
 
-	f := newFixture(t, op.RegistrationOption{})
+	f := newFixture(t, op.DynamicRegistration{})
 	created := f.register(t, map[string]any{
 		"redirect_uris": []string{"https://rp.test.invalid/cb"},
 		"client_name":   "example client",
@@ -573,7 +573,7 @@ func TestManage_Update_AllowsOptionalPropertiesToBeDeletedByOmission(t *testing.
 func TestManage_Update_RejectsClientIDOverride(t *testing.T) {
 	t.Parallel()
 
-	f := newFixture(t, op.RegistrationOption{})
+	f := newFixture(t, op.DynamicRegistration{})
 	created := f.register(t, nil)
 	body := minimalMetadata()
 	body["client_id"] = "trying-to-rename"
@@ -653,7 +653,7 @@ func TestManage_Update_RejectsReservedFieldsAndMismatchedClientSecret(t *testing
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			f := newFixture(t, op.RegistrationOption{})
+			f := newFixture(t, op.DynamicRegistration{})
 			initial := tc.initial
 			if initial == nil {
 				initial = minimalMetadata()
@@ -739,7 +739,7 @@ func TestManage_Update_MetadataValidationErrors(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			f := newFixture(t, op.RegistrationOption{})
+			f := newFixture(t, op.DynamicRegistration{})
 			created := f.register(t, nil)
 			body := minimalMetadata()
 			tc.mutate(body)
@@ -763,7 +763,7 @@ func TestManage_Update_MetadataValidationErrors(t *testing.T) {
 func TestManage_Delete_HappyPath(t *testing.T) {
 	t.Parallel()
 
-	f := newFixture(t, op.RegistrationOption{})
+	f := newFixture(t, op.DynamicRegistration{})
 	created := f.register(t, nil)
 
 	resp := f.manage(t, http.MethodDelete, created.registrationClientURI, created.registrationAccessToken, nil)
@@ -806,7 +806,7 @@ func TestManage_Delete_HappyPath(t *testing.T) {
 func TestManage_OperatorDeletedClientRATCannotRecreate(t *testing.T) {
 	t.Parallel()
 
-	f := newFixture(t, op.RegistrationOption{})
+	f := newFixture(t, op.DynamicRegistration{})
 	created := f.register(t, nil)
 
 	// Operator action: remove the client directly through the store.
@@ -839,7 +839,7 @@ func TestManage_Delete_DirectBackchannelUsesPreDeleteSnapshot(t *testing.T) {
 	}))
 	defer rp.Close()
 
-	f := newFixture(t, op.RegistrationOption{}, op.WithAllowInsecureOutboundForDev(op.OutboundBackchannel))
+	f := newFixture(t, op.DynamicRegistration{}, op.WithAllowInsecureOutboundForDev(op.OutboundBackchannel))
 	body := minimalMetadata()
 	body["backchannel_logout_uri"] = rp.URL
 	created := f.register(t, body)
@@ -874,7 +874,7 @@ func TestManage_Delete_DirectBackchannelUsesPreDeleteSnapshot(t *testing.T) {
 func TestManage_Delete_AlreadyGone(t *testing.T) {
 	t.Parallel()
 
-	f := newFixture(t, op.RegistrationOption{})
+	f := newFixture(t, op.DynamicRegistration{})
 	created := f.register(t, nil)
 	// First delete succeeds.
 	resp := f.manage(t, http.MethodDelete, created.registrationClientURI, created.registrationAccessToken, nil)
@@ -899,7 +899,7 @@ func TestManage_Delete_AlreadyGone(t *testing.T) {
 func TestManage_RoundTrip_PreservesOIDCProfile(t *testing.T) {
 	t.Parallel()
 
-	f := newFixture(t, op.RegistrationOption{})
+	f := newFixture(t, op.DynamicRegistration{})
 	_, iat := f.issueIAT(t, op.InitialAccessTokenSpec{})
 
 	rich := map[string]any{
@@ -986,7 +986,7 @@ func TestManage_RoundTrip_PreservesOIDCProfile(t *testing.T) {
 func TestManage_RoundTrip_PreservesExplicitZeroDefaultMaxAge(t *testing.T) {
 	t.Parallel()
 
-	f := newFixture(t, op.RegistrationOption{})
+	f := newFixture(t, op.DynamicRegistration{})
 	_, iat := f.issueIAT(t, op.InitialAccessTokenSpec{})
 
 	body := map[string]any{
@@ -1080,7 +1080,7 @@ func equalJSON(a, b any) bool {
 func TestManage_RoundTrip_PreservesBackchannelLogout(t *testing.T) {
 	t.Parallel()
 
-	f := newFixture(t, op.RegistrationOption{})
+	f := newFixture(t, op.DynamicRegistration{})
 	_, iat := f.issueIAT(t, op.InitialAccessTokenSpec{})
 
 	original := map[string]any{
@@ -1163,7 +1163,7 @@ func TestManage_Update_RatPutFailureRollsBackMetadata(t *testing.T) {
 	prov := testkit.NewProvider(t,
 		testkit.WithClock(clock),
 		testkit.WithOptions(
-			op.WithDynamicRegistration(op.RegistrationOption{}),
+			op.WithDynamicRegistration(op.DynamicRegistration{}),
 			op.WithStore(wrap),
 			op.WithLogger(logger),
 		),
@@ -1279,7 +1279,7 @@ func TestRegister_ClientRegisterFailureDoesNotConsumeIAT(t *testing.T) {
 	prov := testkit.NewProvider(t,
 		testkit.WithClock(clock),
 		testkit.WithOptions(
-			op.WithDynamicRegistration(op.RegistrationOption{}),
+			op.WithDynamicRegistration(op.DynamicRegistration{}),
 			op.WithStore(wrap),
 			op.WithLogger(logger),
 		),
@@ -1350,7 +1350,7 @@ func (s *failingRegisterStore) RegisterClient(ctx context.Context, c *store.Clie
 func TestManage_Delete_CascadesAccessTokenRevocation(t *testing.T) {
 	t.Parallel()
 
-	f := newFixture(t, op.RegistrationOption{})
+	f := newFixture(t, op.DynamicRegistration{})
 	created := f.register(t, nil)
 	ctx := context.Background()
 
@@ -1431,7 +1431,7 @@ func TestManage_Delete_ClientDeleteFailureRetainsRATForRetry(t *testing.T) {
 	prov := testkit.NewProvider(t,
 		testkit.WithClock(clock),
 		testkit.WithOptions(
-			op.WithDynamicRegistration(op.RegistrationOption{}),
+			op.WithDynamicRegistration(op.DynamicRegistration{}),
 			op.WithStore(wrap),
 			op.WithLogger(logger),
 		),
@@ -1509,7 +1509,7 @@ func TestManage_NotAllowedMethods(t *testing.T) {
 	for _, method := range []string{http.MethodPost, http.MethodPatch} {
 		t.Run(method, func(t *testing.T) {
 			t.Parallel()
-			f := newFixture(t, op.RegistrationOption{})
+			f := newFixture(t, op.DynamicRegistration{})
 			created := f.register(t, nil)
 			req, err := http.NewRequestWithContext(context.Background(), method, created.registrationClientURI, http.NoBody)
 			if err != nil {

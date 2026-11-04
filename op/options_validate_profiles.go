@@ -14,8 +14,7 @@ import (
 
 // profileOptionName returns the exported identifier an embedder passes to
 // [WithProfile] ("profile.OAuth21"), for error and warning text. Wire
-// output (discovery, audit) keeps [profile.Profile.String], whose slug
-// "baseline" reads as FAPI.
+// output (discovery, audit) uses [profile.Profile.String].
 func profileOptionName(p profile.Profile) string {
 	switch p {
 	case profile.OAuth21:
@@ -192,7 +191,9 @@ func (c *config) validateProfileTiming(p profile.Profile, enabled map[feature.Fl
 	}
 	if profileForcesDPoPNonce(p) && hasDPoPFeature(enabled) && c.dpopNonces == nil {
 		return newConfigurationError(withProfileName(p)+
-			" requires WithDPoPNonceSource because DPoP is active (enabled by the profile or by WithFeature)", nil)
+			" requires a DPoP nonce source because DPoP is active (enabled by the profile or by WithFeature); "+
+			"pass op.WithDPoPNonceSource(op.NewInMemoryDPoPNonceSource(ctx, rotate)) (single replica) or a "+
+			"source shared across replicas, or choose mTLS sender-constraining instead with op.WithFeature(feature.MTLS)", nil)
 	}
 	// The grace window absorbs a retry of a rotation; a profile that
 	// never rotates leaves the option nothing to configure.
@@ -213,8 +214,8 @@ func (c *config) validateFAPICIBAExpiry() error {
 		option string
 		value  time.Duration
 	}{
-		{"WithCIBADefaultExpiresIn", c.cibaDefaultExpiresIn},
-		{"WithCIBAMaxExpiresIn", c.cibaMaxExpiresIn},
+		{"CIBAGrant.DefaultRequestTTL", c.cibaDefaultExpiresIn},
+		{"CIBAGrant.MaxRequestTTL", c.cibaMaxExpiresIn},
 	} {
 		if v.value > limit {
 			return newConfigurationError(withProfileName(profile.FAPICIBA)+
@@ -258,9 +259,9 @@ func (c *config) validateProfileGrants(p profile.Profile) error {
 func grantActivationOption(g grant.Type) string {
 	switch g {
 	case grant.CIBA:
-		return "WithCIBA(WithCIBAHintResolver(...))"
+		return "WithCIBAGrant(CIBAGrant{HintResolver: ...})"
 	case grant.DeviceCode:
-		return "WithDeviceCodeGrant()"
+		return "WithDeviceCodeGrant(DeviceCodeGrant{})"
 	case grant.JWTBearer:
 		return "WithJWTBearerGrant(...)"
 	case grant.AuthorizationCode:
@@ -345,12 +346,6 @@ func featureOptionName(f feature.Flag) string {
 		return "feature.Introspect"
 	case feature.Revoke:
 		return "feature.Revoke"
-	case feature.DynamicRegistration:
-		return "feature.DynamicRegistration"
-	case feature.RAR:
-		return "feature.RAR"
-	case feature.GrantManagement:
-		return "feature.GrantManagement"
 	}
 	return "feature.Flag(" + strconv.Itoa(int(f)) + ")"
 }

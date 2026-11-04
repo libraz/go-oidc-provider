@@ -85,7 +85,7 @@ type EncryptionSet struct {
 // The function reuses [SetOption] for the wall-clock seam and the
 // retired-kid observer so encryption-side rotation observability
 // composes with the signing-side audit pipeline (the same
-// op.AuditKeyRetiredKidPresented event covers both). [WithJWEPolicy]
+// op/audit.KeyRetiredKidPresented event covers both). [WithJWEPolicy]
 // additionally pins the deployment's alg / enc narrowing onto the set,
 // which is what carries the restriction into
 // [jose.Decrypt].

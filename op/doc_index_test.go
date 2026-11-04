@@ -15,7 +15,7 @@ import (
 // exportedFuncsByResult parses the non-test sources of package op and
 // groups the exported top-level functions that return a single value by the
 // name of that value's type. The "Option" group is the option set; the
-// others are sub-option constructors (CIBAOption, DeviceCodeOption, ...).
+// others return a different option-shaped type.
 func exportedFuncsByResult(t *testing.T) map[string][]string {
 	t.Helper()
 
@@ -74,9 +74,8 @@ func optionGroupsBlock(t *testing.T) string {
 // TestDocOptionGroupsIndexMatchesExportedOptions keeps the "Option groups"
 // index in op/doc.go in step with the code: every exported top-level
 // function returning [op.Option] is listed there, and every [WithX] entry
-// names a function that exists. Sub-option constructors (functions
-// returning CIBAOption, DeviceCodeOption and the like) may appear in the
-// block but are not required to.
+// names a function that exists. Constructors returning another
+// *Option type may appear in the block but are not required to.
 func TestDocOptionGroupsIndexMatchesExportedOptions(t *testing.T) {
 	t.Parallel()
 

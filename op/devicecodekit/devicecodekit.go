@@ -49,7 +49,7 @@ import (
 // the value in their UI ("you have N attempts remaining") but MUST NOT
 // pass a different ceiling — the library treats this constant as the
 // single source of truth across the verification page, the audit
-// catalogue ([op.AuditDeviceCodeUserCodeBruteForce]), and the wire
+// catalogue (op/audit.DeviceCodeUserCodeBruteForce), and the wire
 // behaviour of the next /token poll on the locked-out record.
 const MaxUserCodeStrikes = devicecode.MaxUserCodeStrikes
 
@@ -68,7 +68,7 @@ const DefaultAttemptTTL = devicecode.DefaultExpiresIn
 // Deny reasons the helpers stamp through [store.DeviceCodeStore.Deny]
 // and [store.DeviceCodeStore.Revoke]. The strings are stable and
 // embedder-visible: SOC tooling subscribes to
-// [op.AuditDeviceCodeRevoked] / [op.AuditDeviceCodeVerificationDenied]
+// op/audit.DeviceCodeRevoked / op/audit.DeviceCodeVerificationDenied
 // and reads the "reason" extra to triage. New reasons MAY be added in
 // a minor release; existing values are part of the API surface and
 // only renamed in a major release with a deprecation notice.
@@ -169,10 +169,10 @@ type Deps struct {
 	// shape and the same routing attribute the OP writes through
 	// op.WithAuditLogger, so one handler can serve both streams.
 	// The helpers emit
-	// [op.AuditDeviceCodeUserCodeBruteForce] on every mismatched
-	// user_code submission, [op.AuditDeviceCodeVerificationApproved]
-	// and [op.AuditDeviceCodeVerificationDenied] from the verification
-	// page, and [op.AuditDeviceCodeRevoked] from [Revoke]. A nil logger
+	// op/audit.DeviceCodeUserCodeBruteForce on every mismatched
+	// user_code submission, op/audit.DeviceCodeVerificationApproved
+	// and op/audit.DeviceCodeVerificationDenied from the verification
+	// page, and op/audit.DeviceCodeRevoked from [Revoke]. A nil logger
 	// drops every record, so the helpers stay safe to invoke when the
 	// embedder has not wired audit observability yet.
 	//
@@ -509,8 +509,8 @@ func (d *Deps) now() time.Time {
 //     post-increment value reaches [MaxUserCodeStrikes] the record
 //     transitions to Denied with reason
 //     [DenyReasonUserCodeLockout]; the audit emitter logs both the
-//     per-strike event ([op.AuditDeviceCodeUserCodeBruteForce]) and
-//     the lockout event ([op.AuditDeviceCodeVerificationDenied]).
+//     per-strike event (op/audit.DeviceCodeUserCodeBruteForce) and
+//     the lockout event (op/audit.DeviceCodeVerificationDenied).
 //     A submission to a record that is already Denied returns
 //     (false, [ErrAlreadyDecided]) without further strikes.
 //
@@ -785,8 +785,8 @@ func DenyUserCode(ctx context.Context, deps *Deps, userCode, reason string) erro
 // recordStrike increments the per-record strike counter and, when
 // the post-increment value crosses [MaxUserCodeStrikes], transitions
 // the record to Denied with reason [DenyReasonUserCodeLockout]. The
-// helper emits [op.AuditDeviceCodeUserCodeBruteForce] on every
-// strike and [op.AuditDeviceCodeVerificationDenied] on the lockout
+// helper emits op/audit.DeviceCodeUserCodeBruteForce on every
+// strike and op/audit.DeviceCodeVerificationDenied on the lockout
 // transition.
 func recordStrike(ctx context.Context, deps *Deps, deviceCodeID, clientID string) error {
 	return recordStrikeWith(ctx, deps, clientID,
@@ -855,7 +855,7 @@ func recordStrikeWith(ctx context.Context, deps *Deps, clientID string, incremen
 
 // Revoke permanently disables a device authorization, cascade-revokes
 // every credential issued from it, and emits an
-// [op.AuditDeviceCodeRevoked] audit event.
+// op/audit.DeviceCodeRevoked audit event.
 //
 // Every JWT access token, opaque access token and refresh token the
 // device grant issues carries a GrantID derived one-way from

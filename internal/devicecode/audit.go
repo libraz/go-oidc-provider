@@ -3,7 +3,7 @@ package devicecode
 import "github.com/libraz/go-oidc-provider/internal/auditevent"
 
 // Audit event names emitted across the device flow. Values come from the
-// shared typed registry that also backs op.AuditDeviceCode*.
+// shared typed registry that also backs op/audit.DeviceCode*.
 //
 // The names group by surface:
 //

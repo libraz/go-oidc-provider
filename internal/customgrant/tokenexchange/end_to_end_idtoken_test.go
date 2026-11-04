@@ -223,7 +223,7 @@ func newExchangeProvider(t *testing.T, policy op.TokenExchangePolicy) (*testkit.
 	if err != nil {
 		t.Fatalf("HashClientSecret: %v", err)
 	}
-	tk := testkit.NewProvider(t, testkit.WithOptions(op.WithTokenExchange(policy)))
+	tk := testkit.NewProvider(t, testkit.WithOptions(op.WithTokenExchangeGrant(op.TokenExchangeGrant{Policy: policy})))
 	rp := tk.RegisterClient(t, testkit.ClientFixture{
 		ID:                      txClientID,
 		SecretHash:              hash,
