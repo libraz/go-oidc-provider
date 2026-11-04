@@ -46,7 +46,7 @@ go get github.com/libraz/go-oidc-provider/op/storeadapter/redis@v1.5.0
 go get github.com/libraz/go-oidc-provider/op/storeadapter/dynamodb@v1.5.0
 ```
 
-## [v1.5.0] — 2026-11-04
+## [v1.5.0] — 2026-11-05
 
 Configurations that started and looked correct but were not safe now either
 behave safely by default or fail at `op.New`. Authentication is composed
@@ -60,8 +60,32 @@ Before upgrading, check each item that applies to the deployment:
       `op.WithAllowInsecure*ForDev`, `op.WithBackchannelLogout*`,
       `op.WithPARLifetime`, `op.WithDeviceCodeExpiry`,
       `op.WithClaimsParameterSupported`, `op.WithAllowLocalhostLoopback`,
-      `op.MTLSProxyConfig` and `op.Resolver` are renames; the `Removed`
-      section maps each old name to its replacement.
+      `op.MTLSProxyConfig`, `op.Resolver`, `op.WithLocale`,
+      `op.RegistrationOption`, the `op.Audit*` names and the removed
+      `feature.DynamicRegistration`, `feature.RAR` and
+      `feature.GrantManagement` are renames; the `Changed` and `Removed`
+      sections map each old name to its replacement.
+- [ ] `op.WithCIBA`, `op.WithDeviceCodeGrant` with its separate options, and
+      `op.RegisterTokenExchange` become `op.WithCIBAGrant`,
+      `op.WithDeviceCodeGrant(op.DeviceCodeGrant{...})` and
+      `op.WithTokenExchangeGrant`; see `Changed`.
+- [ ] An OP built without `op.WithProfile` that admits relying parties unable
+      to send PKCE declares `op.WithProfile(profile.OIDCCore)`. Code or
+      dashboards that match the profile string `baseline` for `profile.OAuth21`
+      match `oauth21`.
+- [ ] `op.WithGrants` without `grant.AuthorizationCode` is not combined with
+      `op.WithLoginFlow`, `op.WithInteractions`, `op.WithUI` or
+      `op.WithFirstPartyClients`.
+- [ ] A `op.WithCustomGrant` that names the jwt-bearer URN moves to
+      `op.WithJWTBearerGrant`.
+- [ ] A jwt-bearer or token-exchange request that sends a `scope` outside the
+      client's registered `Scopes` now gets `invalid_scope`.
+- [ ] The symbols listed under `Removed` for deprecated APIs, the
+      `BackchannelLogoutSessionRequired` client field and
+      `(*oidcsql.Store).Close` are no longer used.
+- [ ] `(*oidcsql.Store).Migrate` applies the migration files and records a
+      version table; read its entry under `Changed` before running it against
+      an existing database.
 - [ ] `op.WithACRValuesSupported` entries that are not canonical AAL URIs
       (`op.AAL1.ACRURI()` and so on) are declared with
       `op.WithACRPolicy(op.ACRLevels{"<value>": op.AAL2})`.
@@ -89,17 +113,20 @@ Before upgrading, check each item that applies to the deployment:
 - [ ] A bring-your-own store behind a login flow with a password or
       second-factor step implements `AuthnLockouts()` or is paired with
       `op.WithAuthnLockoutStore`.
-- [ ] A DynamoDB deployment creates the `cascade_links` table (from
-      `Store.TableDefinitions`); `ValidateSchema` requires it.
+- [ ] A DynamoDB deployment creates the `cascade_links` table and adds the
+      `by_subject` index to the sessions table (both from
+      `Store.TableDefinitions`); `ValidateSchema` requires them.
 - [ ] A SQL database missing an index of the reference DDL, typically MySQL
       upgraded by an earlier release's `Store.Migrate`, gets it first; `op.New`
       names each one.
-- [ ] SQL migration `000006` also adds five `tls_client_auth_*` columns to
-      the clients table. `Store.Migrate` applies it; a database managed with
-      another tool applies the files from `Store.Migrations()` or writes them
-      with `op-schema export`. The first `Store.Migrate` call on an existing
-      database whose schema is complete records it in the version table,
-      which `op.WithNaming` can name through the `schema_migrations` key; see
+- [ ] SQL migration `000006` adds the previous-secret and five
+      `tls_client_auth_*` columns to the clients table, the `ssf_streams` and
+      `ssf_events` tables, and the sessions-by-subject index.
+      `Store.Migrate` applies it; a database managed with another tool applies
+      the files from `Store.Migrations()` or writes them with `op-schema
+      export`. The first `Store.Migrate` call on an existing database whose
+      schema is complete records it in the version table, which
+      `oidcsql.WithNaming` can name through the `schema_migrations` key; see
       `Changed`.
 - [ ] A FAPI 2.0 deployment (`profile.FAPI2Baseline`,
       `profile.FAPI2MessageSigning`) has its clients send the issuer
@@ -183,7 +210,7 @@ Before upgrading, check each item that applies to the deployment:
 
 - The lockout store is wired automatically from `op.WithStore` when the
   store exposes `AuthnLockouts()`: the in-memory, SQL and DynamoDB
-  adapters and `composite.Store` (which forwards its Users backend's). It
+  adapters and `composite.Store` (which routes its `AuthnLockouts` kind). It
   was previously off unless `op.WithAuthnLockoutStore` was set. `op.New`
   refuses to construct, with `op.ErrAuthnLockoutStoreRequired`, when a
   step that counts failures (password, second factor, or an `ExternalStep`
@@ -246,13 +273,14 @@ Before upgrading, check each item that applies to the deployment:
   `code_challenge`, when only the active profile made PKCE mandatory, logs one
   WARN per `client_id` naming `op.WithProfile(profile.OIDCCore)`.
 
-- The jwt-bearer and token-exchange grants reject a requested `scope` that
-  names a value outside the client's registered `Scopes` with
+- **BREAKING:** the jwt-bearer and token-exchange grants reject a requested
+  `scope` that names a value outside the client's registered `Scopes` with
   `invalid_scope`, as the authorization-code, client-credentials, device and
   CIBA grants already did; they used to drop the value and issue the rest.
   jwt-bearer also rejects a requested `openid` instead of dropping it. An
-  omitted `scope` still defaults to the registered set (jwt-bearer) or to the
-  subject_token's scope narrowed to the registered set (token exchange). A
+  omitted `scope` still defaults to the registered set without `openid`
+  (jwt-bearer) or to the subject_token's scope narrowed to the registered set
+  (token exchange). A
   token-exchange refusal records `token_exchange.scope_inflation_blocked`.
 
 - **BREAKING:** an OP built without `op.WithProfile` now runs
@@ -292,10 +320,11 @@ Before upgrading, check each item that applies to the deployment:
     `WithCIBADefaultExpiresIn` and `WithCIBAMaxExpiresIn` become the
     `DefaultRequestTTL` and `MaxRequestTTL` fields; `op.CIBAOption` and the
     `op.WithCIBA*` sub-options are gone.
-  - `op.WithDeviceCodeGrant(op.WithDeviceVerificationURI(u), op.WithDeviceCodeTTL(t), op.WithDeviceCodePollInterval(i))`
+  - `op.WithDeviceCodeGrant()` with `op.WithDeviceVerificationURI(u)`,
+    `op.WithDeviceCodeExpiry(t)` and `op.WithDeviceCodePollInterval(i)`
     becomes `op.WithDeviceCodeGrant(op.DeviceCodeGrant{VerificationURI: u, TTL: t, PollInterval: i})`.
     A zero `TTL` or `PollInterval` takes the default; a negative one is
-    refused. `op.DeviceCodeOption` and its three constructors are gone.
+    refused. The three separate options are gone.
   - `op.RegisterTokenExchange(policy)` becomes
     `op.WithTokenExchangeGrant(op.TokenExchangeGrant{Policy: policy})`.
 
@@ -358,10 +387,6 @@ Before upgrading, check each item that applies to the deployment:
   authorize-endpoint capabilities), `op.New` reports them together in one joined error instead of
   stopping at the first.
 
-- The warning that forwarded headers arrived while `op.WithTrustedProxies`
-  is not configured goes to `slog.Default()` when no `op.WithLogger` is set;
-  it was discarded before.
-
 - `op.New` logs one warning per static client that names a grant the OP has
   not enabled, naming the option that enables it (a seed that leaves
   `GrantTypes` empty is warned about the defaults it received), and one when neither
@@ -393,7 +418,7 @@ Before upgrading, check each item that applies to the deployment:
 - The SQL adapter's schema check on PostgreSQL resolves tables through
   `search_path`, as the queries do, and a missing-table error names where it
   looked (the `search_path` schemas, or the MySQL database). Index names
-  produced by `WithTablePrefix` or `WithNaming` are length-checked at `New`,
+  produced by `oidcsql.WithTablePrefix` or `oidcsql.WithNaming` are length-checked at `New`,
   and a missing-index hint points at `Store.Schema()` when names are
   customised. Name collisions are detected regardless of case, and a
   column-level `UNIQUE` counts as an index the schema check requires.
@@ -402,8 +427,6 @@ Before upgrading, check each item that applies to the deployment:
   table it would create already exists without the adapter's columns, such
   as an application table that shares the prefix; it previously added
   indexes to that table before the schema check failed.
-
-`oidcsql.Store.Migrate` applies the migration files and records the version.
 
 - **BREAKING:** `(*oidcsql.Store).Migrate` no longer runs `v1.sql` and leaves
   existing tables alone. It applies the files from `Store.Migrations()` in
@@ -428,10 +451,11 @@ Before upgrading, check each item that applies to the deployment:
   the migrations to apply first, or give the `UPDATE` and `migrate force N` to
   run after checking a dirty version.
 
-Upgrade note: a database created by an earlier `Migrate` or `Store.Schema()`
-is recorded at the current release on the first v1.5.0 `Migrate` call, when its
-schema is complete. A deployment that skips v1.5.0 and calls `Migrate` first on
-a later release records the release it was created at with that `INSERT` once.
+- Upgrade note for `Migrate`: a database created by an earlier `Migrate` or
+  `Store.Schema()` is recorded at the current release on the first v1.5.0
+  `Migrate` call, when its schema is complete. A deployment that skips v1.5.0
+  and calls `Migrate` first on a later release records the release it was
+  created at with that `INSERT` once.
 
 - `MIGRATIONS.md` covers keeping the OP's migration history separate from
   the application's, and `store.UserPasswordHashUpdater` documents that
@@ -447,9 +471,9 @@ a later release records the release it was created at with that `INSERT` once.
   new `op.ErrLoginFlowRequired`, so a caller can match it with `errors.Is`.
 
 - Without `op.WithLogger`, the diagnostics `op.New` emits once at construction
-  now go to `slog.Default()` instead of being discarded: the warning that no
-  profile requires PKCE, the line naming the ID Token claim source, the
-  missing optional store capabilities and the other configuration warnings.
+  now go to `slog.Default()` instead of being discarded: the line naming the
+  ID Token claim source, the missing optional store capabilities and the
+  other configuration warnings.
   Request-time records are still discarded until a logger is set. A process
   that never configured a logger sees these lines on its default handler.
 
@@ -518,9 +542,6 @@ a later release records the release it was created at with that `INSERT` once.
   hints for a missing column or table name the migration file instead of a
   section of `MIGRATIONS.md`.
 
-- `Store.GC` skips the pushed-authorization-request sweep when the PAR table
-  does not exist, instead of failing. A missing table elsewhere still fails.
-
 - The SQL of `op/storeadapter/sql/schema/MIGRATIONS.md` moved into the
   per-release files under `schema/migrations/<dialect>/`; the document now
   describes how to apply them.
@@ -587,7 +608,8 @@ a later release records the release it was created at with that `INSERT` once.
 
 - When `op.WithTrustedProxies` is not configured, the first request
   carrying `X-Forwarded-For`, `X-Forwarded-Proto` or `X-Forwarded-Host`
-  logs one warning per Provider that those headers are ignored.
+  logs one warning per Provider that those headers are ignored. It goes to
+  `slog.Default()` when no `op.WithLogger` is set.
 
 - **BREAKING:** every member of the prompt JSON served on the SPA state
   route (`LoginMount/state/{uid}`) is snake_case. The envelope (`type`,
@@ -658,9 +680,7 @@ a later release records the release it was created at with that `INSERT` once.
 - Without `op.WithUserStore`, the Provider reads claims from the
   `PrimaryPassword` store of the login flow's `Primary` (the store's
   `Users()` was the source before). To keep the old source, pass
-  `op.WithUserStore(st.Users())`. `op.New` logs one info line when the
-  claims source is not the store's `Users()`. A store whose `Users()` is nil
-  now starts when such a `PrimaryPassword` exists.
+  `op.WithUserStore(st.Users())`.
 
 - Without `op.WithSessionDurabilityPosture`, the posture follows what the
   session store reports through `store.SessionDurabilityReporter`. SQL and
@@ -678,10 +698,9 @@ a later release records the release it was created at with that `INSERT` once.
 - Example `29-passkey` signs in with a password or a passwordless passkey.
 
 - `op.New` logs one INFO line, on the logger set with `op.WithLogger`, naming
-  where ID Token and `/userinfo` claims are read from (`claim_source`), and
-  adds `store_users="not read"` when that is not the backend's `Users()`. It
-  used to log only when an inferred `PrimaryPassword.Store` differed from
-  `Users()`.
+  where ID Token and `/userinfo` claims are read from (`claim_source`:
+  `WithUserStore` or `LoginFlow.Primary PrimaryPassword.Store`). It used to
+  log only when an inferred `PrimaryPassword.Store` differed from `Users()`.
 
 - Example `24-byo-userstore` wires the members table through
   `PrimaryPassword.Store` alone, as `53-production-sql` does, instead of also
@@ -766,8 +785,8 @@ a later release records the release it was created at with that `INSERT` once.
   - `op.WithGrantManagement` takes an `op.GrantManagement` and
     `op.WithSupportedEncryptionAlgs` an `op.EncryptionAlgs`, in place of two
     positional arguments.
-  - `op.WithPARLifetime` and `op.WithDeviceCodeExpiry` are `op.WithPARTTL` and
-    `op.WithDeviceCodeTTL`, matching the other lifetimes.
+  - `op.WithPARLifetime` is `op.WithPARTTL`, matching the other lifetimes
+    (`op.WithDeviceCodeExpiry` becomes `DeviceCodeGrant.TTL`, above).
   - `op.WithClaimsParameterSupported(bool)` is `op.WithClaimsParameterDisabled()`.
   - `op.WithAllowLocalhostLoopback` splits into
     `op.WithAllowLocalhostRedirectURIs()` for native-app redirect URIs, which a
@@ -785,9 +804,9 @@ a later release records the release it was created at with that `INSERT` once.
   one type and existing code compiles unchanged; godoc now shows the fields
   and methods under the `op/authn` page.
 
-- `op.WithNaming` accepts the key `schema_migrations`, so the version table
+- `oidcsql.WithNaming` accepts the key `schema_migrations`, so the version table
   `Store.Migrate` records in can be renamed together with the other tables.
-  With `op.WithNaming` replacing every name, no `oidc_schema_migrations`
+  With `oidcsql.WithNaming` replacing every name, no `oidc_schema_migrations`
   table is left behind.
 
 - A stored password hash that is neither argon2id nor claimed by a configured
@@ -852,7 +871,7 @@ a later release records the release it was created at with that `INSERT` once.
 
 - `profile.OAuth21` names the OAuth 2.1 profile: PKCE on every
   authorization-code request, and the profile an OP runs when it declares
-  none. Its wire string is `baseline`, as before.
+  none. Its `String()` is `oauth21`.
 
 - `store.AuthnLockoutProvider`, the optional interface a store implements to
   expose its lockout store (`AuthnLockouts() store.AuthnLockoutStore`), and the
@@ -980,7 +999,6 @@ a later release records the release it was created at with that `INSERT` once.
   server error.
 - `audit.LockoutEngaged` (`lockout.engaged`), emitted once with the
   subject as ActorID when a failed attempt newly locks the account.
-- `composite.Store.AuthnLockouts`.
 - `SPAUI.ContentSecurityPolicy`, validated with the same rules as the
   consent and chooser page policies.
 
@@ -1014,7 +1032,7 @@ a later release records the release it was created at with that `INSERT` once.
   user store implements the new optional `store.UserPasswordHashUpdater`;
   a failed rewrite is logged and the login still succeeds. The in-memory,
   SQL and DynamoDB adapters implement it. With a composite store, pass the
-  Users backend's `UserPasswords()` as `PrimaryPassword.Store`; a store
+  user backend's `UserPasswords()` as `PrimaryPassword.Store`; a store
   without the updater leaves the legacy hash in use. Legacy hashes go
   through the same lockout as argon2id ones. Three limits:
   - bcrypt reads only the first 72 bytes, so a longer password never
@@ -1184,9 +1202,7 @@ a later release records the release it was created at with that `INSERT` once.
   signature, `typ`, `iss` and `aud` against the issuer's JWK Set; JSON
   responses are still accepted. Under FAPI 2.0 Message Signing the OP answers
   only in the JWT form, which `rs` could not read before.
-- `op-schema export --naming key=name`, repeatable, applies the same rewrites
-  as `oidcsql.WithNaming` to the generated migration files. `MIGRATIONS.md`
-  opens with a one-line-per-release upgrade checklist.
+- `MIGRATIONS.md` opens with a one-line-per-release upgrade checklist.
 - Examples: `38-native-app` (public client, PKCE, loopback `127.0.0.1`
   redirect), `54-fapi2-message-signing` (PAR with a signed request object,
   JARM, DPoP with the nonce challenge) and `55-mtls-proxy` (a TLS-terminating
@@ -1244,7 +1260,8 @@ a later release records the release it was created at with that `INSERT` once.
   connection:
   `go run github.com/libraz/go-oidc-provider/op/storeadapter/sql/cmd/op-schema export --dialect postgres --format goose --out db/migrations`.
   `--format` is `golang-migrate`, `goose` or `flyway`, and `--prefix` follows
-  `oidcsql.WithTablePrefix`. The files hold what `Store.Migrations()` returns
+  `oidcsql.WithTablePrefix` and `--naming key=name`, repeatable, follows
+  `oidcsql.WithNaming`. The files hold what `Store.Migrations()` returns
   for that dialect and prefix, with the tool's file names and header.
 
 - `op/authn` and `op/ciba`, the packages named under `Changed` that hold the
@@ -1344,6 +1361,9 @@ covered by the SemVer promise.
   consistent query; rows written before the upgrade are still found through
   the secondary indexes.
 
+- On DynamoDB, a device-code or CIBA poll that loses a consume race is
+  reported as already consumed instead of a server error.
+
 - Two replicas reconciling the same static client at once no longer fail
   with a conflict on the SQL and DynamoDB adapters when the client records
   are equivalent.
@@ -1388,9 +1408,6 @@ covered by the SemVer promise.
   replayed record, the `refresh.chain_revoke_failed` audit event carries the
   store error as its `reason`. It used to report
   `chain_root_lookup_failed`, the same as a record that does not exist.
-
-- The SQL adapter documentation said the consumed-JTI store's interface
-  exposes GC. `Store.GC` now sweeps it.
 
 - JWT access tokens from the authorization-code and refresh-token grants
   now carry the `acr` and `amr` of the authentication, as the opaque form
@@ -1442,8 +1459,6 @@ covered by the SemVer promise.
 - The Redis adapter rounds replay-marker and session TTLs up to the next
   millisecond, so a key never expires before its logical expiry.
 
-- `oidcsql.Store.GC` reports the rows a sweep deleted before it failed.
-
 - The `op/store/contract` suite now requires every losing `Consume` racer
   to report `store.ErrAlreadyConsumed`, the answer a sequential replay gets,
   and checks that the lockout store rejects a nil record, an empty subject
@@ -1462,7 +1477,8 @@ covered by the SemVer promise.
 Every symbol that carried a `Deprecated:` marker is gone. Each entry names
 its replacement.
 
-- **BREAKING:** `profile.Baseline`. Use `profile.OAuth21`, the same value.
+- **BREAKING:** `profile.Baseline`. Use `profile.OAuth21`; its `String()` changes, see
+  `Changed`.
 - **BREAKING:** `op.WithBackchannelAllowPrivateNetwork(bool)`. Use
   `op.WithAllowPrivateNetwork(op.OutboundBackchannel)`.
 - **BREAKING:** `op.NewEmailOTPAuthenticator`, with `op.EmailOTPConfig`,
@@ -1471,17 +1487,17 @@ its replacement.
 - **BREAKING:** `op.RiskPreFactor`, `op.RiskPostFactor` and
   `RiskOutcome.MinAAL`. A login flow consults its `Risk` assessor at
   `op.RiskAuthorizeEntry` only, and no code read the floor.
-- **BREAKING:** `audit.DenyReasonKey`. A denied login is logged under the
+- **BREAKING:** `op.AuditDenyReasonKey`. A denied login is logged under the
   plain `reason` attribute.
 - **BREAKING:** `SPAUI.ConsentMount`, `SPAUI.LogoutMount` and
   `Endpoints.Session`. None of them routed anything; use `op.WithLogoutUI`
   for the logout pages.
 - **BREAKING:** `testkit.ApproveAllScopes`. Use `testkit.ApprovedScopesFrom`.
 - **BREAKING:** `devicecodekit.Deps.Audit`. Use `Deps.AuditLogger`.
-- **BREAKING:** `op.CIBAOption`, `op.DeviceCodeOption`, `op.WithCIBA` and its
-  sub-options, `op.WithDeviceVerificationURI`, `op.WithDeviceCodeTTL`,
-  `op.WithDeviceCodePollInterval`, `op.WithTokenExchange`, `op.WithLocale`,
-  `op.RegistrationOption`, the `op.Audit*` constants and the
+- **BREAKING:** `op.CIBAOption`, `op.WithCIBA` and its sub-options,
+  `op.WithDeviceVerificationURI`, `op.WithDeviceCodePollInterval`,
+  `op.RegisterTokenExchange`, `op.WithLocale`, `op.RegistrationOption`, the
+  `op.Audit*` names and the
   `feature.DynamicRegistration`, `feature.RAR` and `feature.GrantManagement`
   flags. `Changed` names each replacement.
 
@@ -1513,14 +1529,15 @@ The client builders lose a field they could only ever set to `false`.
 The interaction UI options give way to `op.WithUI`, whose modes do not
 combine, so the rules between the old options go with them.
 
-- **BREAKING:** `op.WithSPAUI`, `op.WithInteractionDriver`, `op.WithLoginUI`,
-  `op.WithConsentUI`, `op.WithChooserUI` and the `op.LoginUI`,
-  `op.ConsentUI` and `op.ChooserUI` types. Each call maps onto one `op.WithUI`:
+- **BREAKING:** `op.WithSPAUI`, `op.WithInteractionDriver`,
+  `op.WithConsentUI`, `op.WithChooserUI` and the `op.ConsentUI` and
+  `op.ChooserUI` types. Each call maps onto one `op.WithUI`:
   - `op.WithSPAUI(s)` becomes `op.WithUI(s)`; `op.SPAUI` keeps its fields.
   - `op.WithInteractionDriver(d)` becomes `op.WithUI(op.DriverUI{Driver: d})`.
-  - `op.WithLoginUI`, `op.WithConsentUI` and `op.WithChooserUI` become the
-    `Login`, `Consent` and `Chooser` fields of one `op.HTMLUI`, each an
-    `op.PageTemplate{Template, ContentSecurityPolicy}`.
+  - `op.WithConsentUI` and `op.WithChooserUI` become the `Consent` and
+    `Chooser` fields of one `op.HTMLUI`, each an
+    `op.PageTemplate{Template, ContentSecurityPolicy}`; the new `Login` field
+    sits beside them.
   - A custom driver with page templates, including an `interaction.HTMLDriver`
     with its own `Translator`, becomes
     `op.WithUI(op.DriverUI{Driver: interaction.TemplateOverlayDriver{Inner: d, ...}})`.
@@ -1570,7 +1587,7 @@ new one.
   | `op.WithGrantManagement(actions, required)` | `op.WithGrantManagement(op.GrantManagement{Actions, ActionRequired})` |
   | `op.WithSupportedEncryptionAlgs(algs, encs)` | `op.WithSupportedEncryptionAlgs(op.EncryptionAlgs{KeyManagement, ContentEncryption})` |
   | `op.WithPARLifetime(d)` | `op.WithPARTTL(d)` |
-  | `op.WithDeviceCodeExpiry(d)` | `op.WithDeviceCodeTTL(d)` |
+  | `op.WithDeviceCodeExpiry(d)` | `DeviceCodeGrant.TTL` |
   | `op.WithClaimsParameterSupported(false)` | `op.WithClaimsParameterDisabled()`; the default is on, so `true` needs no option |
   | `op.WithAllowLocalhostLoopback()` | `op.WithAllowLocalhostRedirectURIs()`, plus `op.WithAllowLocalhostIssuerForDev()` for a `localhost` issuer |
   | `op.WithMTLSProxy(header, cidrs)` | `op.WithMTLSProxy(op.MTLSProxy{HeaderName, TrustedProxies})` |

@@ -23,8 +23,8 @@ The project itself is licensed under Apache-2.0 (see `LICENSE` and `NOTICE` at t
 | `github.com/cespare/xxhash/v2` | MIT | <https://github.com/cespare/xxhash/blob/v2.3.0/LICENSE.txt> |
 | `github.com/dustin/go-humanize` | MIT | <https://github.com/dustin/go-humanize/blob/v1.1.0/LICENSE> |
 | `github.com/fxamacker/cbor/v2` | MIT | <https://github.com/fxamacker/cbor/blob/v2.9.6/LICENSE> |
-| `github.com/go-jose/go-jose/v4` | Apache-2.0 | <https://github.com/go-jose/go-jose/blob/v4.1.6/LICENSE> |
-| `github.com/go-jose/go-jose/v4/json` | BSD-3-Clause | <https://github.com/go-jose/go-jose/blob/v4.1.6/json/LICENSE> |
+| `github.com/go-jose/go-jose/v4` | Apache-2.0 | <https://github.com/go-jose/go-jose/blob/v4.1.7/LICENSE> |
+| `github.com/go-jose/go-jose/v4/json` | BSD-3-Clause | <https://github.com/go-jose/go-jose/blob/v4.1.7/json/LICENSE> |
 | `github.com/go-sql-driver/mysql` | MPL-2.0 | <https://github.com/go-sql-driver/mysql/blob/v1.10.1/LICENSE> |
 | `github.com/go-viper/mapstructure/v2` | MIT | <https://github.com/go-viper/mapstructure/blob/v2.5.0/LICENSE> |
 | `github.com/go-webauthn/webauthn` | BSD-3-Clause | <https://github.com/go-webauthn/webauthn/blob/v0.18.2/LICENSE> |
