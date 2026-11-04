@@ -3,11 +3,13 @@ package cimd
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"net"
 	"net/http"
 	"strings"
 	"time"
 
+	"github.com/libraz/go-oidc-provider/internal/netsec"
 	"github.com/libraz/go-oidc-provider/internal/securefetch"
 )
 
@@ -88,14 +90,16 @@ func fetchPolicy(allowPrivate bool, optIn string, timeout time.Duration, lookup 
 
 // fetchDocument GETs the document at id and returns its body and headers, or a
 // classified failure reason.
-func fetchDocument(ctx context.Context, client *securefetch.Client, id string) ([]byte, http.Header, string) {
+func fetchDocument(ctx context.Context, client *securefetch.Client, logger *slog.Logger, id string) ([]byte, http.Header, string) {
 	req, err := client.NewRequest(ctx, http.MethodGet, id, nil)
 	if err != nil {
+		netsec.LogDenyListed(ctx, logger, "client_id_metadata", id, err)
 		return nil, nil, reasonNetwork
 	}
 	req.Header.Set("Accept", strings.Join(acceptContentTypes, ", "))
 	body, resp, err := client.Do(req) //nolint:bodyclose // securefetch.Do drains and closes the body internally.
 	if err != nil {
+		netsec.LogDenyListed(ctx, logger, "client_id_metadata", id, err)
 		return nil, nil, classifyFetchError(err)
 	}
 	// securefetch admits any 2xx; the draft requires exactly 200.

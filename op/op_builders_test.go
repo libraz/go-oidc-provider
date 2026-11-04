@@ -276,3 +276,25 @@ func TestPrivateNetworkRefusals_NameTheirOption(t *testing.T) {
 		t.Errorf("sector err=%v want a hint naming op.WithAllowPrivateNetworkSector()", err)
 	}
 }
+
+// TestRelyingPartyJWKS_RefusalReachesConfiguredLogger pins that the Provider's
+// logger is the one the RP JWKS fetcher reports a deny-list refusal on.
+func TestRelyingPartyJWKS_RefusalReachesConfiguredLogger(t *testing.T) {
+	t.Parallel()
+
+	var buf bytes.Buffer
+	cfg := &config{
+		clock:  builderTestClock{now: time.Unix(1_700_000_000, 0)},
+		logger: slog.New(slog.NewJSONHandler(&buf, nil)),
+	}
+
+	if _, err := cfg.relyingPartyJWKS().Fetch(context.Background(), "http://10.0.0.1/jwks"); err == nil {
+		t.Fatal("fetch of a private target succeeded")
+	}
+	out := buf.String()
+	for _, want := range []string{`"level":"WARN"`, `"fetch":"jwks_uri"`, "op.WithAllowPrivateNetworkJWKS()"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("log output %q missing %q", out, want)
+		}
+	}
+}

@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"sync"
 	"time"
@@ -14,6 +15,7 @@ import (
 	josev4 "github.com/go-jose/go-jose/v4"
 
 	"github.com/libraz/go-oidc-provider/internal/jose"
+	"github.com/libraz/go-oidc-provider/internal/netsec"
 	"github.com/libraz/go-oidc-provider/internal/remotecache"
 	"github.com/libraz/go-oidc-provider/internal/securefetch"
 	"github.com/libraz/go-oidc-provider/internal/timex"
@@ -180,6 +182,11 @@ type Config struct {
 	// deny-list refusal names it. See [netsec.Options.OptIn].
 	OptIn string
 
+	// Logger receives one WARN per deny-list refusal of a fetch. Nil
+	// discards. Because the record is written by the cache loader, a
+	// refused URL logs at most once per [Config.NegativeTTL].
+	Logger *slog.Logger
+
 	// BaseTransport overrides the [http.RoundTripper] the SSRF-hardened client
 	// is built on. Production callers leave it nil; a caller that needs a
 	// private CA (an internal CA-issued RP endpoint, a conformance harness with
@@ -234,6 +241,7 @@ type shared struct {
 
 	allowPrivate  bool
 	optIn         string
+	logger        *slog.Logger
 	baseTransport http.RoundTripper
 }
 
@@ -281,6 +289,7 @@ func New(cfg Config) *Fetcher {
 		loads:         remotecache.SharedLoadGate(cfg.MaxInflight),
 		allowPrivate:  cfg.AllowPrivateNetwork,
 		optIn:         cfg.OptIn,
+		logger:        cfg.Logger,
 		baseTransport: cfg.BaseTransport,
 	}}
 }
@@ -615,6 +624,13 @@ func (f *Fetcher) load(jwksURI string) remotecache.TTLLoader[*entry] {
 // checks are applied here so the 304 branch can short-circuit before the body
 // read.
 func (f *Fetcher) doFetch(ctx context.Context, jwksURI string, cached *entry) (*entry, time.Duration, error) {
+	entry, ttl, err := f.fetchOnce(ctx, jwksURI, cached)
+	netsec.LogDenyListed(ctx, f.logger, "jwks_uri", "", err)
+	return entry, ttl, err
+}
+
+// fetchOnce is the round-trip [Fetcher.doFetch] wraps with refusal logging.
+func (f *Fetcher) fetchOnce(ctx context.Context, jwksURI string, cached *entry) (*entry, time.Duration, error) {
 	release, err := f.acquireLoad(ctx)
 	if err != nil {
 		return nil, 0, err

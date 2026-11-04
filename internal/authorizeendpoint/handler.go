@@ -412,8 +412,8 @@ type Deps struct {
 	// every emit to a no-op, matching the rest of the code base.
 	Audit audit.Emitter
 
-	// Logger receives the cause of every 500 the endpoint answers. A nil
-	// Logger discards.
+	// Logger receives the cause of every 500 the endpoint answers and each
+	// deny-list refusal of a request_uri fetch. A nil Logger discards.
 	Logger *slog.Logger
 }
 

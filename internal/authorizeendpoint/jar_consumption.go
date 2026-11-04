@@ -194,7 +194,7 @@ func fetchJARRequestURI(
 		return "", false
 	}
 	body, err := deps.jarRequestURIs.Load(ctx, uri, func(ctx context.Context, _ string, _ bool) (string, error) {
-		return loadJARRequestURI(ctx, deps, uri)
+		return loadJARRequestURI(ctx, deps, client.ID, uri)
 	})
 	if errors.Is(err, remotecache.ErrOverloaded) {
 		renderBrowserError(w, r, deps.Driver, http.StatusServiceUnavailable, errServerError,
@@ -222,7 +222,7 @@ func (e jarRequestURIError) Error() string { return string(e) }
 
 // loadJARRequestURI performs one request_uri fetch under the process-wide
 // URL-load gate the JWKS fetcher also draws from.
-func loadJARRequestURI(ctx context.Context, deps resolved, uri string) (string, error) {
+func loadJARRequestURI(ctx context.Context, deps resolved, clientID, uri string) (string, error) {
 	release, err := deps.jarLoads.Acquire(ctx)
 	if err != nil {
 		return "", err
@@ -232,11 +232,13 @@ func loadJARRequestURI(ctx context.Context, deps resolved, uri string) (string, 
 	// the shared client's transport.
 	fetchReq, err := deps.jarFetch.NewRequest(ctx, http.MethodGet, uri, nil)
 	if err != nil {
+		netsec.LogDenyListed(ctx, deps.Logger, "request_uri", clientID, err)
 		return "", jarRequestURIError(classifyJARRequestURINewRequestError(err))
 	}
 	fetchReq.Header.Set("Accept", "application/oauth-authz-req+jwt, application/jwt, text/plain;q=0.5")
 	body, resp, err := deps.jarFetch.Do(fetchReq) //nolint:bodyclose // securefetch.Do drains and closes the body internally.
 	if err != nil {
+		netsec.LogDenyListed(ctx, deps.Logger, "request_uri", clientID, err)
 		return "", jarRequestURIError(classifyJARRequestURIFetchError(err, resp))
 	}
 	// The media-type gate stays here rather than in the policy's

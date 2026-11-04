@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net"
 	"slices"
 	"time"
@@ -47,6 +48,10 @@ type Config struct {
 
 	// Audit receives the cimd.* events. nil discards them.
 	Audit audit.Emitter
+
+	// Logger receives one WARN per deny-list refusal of a document fetch.
+	// nil discards.
+	Logger *slog.Logger
 
 	// Clock drives cache expiry and Expires-header arithmetic.
 	Clock timex.Clock
@@ -147,7 +152,7 @@ func (s *Store) load(ctx context.Context, id string) (*store.Client, time.Durati
 	}
 	defer release()
 
-	body, header, reason := fetchDocument(ctx, s.client, id)
+	body, header, reason := fetchDocument(ctx, s.client, s.cfg.Logger, id)
 	if reason != "" {
 		return nil, 0, s.fail(ctx, id, reason, "")
 	}

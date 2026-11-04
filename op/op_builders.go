@@ -83,6 +83,7 @@ func buildClientStore(cfg *config, scopes *scoperegistry.Registry) {
 		AllowPrivate: cfg.allowPrivateNetworkCIMD,
 		OptIn:        optInClientIDMetadata,
 		Audit:        cfg.effectiveAuditEmitter(),
+		Logger:       cfg.logger,
 		Clock:        cfg.clock,
 		Resources:    resources,
 		PublicScopes: scopes.PublicNames(),
@@ -594,6 +595,7 @@ func (c *config) relyingPartyJWKS() *rpjwks.Fetcher {
 			Clock:               c.clock,
 			AllowPrivateNetwork: c.allowPrivateNetworkJWKS,
 			OptIn:               optInJWKS,
+			Logger:              c.logger,
 			BaseTransport:       c.jwksHTTPTransport,
 		})
 	}
