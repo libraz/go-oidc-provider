@@ -41,7 +41,6 @@ github.com/libraz/go-oidc-provider/op	AuditStepBeginFailed	v1.5
 github.com/libraz/go-oidc-provider/op	AuthorizationDetailType	v1.0
 github.com/libraz/go-oidc-provider/op	BcryptHashScheme	v1.5
 github.com/libraz/go-oidc-provider/op	BoundAccessToken	v1.0
-github.com/libraz/go-oidc-provider/op	ChooserUI	v1.5
 github.com/libraz/go-oidc-provider/op	ClientMetadata.AuthorizationEncryptedResponseAlg	v1.0
 github.com/libraz/go-oidc-provider/op	ClientMetadata.AuthorizationEncryptedResponseEnc	v1.0
 github.com/libraz/go-oidc-provider/op	ClientMetadata.BackchannelLogoutSessionRequired	v1.0
@@ -62,7 +61,6 @@ github.com/libraz/go-oidc-provider/op	ConfidentialClient.PreviousSecretExpiresAt
 github.com/libraz/go-oidc-provider/op	ConfidentialClient.PreviousSecretHash	v1.5
 github.com/libraz/go-oidc-provider/op	ConfidentialClient.RequireAuthTime	v1.5
 github.com/libraz/go-oidc-provider/op	ConfirmationProof	v1.0
-github.com/libraz/go-oidc-provider/op	ConsentUI	v1.5
 github.com/libraz/go-oidc-provider/op	CredentialChange	v1.5
 github.com/libraz/go-oidc-provider/op	CredentialChangeCreate	v1.5
 github.com/libraz/go-oidc-provider/op	CredentialChangeDelete	v1.5
@@ -89,6 +87,7 @@ github.com/libraz/go-oidc-provider/op	DPoPNonceSource	v1.0
 github.com/libraz/go-oidc-provider/op	DPoPProof	v1.0
 github.com/libraz/go-oidc-provider/op	DefaultACRPolicy	v1.0
 github.com/libraz/go-oidc-provider/op	DeviceCodeOption	v1.5
+github.com/libraz/go-oidc-provider/op	DriverUI	v1.5
 github.com/libraz/go-oidc-provider/op	EncryptionKey	v1.0
 github.com/libraz/go-oidc-provider/op	EncryptionKeyset	v1.0
 github.com/libraz/go-oidc-provider/op	Endpoints.SSFConfiguration	v1.5
@@ -106,6 +105,7 @@ github.com/libraz/go-oidc-provider/op	ErrUnknownAssertionSubject	v1.5
 github.com/libraz/go-oidc-provider/op	Error.OAuthCode	v1.0
 github.com/libraz/go-oidc-provider/op	Error.WriteOAuthError	v1.0
 github.com/libraz/go-oidc-provider/op	ExternalStep.CountFailures	v1.5
+github.com/libraz/go-oidc-provider/op	HTMLUI	v1.5
 github.com/libraz/go-oidc-provider/op	IsClientError	v1.0
 github.com/libraz/go-oidc-provider/op	IsServerError	v1.0
 github.com/libraz/go-oidc-provider/op	JWTBearerGrant	v1.5
@@ -116,12 +116,12 @@ github.com/libraz/go-oidc-provider/op	LoginContext.AAL	v1.5
 github.com/libraz/go-oidc-provider/op	LoginContext.SessionReused	v1.5
 github.com/libraz/go-oidc-provider/op	LoginFlow	v1.5
 github.com/libraz/go-oidc-provider/op	LoginFlow.Registration	v1.5
-github.com/libraz/go-oidc-provider/op	LoginUI	v1.5
 github.com/libraz/go-oidc-provider/op	LogoutUI	v1.5
 github.com/libraz/go-oidc-provider/op	MTLSProxy	v1.1
 github.com/libraz/go-oidc-provider/op	New	v1.0
 github.com/libraz/go-oidc-provider/op	NewInMemoryDPoPNonceSource	v1.0
 github.com/libraz/go-oidc-provider/op	NewReloadable	v1.5
+github.com/libraz/go-oidc-provider/op	PageTemplate	v1.5
 github.com/libraz/go-oidc-provider/op	ParamPolicy	v1.0
 github.com/libraz/go-oidc-provider/op	PasswordHashScheme	v1.5
 github.com/libraz/go-oidc-provider/op	PreferredLocaleStore	v1.0
@@ -169,6 +169,7 @@ github.com/libraz/go-oidc-provider/op	TokenExchangeDecision	v1.0
 github.com/libraz/go-oidc-provider/op	TokenExchangeGrantType	v1.0
 github.com/libraz/go-oidc-provider/op	TokenExchangePolicy	v1.0
 github.com/libraz/go-oidc-provider/op	TokenExchangeRequest	v1.0
+github.com/libraz/go-oidc-provider/op	UI	v1.5
 github.com/libraz/go-oidc-provider/op	UnenrolledDeny	v1.5
 github.com/libraz/go-oidc-provider/op	UnenrolledPolicy	v1.5
 github.com/libraz/go-oidc-provider/op	UnenrolledSkip	v1.5
@@ -199,11 +200,9 @@ github.com/libraz/go-oidc-provider/op	WithCIBAMaxExpiresIn	v1.0
 github.com/libraz/go-oidc-provider/op	WithCIBAMaxPollViolations	v1.0
 github.com/libraz/go-oidc-provider/op	WithCIBAPollInterval	v1.0
 github.com/libraz/go-oidc-provider/op	WithCORSOrigins	v1.0
-github.com/libraz/go-oidc-provider/op	WithChooserUI	v1.5
 github.com/libraz/go-oidc-provider/op	WithClaimsParameterSupported	v1.0
 github.com/libraz/go-oidc-provider/op	WithClaimsSupported	v1.0
 github.com/libraz/go-oidc-provider/op	WithClock	v1.0
-github.com/libraz/go-oidc-provider/op	WithConsentUI	v1.5
 github.com/libraz/go-oidc-provider/op	WithCookieKeys	v1.0
 github.com/libraz/go-oidc-provider/op	WithCustomGrant	v1.0
 github.com/libraz/go-oidc-provider/op	WithDPoPNonceSource	v1.0
@@ -223,7 +222,6 @@ github.com/libraz/go-oidc-provider/op	WithGrants	v1.0
 github.com/libraz/go-oidc-provider/op	WithHighEntropyClientSecrets	v1.1
 github.com/libraz/go-oidc-provider/op	WithIDTokenScopeClaims	v1.5
 github.com/libraz/go-oidc-provider/op	WithInMemoryDPoPNonceLogger	v1.0
-github.com/libraz/go-oidc-provider/op	WithInteractionDriver	v1.0
 github.com/libraz/go-oidc-provider/op	WithInteractions	v1.5
 github.com/libraz/go-oidc-provider/op	WithIssuer	v1.0
 github.com/libraz/go-oidc-provider/op	WithJWKSHTTPTransport	v1.0
@@ -234,7 +232,6 @@ github.com/libraz/go-oidc-provider/op	WithLocale	v1.0
 github.com/libraz/go-oidc-provider/op	WithLogger	v1.0
 github.com/libraz/go-oidc-provider/op	WithLoginAttemptObserver	v1.5
 github.com/libraz/go-oidc-provider/op	WithLoginFlow	v1.5
-github.com/libraz/go-oidc-provider/op	WithLoginUI	v1.5
 github.com/libraz/go-oidc-provider/op	WithLogoutUI	v1.5
 github.com/libraz/go-oidc-provider/op	WithMFAEncryptionKeys	v1.0
 github.com/libraz/go-oidc-provider/op	WithMTLSProxy	v1.0
@@ -250,7 +247,6 @@ github.com/libraz/go-oidc-provider/op	WithProtectedResources	v1.0
 github.com/libraz/go-oidc-provider/op	WithRefreshGracePeriod	v1.0
 github.com/libraz/go-oidc-provider/op	WithRefreshTokenOfflineTTL	v1.0
 github.com/libraz/go-oidc-provider/op	WithRefreshTokenTTL	v1.0
-github.com/libraz/go-oidc-provider/op	WithSPAUI	v1.5
 github.com/libraz/go-oidc-provider/op	WithScope	v1.0
 github.com/libraz/go-oidc-provider/op	WithSessionDurabilityPosture	v1.0
 github.com/libraz/go-oidc-provider/op	WithSharedSignals	v1.5
@@ -263,6 +259,7 @@ github.com/libraz/go-oidc-provider/op	WithSupportedEncryptionAlgs	v1.0
 github.com/libraz/go-oidc-provider/op	WithTokenExchange	v1.5
 github.com/libraz/go-oidc-provider/op	WithTrustedProxies	v1.0
 github.com/libraz/go-oidc-provider/op	WithTrustedProxyHosts	v1.0
+github.com/libraz/go-oidc-provider/op	WithUI	v1.5
 github.com/libraz/go-oidc-provider/op	WithUserStore	v1.0
 github.com/libraz/go-oidc-provider/op/grant	JWTBearer	v1.5
 github.com/libraz/go-oidc-provider/op/interaction	*	v1.5
