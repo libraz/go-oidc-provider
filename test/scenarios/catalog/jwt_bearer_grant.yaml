@@ -162,10 +162,10 @@ rows:
     spec: RFC 6749 §3.3; RFC 8707 §2
     shape: value
     behaviour: |
-      The issued scope is the requested scope intersected with the client's
-      registered scopes with openid removed, or the registered scopes
-      without openid when none is requested. A request naming only
-      unregistered scopes is 400 invalid_scope and leaves the assertion
+      The issued scope is the requested scope, or the registered scopes
+      without openid when none is requested. A requested scope that names
+      openid or any scope outside the client's registered scopes is 400
+      invalid_scope, never silently trimmed, and leaves the assertion
       unspent. A requested resource that is registered for the client
       becomes the access token audience; an unregistered resource is 400
       invalid_target.

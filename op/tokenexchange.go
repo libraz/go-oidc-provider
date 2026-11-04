@@ -103,11 +103,12 @@ type TokenExchangeRequest struct {
 	// on every invocation.
 	RequestedAudience []string
 
-	// RequestedScope is the scope list after default-fill from the
-	// subject_token's scope when the request omitted the parameter.
-	// The set has already been intersected with the calling
-	// client's allowed scopes; the policy may only narrow it
-	// further.
+	// RequestedScope is the requested scope list, or the
+	// subject_token's scope narrowed to the calling client's
+	// registered scopes when the request omitted the parameter. An
+	// explicit request naming a scope the client is not registered
+	// for is rejected as invalid_scope before the policy runs; the
+	// policy may only narrow the set further.
 	RequestedScope []string
 
 	// DPoP is the public projection of the verified RFC 9449 proof

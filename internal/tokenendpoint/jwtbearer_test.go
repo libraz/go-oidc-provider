@@ -497,8 +497,7 @@ func TestJWTBearer_ScopeNarrowing(t *testing.T) {
 	cases := []struct {
 		name, scope, want string
 	}{
-		{"unregistered scope dropped", "read admin", "read"},
-		{"openid dropped", "openid write", "write"},
+		{"registered subset kept", "write", "write"},
 		{"absent falls back to registration", "", "read write"},
 	}
 	for _, tc := range cases {
@@ -522,13 +521,18 @@ func TestJWTBearer_ScopeNarrowing(t *testing.T) {
 
 func TestJWTBearer_ScopeOutsideRegistration_InvalidScope(t *testing.T) {
 	t.Parallel()
-	f := newJBFixture(t)
-	assertion := f.plain(t, "alice")
+	for _, scope := range []string{"admin", "read admin", "openid write"} {
+		t.Run(scope, func(t *testing.T) {
+			t.Parallel()
+			f := newJBFixture(t)
+			assertion := f.plain(t, "alice")
 
-	jbExpectError(t, f.post(t, jbClient, jbForm(assertion, "scope", "admin")), http.StatusBadRequest, "invalid_scope")
-	f.expectRejectedReason(t, "scope")
-	// A request the client can fix does not consume the assertion.
-	f.expectOK(t, f.post(t, jbClient, jbForm(assertion)))
+			jbExpectError(t, f.post(t, jbClient, jbForm(assertion, "scope", scope)), http.StatusBadRequest, "invalid_scope")
+			f.expectRejectedReason(t, "scope")
+			// A request the client can fix does not consume the assertion.
+			f.expectOK(t, f.post(t, jbClient, jbForm(assertion)))
+		})
+	}
 }
 
 func TestJWTBearer_IDJAGScopeBeyondClaim_InvalidGrant(t *testing.T) {

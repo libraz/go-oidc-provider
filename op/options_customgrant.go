@@ -14,7 +14,7 @@ import (
 // misconfigured registration cannot displace an in-tree grant and the
 // security invariants that ride with it: PKCE, refresh-token rotation,
 // device-code polling, CIBA request binding, and the token-exchange
-// audience narrowing / scope intersection / cnf re-binding pass.
+// audience narrowing / scope ceiling / cnf re-binding pass.
 //
 // The set is derived rather than transcribed. A hand-maintained list
 // disables a security control the moment it falls behind the grants
@@ -106,7 +106,7 @@ var secretLikeFormParameters = map[string]struct{}{
 // is observable only when a single handler claims multiple Names
 // (which the API forbids). The OP does not interpret the response
 // values cryptographically; access-token / refresh-token / id_token
-// shaping, scope intersection, and TTL bounds are all OP-side.
+// shaping, the scope ceiling, and TTL bounds are all OP-side.
 //
 // Stable since v1.0.
 func WithCustomGrant(g CustomGrantHandler) Option {
@@ -186,9 +186,9 @@ type TokenExchangeGrant struct {
 // WithTokenExchangeGrant enables the RFC 8693 token-exchange grant_type
 // at the token endpoint, gated by [TokenExchangeGrant.Policy].
 // The provider verifies subject_token / actor_token, normalises the
-// requested audience, intersects the requested scope with the
-// subject_token's scope and the calling client's allowed set, builds
-// the act-claim chain (mandatory whenever the actor differs from the
+// requested audience, holds the requested scope to the subject_token's
+// scope and the calling client's registered set (invalid_scope when it
+// exceeds either), builds the act-claim chain (mandatory whenever the actor differs from the
 // subject), rebinds the issued token's cnf to the request's verified
 // DPoP / mTLS credential, and applies the TTL ceiling before invoking
 // the policy. The policy decides whether to admit each exchange and

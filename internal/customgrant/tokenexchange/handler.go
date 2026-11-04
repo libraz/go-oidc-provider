@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"maps"
+	"slices"
 	"time"
 
 	"github.com/libraz/go-oidc-provider/internal/audit"
@@ -239,7 +240,10 @@ func (h *Handler) Handle(ctx context.Context, req customgrant.Request) (customgr
 		return customgrant.Response{}, err
 	}
 	requestedAudience := computeRequestedAudience(req.Form, subjectView)
-	requestedScope := h.resolveRequestedScope(req, subjectView)
+	requestedScope, err := h.resolveRequestedScope(ctx, req, subjectView)
+	if err != nil {
+		return customgrant.Response{}, err
+	}
 	if err := h.enforceScopeAudience(ctx, req.Client, subjectView, requestedScope, requestedAudience); err != nil {
 		return customgrant.Response{}, err
 	}
@@ -378,17 +382,27 @@ func (h *Handler) parseAndVerify(ctx context.Context, req customgrant.Request) (
 	return subjectView, actorView, nil
 }
 
-// resolveRequestedScope returns the post-default-fill, post-client-
-// intersection scope set the policy will see. The dispatcher pre-
-// parses the form's "scope" field onto [customgrant.Request.RequestedScope]
-// so handlers do not duplicate the splitter; an empty value falls back
-// to the subject_token's scope per RFC 8693 §2.1.
-func (h *Handler) resolveRequestedScope(req customgrant.Request, subjectView TokenView) []string {
-	requested := req.RequestedScope
-	if len(requested) == 0 {
-		requested = append([]string(nil), subjectView.Scope...)
+// resolveRequestedScope returns the scope set the policy will see. The
+// dispatcher pre-parses the form's "scope" field onto
+// [customgrant.Request.RequestedScope]; an explicit request exceeding the
+// client's registered scopes is invalid_scope, while an omitted one falls
+// back to the subject_token's scope (RFC 8693 §2.1) narrowed to the
+// registration, since that default is not something the client asked for.
+func (h *Handler) resolveRequestedScope(ctx context.Context, req customgrant.Request, subjectView TokenView) ([]string, error) {
+	if len(req.RequestedScope) == 0 {
+		return intersectScope(subjectView.Scope, req.Client.Scopes), nil
 	}
-	return intersectScope(requested, req.Client.Scopes)
+	if !oidcscope.Subset(req.RequestedScope, req.Client.Scopes) {
+		h.emit(ctx, auditScopeInflationBlocked, audit.LevelWarn,
+			"token-exchange rejected: requested scope exceeds the client's registered scopes",
+			customgrant.ClientIDOf(req.Client), subjectView.Subject,
+			map[string]any{
+				"requested":  slices.Clone(req.RequestedScope),
+				"registered": slices.Clone(req.Client.Scopes),
+			})
+		return nil, invalidScope("requested scope exceeds the client's registered scopes")
+	}
+	return slices.Clone(req.RequestedScope), nil
 }
 
 // emitRequestedAudit fires the entry-side audit event before any gate

@@ -246,6 +246,15 @@ Before upgrading, check each item that applies to the deployment:
   `code_challenge`, when only the active profile made PKCE mandatory, logs one
   WARN per `client_id` naming `op.WithProfile(profile.OIDCCore)`.
 
+- The jwt-bearer and token-exchange grants reject a requested `scope` that
+  names a value outside the client's registered `Scopes` with
+  `invalid_scope`, as the authorization-code, client-credentials, device and
+  CIBA grants already did; they used to drop the value and issue the rest.
+  jwt-bearer also rejects a requested `openid` instead of dropping it. An
+  omitted `scope` still defaults to the registered set (jwt-bearer) or to the
+  subject_token's scope narrowed to the registered set (token exchange). A
+  token-exchange refusal records `token_exchange.scope_inflation_blocked`.
+
 - **BREAKING:** an OP built without `op.WithProfile` now runs
   `profile.OAuth21`, so every authorization-code request needs PKCE. The
   start-up warning about the PKCE-optional default is gone with it. A

@@ -289,3 +289,14 @@ rows:
       invalid_scope); such a refusal MUST record exactly one
       custom_grant.failed event instead.
     status: active
+  - id: TX-028
+    severity: P1
+    spec: RFC 6749 §3.3; RFC 8693 §2.1
+    behaviour: |
+      A requested scope naming a value outside the calling client's
+      registered scopes MUST be rejected with 400 invalid_scope before
+      the policy runs, even when the subject_token carries that value,
+      and MUST record token_exchange.scope_inflation_blocked. When the
+      request omits scope, the subject_token's scope is narrowed to the
+      client's registered scopes instead of being rejected.
+    status: active

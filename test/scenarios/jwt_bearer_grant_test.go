@@ -814,8 +814,7 @@ func TestScenario_JBG_012_ScopeAndResourceNarrowing(t *testing.T) {
 	scopes := []struct {
 		name, requested, want string
 	}{
-		{"unregistered scope dropped", "read admin", "read"},
-		{"openid dropped", "openid write", "write"},
+		{"registered subset kept", "write", "write"},
 		{"absent falls back to the registration", "", "read write"},
 	}
 	for _, tc := range scopes {
@@ -837,15 +836,22 @@ func TestScenario_JBG_012_ScopeAndResourceNarrowing(t *testing.T) {
 		})
 	}
 
-	t.Run("only unregistered scopes", func(t *testing.T) {
-		t.Parallel()
-		f := newJBGFixture(t, jbgConfig{})
-		assertion := f.sign(t, f.plainClaims("alice"), "")
-		f.expectError(t, f.post(t, jbgReq{assertion: assertion, extra: url.Values{"scope": {"admin"}}}),
-			http.StatusBadRequest, "invalid_scope", "scope")
-		// A request the client can correct does not spend the assertion.
-		f.expectOK(t, f.post(t, jbgReq{assertion: assertion}))
-	})
+	rejected := []struct{ name, requested string }{
+		{"only unregistered scopes", "admin"},
+		{"unregistered scope alongside a registered one", "read admin"},
+		{"openid", "openid write"},
+	}
+	for _, tc := range rejected {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			f := newJBGFixture(t, jbgConfig{})
+			assertion := f.sign(t, f.plainClaims("alice"), "")
+			f.expectError(t, f.post(t, jbgReq{assertion: assertion, extra: url.Values{"scope": {tc.requested}}}),
+				http.StatusBadRequest, "invalid_scope", "scope")
+			// A request the client can correct does not spend the assertion.
+			f.expectOK(t, f.post(t, jbgReq{assertion: assertion}))
+		})
+	}
 
 	t.Run("registered resource becomes the audience", func(t *testing.T) {
 		t.Parallel()

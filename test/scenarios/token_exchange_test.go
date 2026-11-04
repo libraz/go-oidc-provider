@@ -582,6 +582,56 @@ func TestScenario_TX_027_AuditOutcomeMatchesWire(t *testing.T) {
 	})
 }
 
+func TestScenario_TX_028_RequestedScopeHeldToClientRegistration(t *testing.T) {
+	t.Parallel()
+	newProvider := func(t *testing.T) (*txProvider, *scenariokit.AuditCapture, string) {
+		t.Helper()
+		capture := scenariokit.NewAuditCapture()
+		p := newTXProviderOpts(t, txAllowAllPolicy{},
+			op.WithAuditLogger(capture.Logger()),
+			op.WithScope(op.Scope{Name: "admin", Public: true}),
+		)
+		claims := p.defaultSubjectClaims("tx-028-" + t.Name())
+		// The subject_token carries admin; the calling client is not registered for it.
+		claims.Scope = []string{"read", "admin"}
+		return p, capture, p.mintSubjectToken(t, claims)
+	}
+
+	t.Run("explicit request outside the registration", func(t *testing.T) {
+		t.Parallel()
+		p, capture, subjectJWS := newProvider(t)
+		status, body := p.postTokenExchange(t, url.Values{
+			"subject_token":      []string{subjectJWS},
+			"subject_token_type": []string{txTokenTypeAT},
+			"scope":              []string{"read admin"},
+		})
+		if status != http.StatusBadRequest || body["error"] != "invalid_scope" {
+			t.Fatalf("status=%d body=%v want 400 invalid_scope", status, body)
+		}
+		if n := len(capture.EventsByName(string(audit.TokenExchangeScopeInflationBlocked))); n != 1 {
+			t.Errorf("%s emitted %d time(s); want exactly 1", audit.TokenExchangeScopeInflationBlocked, n)
+		}
+		if n := len(capture.EventsByName(string(audit.TokenExchangeGranted))); n != 0 {
+			t.Errorf("%s emitted %d time(s) for a refused exchange; want 0", audit.TokenExchangeGranted, n)
+		}
+	})
+
+	t.Run("omitted scope narrows the subject_token default", func(t *testing.T) {
+		t.Parallel()
+		p, _, subjectJWS := newProvider(t)
+		status, body := p.postTokenExchange(t, url.Values{
+			"subject_token":      []string{subjectJWS},
+			"subject_token_type": []string{txTokenTypeAT},
+		})
+		if status != http.StatusOK {
+			t.Fatalf("status=%d body=%v want 200", status, body)
+		}
+		if body["scope"] != "read" {
+			t.Errorf("scope=%v want %q", body["scope"], "read")
+		}
+	})
+}
+
 func TestScenario_TX_012_PolicyGenericErrorCollapsesToInvalidGrant(t *testing.T) {
 	t.Parallel()
 	p := newTXProvider(t, txGenericDenyPolicy{})

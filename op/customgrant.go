@@ -199,7 +199,7 @@ type CustomGrantRequest struct {
 //
 //   - [AccessTokenTTL] is truncated to the OP's global access-token
 //     cap (default 1 hour); a longer value never overrides the cap.
-//   - [Scope] is intersected with the client's allowed scopes;
+//   - [Scope] must be a subset of the client's registered scopes;
 //     handler-introduced scopes outside that set yield invalid_scope.
 //   - [Audience] entries are intersected with the resource servers
 //     registered for the client; unknown audiences yield invalid_target.

@@ -165,9 +165,10 @@ func admitAssertionIssuer(
 }
 
 // applyJWTBearerRequestScope parses the scope and resource parameters. A
-// resource indicator must be registered for the client; "openid" is dropped
-// from the scope (no id_token is issued), which [narrowToAssertion] narrows
-// once the assertion's own scope claim is known.
+// resource indicator must be registered for the client, and a requested
+// scope must neither name "openid" (no id_token is issued) nor exceed the
+// client's registered scopes; [narrowToAssertion] narrows the result once
+// the assertion's own scope claim is known.
 func applyJWTBearerRequestScope(
 	ctx context.Context,
 	w http.ResponseWriter,
@@ -184,7 +185,17 @@ func applyJWTBearerRequestScope(
 		emitJWTBearerRejected(ctx, deps, req.client.ID, req.issuer, jwtBearerReasonResource)
 		return false
 	}
-	req.requested, req.resource = oidcscope.WithoutOpenID(requested), resource
+	if oidcscope.ContainsOpenID(requested) {
+		emitJWTBearerRejected(ctx, deps, req.client.ID, req.issuer, jwtBearerReasonScope)
+		endpointsupport.WriteOAuthError(w, http.StatusBadRequest, errInvalidScope,
+			"openid scope is not permitted in the jwt-bearer grant")
+		return false
+	}
+	if !requireRegisteredScopes(w, req.client, requested) {
+		emitJWTBearerRejected(ctx, deps, req.client.ID, req.issuer, jwtBearerReasonScope)
+		return false
+	}
+	req.requested, req.resource = requested, resource
 	return true
 }
 
@@ -274,9 +285,9 @@ func resolveJWTBearerSubject(
 // the client's registration and the verified assertion, and refuses what the
 // client could fix by changing its request. It runs before the jti is spent.
 //
-// The scope is the requested set, or the registered set when none was
-// requested, narrowed to the registration and to an ID-JAG scope claim; an
-// empty result is invalid_scope. The verifier already holds a requested scope
+// The scope is the requested set, or the registered set without "openid"
+// when none was requested, narrowed to an ID-JAG scope claim; an empty
+// result is invalid_scope. The verifier already holds a requested scope
 // to the claim and every claimed resource, in canonical form, to the
 // registration. With a resource parameter it must be one the claim names;
 // without one the claim's resource becomes the audience, and a claim naming
@@ -293,7 +304,7 @@ func narrowToAssertion(
 	if len(scope) == 0 {
 		emitJWTBearerRejected(ctx, deps, req.client.ID, req.issuer, jwtBearerReasonScope)
 		endpointsupport.WriteOAuthError(w, http.StatusBadRequest, errInvalidScope,
-			"no requested scope is both registered for the client and granted by the assertion")
+			"no registered scope is granted by the assertion")
 		return nil, "", false
 	}
 	if !checkTokenScopeAllowlist(w, deps, req.client.ID, scope) {
@@ -324,15 +335,16 @@ func narrowToAssertion(
 }
 
 // narrowJWTBearerScope is the one place the jwt-bearer scope is narrowed:
-// requested (or, when empty, registered without "openid") kept to what is
-// registered and, when the assertion carries a scope claim, to what it grants.
+// requested (or, when empty, registered without "openid") kept, when the
+// assertion carries a scope claim, to what it grants. A non-empty requested
+// set is already held to the registration by [applyJWTBearerRequestScope].
 func narrowJWTBearerScope(requested, registered, claimed []string) []string {
 	base := requested
 	if len(base) == 0 {
 		base = oidcscope.WithoutOpenID(registered)
 	}
 	return slices.DeleteFunc(slices.Clone(base), func(s string) bool {
-		return !slices.Contains(registered, s) || (claimed != nil && !slices.Contains(claimed, s))
+		return claimed != nil && !slices.Contains(claimed, s)
 	})
 }
 
