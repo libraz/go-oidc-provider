@@ -2,7 +2,6 @@ package op
 
 import (
 	"context"
-	"fmt"
 	"reflect"
 	"slices"
 	"strings"
@@ -36,7 +35,7 @@ func (c *config) validateStoreSchema(ctx context.Context) error {
 	if nilcheck.IsNil(c.store) {
 		return nil
 	}
-	var errs []error
+	var errs schemaErrors
 	checked := make([]any, 0, 16)
 	for _, cand := range c.schemaCandidates() {
 		if nilcheck.IsNil(cand.store) || schemaAlreadyChecked(checked, cand.store) {
@@ -48,36 +47,43 @@ func (c *config) validateStoreSchema(ctx context.Context) error {
 			continue
 		}
 		if err := v.ValidateSchema(ctx); err != nil {
-			errs = append(errs, fmt.Errorf("%s: %w", cand.label, err))
+			errs = append(errs, schemaError{cand.label, err})
 		}
 	}
 	if len(errs) == 0 {
 		return nil
 	}
-	return newConfigurationError("store schema does not match this configuration", schemaErrors(errs))
+	return newConfigurationError("store schema does not match this configuration", errs)
 }
 
-// schemaErrors joins per-store schema failures one line each, like
+// schemaError is one store's schema failure and the label it is reported under.
+type schemaError struct {
+	label string
+	err   error
+}
+
+// schemaErrors joins per-store schema failures one labelled line each, like
 // [errors.Join], except that a line several stores report — a shared
-// remedy such as how to create missing tables — is printed once, last.
-type schemaErrors []error
+// remedy such as how to create missing tables — is printed once, last and
+// unlabelled.
+type schemaErrors []schemaError
 
 func (e schemaErrors) Error() string {
 	reports := make([][]string, len(e))
 	seen := map[string]int{}
-	for i, err := range e {
-		reports[i] = strings.Split(err.Error(), "\n")
+	for i, se := range e {
+		reports[i] = strings.Split(se.err.Error(), "\n")
 		for _, line := range slices.Compact(slices.Sorted(slices.Values(reports[i][1:]))) {
 			seen[line]++
 		}
 	}
 	var out, shared []string
-	for _, lines := range reports {
-		out = append(out, lines[0])
+	for i, lines := range reports {
+		out = append(out, e[i].label+": "+lines[0])
 		for _, line := range lines[1:] {
 			switch {
 			case seen[line] < 2:
-				out = append(out, line)
+				out = append(out, e[i].label+": "+line)
 			case !slices.Contains(shared, line):
 				shared = append(shared, line)
 			}
@@ -86,7 +92,13 @@ func (e schemaErrors) Error() string {
 	return strings.Join(append(out, shared...), "\n")
 }
 
-func (e schemaErrors) Unwrap() []error { return e }
+func (e schemaErrors) Unwrap() []error {
+	out := make([]error, len(e))
+	for i, se := range e {
+		out[i] = se.err
+	}
+	return out
+}
 
 // schemaCandidates lists the stores the configuration uses, in report
 // order. Nil entries are left for the caller to skip.

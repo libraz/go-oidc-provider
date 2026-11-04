@@ -81,6 +81,10 @@ func TestWithStaticClients_DifferentStoredRecordConflicts(t *testing.T) {
 		t.Fatalf("changed static seed error=%v want ErrConflict", err)
 	}
 	assertErrorMentions(t, err, "differs from its static seed in Scopes;", "op.SyncStaticClients")
+	// The sentinel's own text names a race, which this is not.
+	if strings.Contains(err.Error(), store.ErrConflict.Error()) {
+		t.Errorf("error %q carries the ErrConflict text", err)
+	}
 	got, err := st.GetClient(context.Background(), "stable-client")
 	if err != nil {
 		t.Fatalf("GetClient: %v", err)

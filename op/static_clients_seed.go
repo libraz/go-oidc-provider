@@ -81,8 +81,16 @@ func normalizeStaticClientSeed(
 // staticClientConflict reports a stored client the seed cannot take over;
 // reason states the cause and the remedy.
 func staticClientConflict(id, reason string) error {
-	return newConfigurationError("WithStaticClients: stored client "+id+" "+reason, store.ErrConflict)
+	return newConfigurationError("WithStaticClients: stored client "+id, seedConflict(reason))
 }
+
+// seedConflict matches [store.ErrConflict] without printing the sentinel's
+// text, which names a concurrent write rather than a diverged seed.
+type seedConflict string
+
+func (c seedConflict) Error() string { return string(c) }
+
+func (seedConflict) Unwrap() error { return store.ErrConflict }
 
 // staticClientReconcilerProvider is the conditional capability accessor used
 // by composite stores whose concrete method set cannot honestly implement

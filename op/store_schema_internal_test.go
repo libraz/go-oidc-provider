@@ -370,6 +370,20 @@ func TestStoreSchema_SameValueCheckedOnce(t *testing.T) {
 	assertSchemaLog(t, f, want)
 }
 
+func TestStoreSchema_EveryLineOfAStoreCarriesItsLabel(t *testing.T) {
+	t.Parallel()
+
+	f := newSchemaFakeStore()
+	f.probes["Grants"].err = errors.Join(errors.New("grants table missing"), errors.New("grant_revocations table missing"))
+
+	err := runStoreSchema(t, f, schemaDefaultFlow(f))
+	for _, want := range []string{"Grants: grants table missing", "Grants: grant_revocations table missing"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("err = %q, want it to contain %q", err, want)
+		}
+	}
+}
+
 func TestStoreSchema_SharedRemedyLineReportedOnce(t *testing.T) {
 	t.Parallel()
 
