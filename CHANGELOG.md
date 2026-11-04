@@ -126,7 +126,9 @@ start. `op.WithAllowInsecureBackchannelLogoutForDev` requires a development
 issuer. A DynamoDB deployment must create the new `cascade_links` table (from
 `Store.TableDefinitions`) before upgrading; `ValidateSchema` requires it. A
 SQL database missing an index of the reference DDL, typically MySQL upgraded
-through `Store.Migrate`, must create it first; `op.New` names each one. A
+by an earlier release's `Store.Migrate`, must create it first; `op.New` names
+each one. The first v1.5.0 `Store.Migrate` call records an existing database
+whose schema is complete in the new version table; see `Changed`. A
 bring-your-own store behind a login flow with a password or second-factor step
 must implement `AuthnLockouts()` or be paired with
 `op.WithAuthnLockoutStore`, or `op.New` refuses to start.
@@ -264,9 +266,9 @@ must implement `AuthnLockouts()` or be paired with
 
 - The SQL adapter's sessions table gets `idx_oidc_sessions_subject` on
   `subject`, so deleting a subject's sessions does not scan the table. It is
-  in migration `000006_v1.5.0` and in `v1.sql`. On MySQL an existing table
-  needs the `ALTER TABLE` from the migration file, because `Store.Migrate`
-  cannot add it, and `op.New` names the index when it is missing.
+  in migration `000006_v1.5.0` and in `v1.sql`. `Store.Migrate` applies it;
+  with a migration tool, apply the file. `op.New` names the index when it is
+  missing.
 
 - The DynamoDB sessions table gains a `by_subject` global secondary index.
   A table managed outside the adapter must add it; `Store.CreateTables` adds
@@ -326,8 +328,38 @@ must implement `AuthnLockouts()` or be paired with
 
 - `oidcsql.Store.Migrate` refuses, before executing any statement, when a
   table it would create already exists without the adapter's columns, such
-  as an application table reached through an empty `WithTablePrefix`; it
-  previously added indexes to that table before the schema check failed.
+  as an application table that shares the prefix; it previously added
+  indexes to that table before the schema check failed.
+
+`oidcsql.Store.Migrate` applies the migration files and records the version.
+
+- **BREAKING:** `(*oidcsql.Store).Migrate` no longer runs `v1.sql` and leaves
+  existing tables alone. It applies the files from `Store.Migrations()` in
+  order and records progress in `<prefix>schema_migrations`
+  (`oidc_schema_migrations` by default), a version table laid out as
+  golang-migrate's, so it creates and upgrades the schema and is meant for a
+  deploy job with a context long enough for the DDL. A team that uses
+  golang-migrate sets `x-migrations-table` to the same table and continues
+  with `migrate up`, without `migrate force`. MySQL no longer needs
+  `multiStatements=true` for `Migrate`. The advisory locks use
+  golang-migrate's keys; behind pgbouncer use session pooling or a direct
+  connection. On PostgreSQL the version table and the lock live in the first
+  `search_path` schema, where the OP's tables should be. `Store.Schema()` and
+  `v1.sql` remain as the reference for the complete current schema.
+- **BREAKING:** `Migrate` refuses `WithTablePrefix("")`, because the version
+  table would be `schema_migrations`, golang-migrate's default table. Apply
+  `Store.Migrations()` with a migration tool for such a store.
+- **BREAKING:** the errors `Migrate` returns when the database has the
+  adapter's tables but no version table, or a version table is dirty, are new
+  and begin `oidcsql: Migrate changed nothing`. They give the `INSERT INTO
+  <prefix>schema_migrations` that records the release the schema is at, name
+  the migrations to apply first, or give the `UPDATE` and `migrate force N` to
+  run after checking a dirty version.
+
+Upgrade note: a database created by an earlier `Migrate` or `Store.Schema()`
+is recorded at the current release on the first v1.5.0 `Migrate` call, when its
+schema is complete. A deployment that skips v1.5.0 and calls `Migrate` first on
+a later release records the release it was created at with that `INSERT` once.
 
 - `MIGRATIONS.md` covers keeping the OP's migration history separate from
   the application's, and `store.UserPasswordHashUpdater` documents that
@@ -351,11 +383,10 @@ must implement `AuthnLockouts()` or be paired with
 
 - The SQL adapter's schema check, run by `op.New` and `Store.ValidateSchema`,
   now also requires every column the reference DDL indexes to lead some index
-  of its table, under any index name. A MySQL database upgraded with
-  `Store.Migrate` alone never received its indexes, because MySQL declares them
-  inside `CREATE TABLE`; such a database now fails at startup naming each table
-  and column, and needs the index statements from `schema/mysql/v1.sql` or the
-  migration files.
+  of its table, under any index name. A MySQL database upgraded by an earlier
+  release's `Store.Migrate` never received its indexes, because MySQL declares
+  them inside `CREATE TABLE`; such a database now fails at startup naming each
+  table and column, and needs the index statements from the migration files.
 
 - When every schema gap is something a later release added, the schema check
   closes with the release the database matches and the `migrate force <N>`
@@ -598,6 +629,10 @@ must implement `AuthnLockouts()` or be paired with
   subject mapping to `op.WithJWTBearerGrant`.
 
 ### Added
+
+- The SQL adapter's version table `<prefix>schema_migrations`, written by
+  `Store.Migrate`. Its columns and primary key match golang-migrate's version
+  table for each dialect, so `x-migrations-table` can point at it.
 
 - `Provider.ForgetSubject` erases an end user: it revokes the subject's
   grants and tokens as `RevokeSubject` does, then deletes the browser
