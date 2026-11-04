@@ -96,11 +96,27 @@ func disableEmulatorTTL(t *testing.T, client *awsdynamodb.Client, s *oidcdynamo.
 	}
 }
 
+// deleteTables drops the table set s created once its sub-test ends.
+// DynamoDB Local slows down as tables accumulate: kept for the whole
+// suite, later sub-tests ran over twenty times slower than early ones.
+func deleteTables(t *testing.T, client *awsdynamodb.Client, s *oidcdynamo.Store) {
+	t.Helper()
+
+	// t.Context is already cancelled when cleanups run.
+	ctx := context.Background()
+	for _, def := range s.TableDefinitions() {
+		_, err := client.DeleteTable(ctx, &awsdynamodb.DeleteTableInput{TableName: aws.String(def.Name)})
+		if err != nil {
+			t.Errorf("delete table %s: %v", def.Name, err)
+		}
+	}
+}
+
 // newDynamoFactory boots one emulator for the whole suite and hands out
-// a fresh, isolated table set per sub-test. Isolation comes from a
-// per-sub-test table prefix rather than a per-sub-test container:
-// DynamoDB Local creates tables in milliseconds, and one container for
-// hundreds of sub-tests keeps the suite fast.
+// a fresh, isolated table set per sub-test, dropped again when the
+// sub-test ends. Isolation comes from a per-sub-test table prefix
+// rather than a per-sub-test container: one container for hundreds of
+// sub-tests keeps the suite fast.
 func newDynamoFactory(t *testing.T) contract.Factory {
 	t.Helper()
 	client := newEmulatorClient(t)
@@ -125,6 +141,7 @@ func newDynamoFactory(t *testing.T) contract.Factory {
 		if err := s.CreateTables(t.Context()); err != nil {
 			t.Fatalf("CreateTables: %v", err)
 		}
+		t.Cleanup(func() { deleteTables(t, client, s) })
 		disableEmulatorTTL(t, client, s)
 		return contract.Backend{
 			Store: s,
