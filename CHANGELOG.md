@@ -24,8 +24,13 @@ bring-your-own store may adopt; one that does not keeps working as before.
 shape), `store.Store` loses `Users()` so the user store is passed through the
 login flow or `op.WithUserStore`, every deprecated symbol is removed, and the
 interaction UI is chosen through one `op.WithUI`, which replaces five options
-including `op.WithInteractionDriver`, stable since v1.0. Its `Changed` and
-`Removed` sections list each one with its replacement.
+including `op.WithInteractionDriver`, stable since v1.0. The FAPI 2.0 profiles
+now enforce the Final specification's issuer-only client assertion audience
+and non-rotating refresh tokens, and DPoP proofs are checked against the
+endpoint URL the OP advertises. Options that did the same job under several
+names are folded into one (`op.WithAllowPrivateNetwork`,
+`op.WithBackchannelLogout`, `op.WithMTLSProxy(op.MTLSProxy{...})` and others).
+Its `Changed` and `Removed` sections list each one with its replacement.
 
 The main module and the storage-adapter sub-modules
 (`op/storeadapter/sql`, `op/storeadapter/redis`, and from `v1.0.0`
@@ -33,111 +38,86 @@ The main module and the storage-adapter sub-modules
 each sub-module independently:
 
 ```
-# v1.5.0 (latest)
 go get github.com/libraz/go-oidc-provider@v1.5.0
 go get github.com/libraz/go-oidc-provider/op/storeadapter/sql@v1.5.0
 go get github.com/libraz/go-oidc-provider/op/storeadapter/redis@v1.5.0
 go get github.com/libraz/go-oidc-provider/op/storeadapter/dynamodb@v1.5.0
-
-# v1.4.0
-go get github.com/libraz/go-oidc-provider@v1.4.0
-go get github.com/libraz/go-oidc-provider/op/storeadapter/sql@v1.4.0
-go get github.com/libraz/go-oidc-provider/op/storeadapter/redis@v1.4.0
-go get github.com/libraz/go-oidc-provider/op/storeadapter/dynamodb@v1.4.0
-
-# v1.3.0
-go get github.com/libraz/go-oidc-provider@v1.3.0
-go get github.com/libraz/go-oidc-provider/op/storeadapter/sql@v1.3.0
-go get github.com/libraz/go-oidc-provider/op/storeadapter/redis@v1.3.0
-go get github.com/libraz/go-oidc-provider/op/storeadapter/dynamodb@v1.3.0
-
-# v1.2.0
-go get github.com/libraz/go-oidc-provider@v1.2.0
-go get github.com/libraz/go-oidc-provider/op/storeadapter/sql@v1.2.0
-go get github.com/libraz/go-oidc-provider/op/storeadapter/redis@v1.2.0
-go get github.com/libraz/go-oidc-provider/op/storeadapter/dynamodb@v1.2.0
-
-# v1.1.0
-go get github.com/libraz/go-oidc-provider@v1.1.0
-go get github.com/libraz/go-oidc-provider/op/storeadapter/sql@v1.1.0
-go get github.com/libraz/go-oidc-provider/op/storeadapter/redis@v1.1.0
-go get github.com/libraz/go-oidc-provider/op/storeadapter/dynamodb@v1.1.0
-
-# v1.0.0
-go get github.com/libraz/go-oidc-provider@v1.0.0
-go get github.com/libraz/go-oidc-provider/op/storeadapter/sql@v1.0.0
-go get github.com/libraz/go-oidc-provider/op/storeadapter/redis@v1.0.0
-go get github.com/libraz/go-oidc-provider/op/storeadapter/dynamodb@v1.0.0
-
-# v0.9.5
-go get github.com/libraz/go-oidc-provider@v0.9.5
-go get github.com/libraz/go-oidc-provider/op/storeadapter/sql@v0.9.5
-go get github.com/libraz/go-oidc-provider/op/storeadapter/redis@v0.9.5
-
-# v0.9.4
-go get github.com/libraz/go-oidc-provider@v0.9.4
-go get github.com/libraz/go-oidc-provider/op/storeadapter/sql@v0.9.4
-go get github.com/libraz/go-oidc-provider/op/storeadapter/redis@v0.9.4
-
-# v0.9.3
-go get github.com/libraz/go-oidc-provider@v0.9.3
-go get github.com/libraz/go-oidc-provider/op/storeadapter/sql@v0.9.3
-go get github.com/libraz/go-oidc-provider/op/storeadapter/redis@v0.9.3
-
-# v0.9.2
-go get github.com/libraz/go-oidc-provider@v0.9.2
-go get github.com/libraz/go-oidc-provider/op/storeadapter/sql@v0.9.2
-go get github.com/libraz/go-oidc-provider/op/storeadapter/redis@v0.9.2
-
-# v0.9.1
-go get github.com/libraz/go-oidc-provider@v0.9.1
-go get github.com/libraz/go-oidc-provider/op/storeadapter/sql@v0.9.1
-go get github.com/libraz/go-oidc-provider/op/storeadapter/redis@v0.9.1
-
-# v0.9.0 (initial public release)
-go get github.com/libraz/go-oidc-provider@v0.9.0
-go get github.com/libraz/go-oidc-provider/op/storeadapter/sql@v0.9.0
-go get github.com/libraz/go-oidc-provider/op/storeadapter/redis@v0.9.0
 ```
 
 ## [v1.5.0] — 2026-11-04
 
 Configurations that started and looked correct but were not safe now either
 behave safely by default or fail at `op.New`. Authentication is composed
-through `op.WithLoginFlow` alone, and every surface that was experimental
-except Grant Management is now covered by the SemVer promise.
+through `op.WithLoginFlow` alone. The login and interaction surface that was
+experimental is now covered by the SemVer promise; Grant Management, ID-JAG,
+Client ID Metadata Documents and the RISC account events stay experimental.
 
-Deployments that need to do something before upgrading: an
-`op.WithACRValuesSupported` entry that is not one of the canonical AAL URIs
-(`op.AAL1.ACRURI()` and so on) must be declared with
-`op.WithACRPolicy(op.ACRLevels{"<value>": op.AAL2})`, or `op.New` refuses to
-start. Every UI option moves to `op.WithUI`; the `Removed` section maps each
-old call. A login flow with a passkey step must use `op.SPAUI` or an
-`op.DriverUI` whose driver runs the WebAuthn ceremony. A custom SPA bundle
-served through `op.SPAUI` that loads external scripts, uses inline scripts or
-a `<base>` element must set `SPAUI.ContentSecurityPolicy`. A custom
-SPA that reads the prompt JSON must switch to the snake_case keys listed under
-`Changed`. A configuration that uses `op.WithAuthenticators`,
-`op.WithCaptchaVerifier` or `op.WithRiskAssessor` no longer compiles; the
-`Removed` section gives the `op.WithLoginFlow` equivalent of each. A
-deployment that relied on the store's `Users()` differing from the store behind
-`PrimaryPassword` must now pass `op.WithUserStore(st.Users())` to keep reading
-claims from `Users()`; see `Changed`. An option list that passes the same
-single-valued option twice, typically a shared base list followed by an
-override, must wrap the base in `op.WithDefaults`, or `op.New` refuses to
-start. `op.WithAllowInsecureBackchannelLogoutForDev` requires a development
-issuer. A DynamoDB deployment must create the new `cascade_links` table (from
-`Store.TableDefinitions`) before upgrading; `ValidateSchema` requires it. A
-SQL database missing an index of the reference DDL, typically MySQL upgraded
-by an earlier release's `Store.Migrate`, must create it first; `op.New` names
-each one. The first v1.5.0 `Store.Migrate` call records an existing database
-whose schema is complete in the new version table; see `Changed`. A
-bring-your-own store behind a login flow with a password or second-factor step
-must implement `AuthnLockouts()` or be paired with
-`op.WithAuthnLockoutStore`, or `op.New` refuses to start. A static
-`op.ConfidentialClient` whose plaintext `Secret` is shorter than 32 bytes
-must be given a new one from `op.NewClientSecret`, or `op.New` refuses to
-start.
+Before upgrading, check each item that applies to the deployment:
+
+- [ ] Option names. Compile errors on `op.WithAllowPrivateNetwork*`,
+      `op.WithAllowInsecure*ForDev`, `op.WithBackchannelLogout*`,
+      `op.WithPARLifetime`, `op.WithDeviceCodeExpiry`,
+      `op.WithClaimsParameterSupported`, `op.WithAllowLocalhostLoopback`,
+      `op.MTLSProxyConfig` and `op.Resolver` are renames; the `Removed`
+      section maps each old name to its replacement.
+- [ ] `op.WithACRValuesSupported` entries that are not canonical AAL URIs
+      (`op.AAL1.ACRURI()` and so on) are declared with
+      `op.WithACRPolicy(op.ACRLevels{"<value>": op.AAL2})`.
+- [ ] Every UI option moves to `op.WithUI`; the `Removed` section maps each
+      old call.
+- [ ] A login flow with a passkey step uses `op.SPAUI` or an `op.DriverUI`
+      whose driver runs the WebAuthn ceremony.
+- [ ] A custom SPA bundle served through `op.SPAUI` that loads external
+      scripts, uses inline scripts or a `<base>` element sets
+      `SPAUI.ContentSecurityPolicy`.
+- [ ] A custom SPA that reads the prompt JSON switches to the snake_case
+      keys listed under `Changed`.
+- [ ] `op.WithAuthenticators`, `op.WithCaptchaVerifier` and
+      `op.WithRiskAssessor` are replaced by their `op.WithLoginFlow`
+      equivalents, listed under `Removed`.
+- [ ] A deployment that relied on the store's `Users()` differing from the
+      store behind `PrimaryPassword` passes `op.WithUserStore(st.Users())`;
+      see `Changed`.
+- [ ] A shared base option list followed by an override that repeats a
+      single-valued option wraps the base in `op.WithDefaults`.
+- [ ] `op.WithAllowInsecureOutboundForDev` runs against a development
+      issuer.
+- [ ] A static `op.ConfidentialClient` with a plaintext `Secret` shorter than
+      32 bytes gets a new one from `op.NewClientSecret`.
+- [ ] A bring-your-own store behind a login flow with a password or
+      second-factor step implements `AuthnLockouts()` or is paired with
+      `op.WithAuthnLockoutStore`.
+- [ ] A DynamoDB deployment creates the `cascade_links` table (from
+      `Store.TableDefinitions`); `ValidateSchema` requires it.
+- [ ] A SQL database missing an index of the reference DDL, typically MySQL
+      upgraded by an earlier release's `Store.Migrate`, gets it first; `op.New`
+      names each one.
+- [ ] SQL migration `000006` also adds five `tls_client_auth_*` columns to
+      the clients table. `Store.Migrate` applies it; a database managed with
+      another tool applies the files from `Store.Migrations()` or writes them
+      with `op-schema export`. The first `Store.Migrate` call on an existing
+      database whose schema is complete records it in the version table,
+      which `op.WithNaming` can name through the `schema_migrations` key; see
+      `Changed`.
+- [ ] A FAPI 2.0 deployment (`profile.FAPI2Baseline`,
+      `profile.FAPI2MessageSigning`) has its clients send the issuer
+      identifier alone, as a string, in the `aud` of a client authentication
+      assertion, and has them keep the refresh token they were given:
+      refresh responses carry no `refresh_token`. `op.WithRefreshGracePeriod`
+      under these profiles is an `op.New` error.
+- [ ] Every client that sends a DPoP proof to the OP signs the endpoint URL
+      the OP advertises in discovery (or its `mtls_endpoint_aliases` URL),
+      whatever the profile. A proof signed for any other URL, such as the
+      internal address behind a proxy, is refused.
+- [ ] `op.WithMTLSProxy` and `op.WithMTLSRootCAs` are used with
+      `feature.MTLS`, and a deployment with `feature.MTLS`,
+      `op.WithDynamicRegistration` and `op.WithMTLSProxy` also sets
+      `op.WithMTLSRootCAs`; `op.New` refuses both otherwise.
+- [ ] Code that read `op.MTLSProxyConfig` reads `(*op.Provider).MTLSProxy()`
+      instead.
+- [ ] A bring-your-own client store persists the five `store.Client` TLS
+      client authentication fields if it should serve `tls_client_auth`
+      clients; `op/store/contract` covers them.
 
 ### Security
 
@@ -341,14 +321,14 @@ start.
   `op.WithLogger` nor `op.WithAuditLogger` is set, because request-time logs
   and audit records are then discarded.
 
-- The six `op.WithAllowPrivateNetwork*` options are documented as network
-  reach for relying parties on a private network. Each logs one line at
-  startup: INFO, or WARN (SSRF exposure) when the destination is
+- The `op.WithAllowPrivateNetwork` targets are documented as network
+  reach for relying parties on a private network. Each listed target logs one
+  line at startup: INFO, or WARN (SSRF exposure) when the destination is
   caller-chosen through open dynamic registration or Client ID Metadata
   Documents, which includes a registered `backchannel_logout_uri`.
 
 - An outbound fetch refused by the private-network deny-list names the option
-  that lifts it (`; pass op.WithAllowPrivateNetworkSector() to admit
+  that lifts it (`; pass WithAllowPrivateNetwork(op.OutboundSector) to admit
   private-network targets`, and `rs.Config.AllowPrivateNetwork` in `op/rs`).
   A refused relying-party JWKS, JAR `request_uri` or Client ID Metadata
   Document fetch logs one WARN through `op.WithLogger`
@@ -413,7 +393,7 @@ a later release records the release it was created at with that `INSERT` once.
 - `op.New` now warns at construction when `feature.PKCE` is passed to
   `op.WithFeature`, which has no effect (PKCE for confidential clients is
   required unless `op.WithProfile(profile.OIDCCore)` is declared), and when
-  `op.WithAllowLocalhostLoopback` is set.
+  `op.WithAllowLocalhostRedirectURIs` is set.
 
 - The sentinel errors for missing required options now carry a remedy in
   their messages, and the missing-`LoginFlow` construction error wraps the
@@ -517,7 +497,7 @@ a later release records the release it was created at with that `INSERT` once.
   `op.WithTrustedProxyHosts` accumulates hosts. It used to keep only the
   last call's list.
 
-- `op.New` refuses `op.WithAllowInsecureBackchannelLogoutForDev` unless the
+- `op.New` refuses `op.WithAllowInsecureOutboundForDev(op.OutboundBackchannel)` unless the
   issuer is a development host: a loopback IP literal, `localhost`, or a name
   under `.localhost`, `.test`, `.invalid` or `.example`. It used to accept
   any issuer and only log a warning.
@@ -672,6 +652,106 @@ a later release records the release it was created at with that `INSERT` once.
   now belongs to the built-in grant like the other built-in grant types. An
   embedder that registered its own handler for it should move the trust and
   subject mapping to `op.WithJWTBearerGrant`.
+
+- **BREAKING:** under `profile.FAPI2Baseline` and `profile.FAPI2MessageSigning`
+  a client authentication assertion is accepted only when its `aud` is the
+  issuer identifier as a single JSON string (FAPI 2.0 Security Profile
+  §5.3.2.1). An array, the token endpoint URL and any other endpoint URL are
+  refused with `invalid_client`, at every endpoint that authenticates the
+  client. Every other profile keeps accepting the issuer or the endpoint URL.
+  `profile.RequiresIssuerAssertionAudience` reports the rule, and
+  `profile.FAPICIBA` is not covered by it.
+
+- **BREAKING:** under `profile.FAPI2Baseline` and `profile.FAPI2MessageSigning`
+  the refresh token grant does not rotate refresh tokens (FAPI 2.0 Security
+  Profile §5.3.2.1). The response carries a new access token, and an ID token
+  where one is due, but no `refresh_token`; the presented token stays valid
+  until it expires or is revoked. Replay detection never fires, since no token
+  is superseded, while revocation, grant revocation and logout still end the
+  chain. DPoP binding of the refresh token is unchanged.
+  `op.WithRefreshGracePeriod` has no window to set under these profiles, so
+  `op.New` refuses it. The start-up profile audit record carries
+  `refresh_rotation`. `profile.ForbidsRefreshTokenRotation` reports the rule;
+  `profile.FAPICIBA` still rotates.
+
+- **BREAKING:** the OP checks the `htu` of a DPoP proof against the endpoint
+  URL it advertises in discovery (issuer origin, mount prefix, endpoint path),
+  or against its `mtls_endpoint_aliases` URL where one is configured, instead
+  of a URL rebuilt from the request. This covers the token, pushed
+  authorization, userinfo, CIBA, device authorization and Shared Signals
+  management endpoints, and it no longer depends on `op.WithTrustedProxies`.
+  A client that signed a different URL, such as an internal address behind a
+  proxy, is refused in every profile. The URL comparison itself is unchanged
+  (case, default ports, query and fragment). The resource-server helpers that
+  guard an embedder's own paths still use the request URL.
+
+- **BREAKING:** `op.WithMTLSProxy` and `op.WithMTLSRootCAs` without
+  `feature.MTLS` are an `op.New` error. They used to log a warning and leave
+  tokens as plain bearer tokens.
+
+- **BREAKING:** `op.WithMTLSProxy` takes one `op.MTLSProxy{HeaderName,
+  TrustedProxies}`. An empty `TrustedProxies` uses the CIDRs of
+  `op.WithTrustedProxies`, and `op.New` refuses the option when both are
+  empty. The effective value is read back with `(*op.Provider).MTLSProxy()`,
+  which replaces the package function `op.MTLSProxyConfig`; its
+  `TrustedProxies` holds the CIDRs after the fallback. `op/rs` follows:
+  `rs.Config.MTLSProxy` is an `*op.MTLSProxy`.
+
+- **BREAKING:** `op.New` refuses `feature.MTLS` with `op.WithDynamicRegistration`
+  and `op.WithMTLSProxy` when `op.WithMTLSRootCAs` is not set, because a
+  client could register `tls_client_auth` and a forwarded certificate is
+  trusted only after chain verification against those roots. A static
+  `tls_client_auth` client behind `op.WithMTLSProxy` needs the roots as well.
+
+- The authentication method errors of a FAPI profile name the profile and the
+  static client types that fit (`op.PrivateKeyJWTClient`, and with
+  `feature.MTLS` `op.TLSClientAuthClient` or `op.SelfSignedTLSClientAuthClient`).
+  Profile validation messages spell a feature as `feature.DPoP` rather than
+  `dpop`.
+
+- **BREAKING:** options that did one job under several names are folded.
+  Each old name is listed with its replacement under `Removed`.
+  - `op.WithAllowPrivateNetwork(targets ...op.OutboundTarget)` replaces six
+    options, `op.WithAllowInsecureOutboundForDev(targets ...op.OutboundTarget)`
+    replaces two, and `op.WithBackchannelLogout(op.BackchannelLogout{...})`
+    replaces three. An empty or unknown target list is an `op.New` error;
+    repeated calls add up.
+  - `op.WithGrantManagement` takes an `op.GrantManagement` and
+    `op.WithSupportedEncryptionAlgs` an `op.EncryptionAlgs`, in place of two
+    positional arguments.
+  - `op.WithPARLifetime` and `op.WithDeviceCodeExpiry` are `op.WithPARTTL` and
+    `op.WithDeviceCodeTTL`, matching the other lifetimes.
+  - `op.WithClaimsParameterSupported(bool)` is `op.WithClaimsParameterDisabled()`.
+  - `op.WithAllowLocalhostLoopback` splits into
+    `op.WithAllowLocalhostRedirectURIs()` for native-app redirect URIs, which a
+    production deployment may need, and `op.WithAllowLocalhostIssuerForDev()`,
+    which `op.New` refuses unless the issuer is an `http` URL on `localhost`.
+
+- **BREAKING:** `op.Resolver` is renamed `op.LocaleResolver`, so the name says
+  what it resolves.
+
+- The login-flow, risk, captcha, AAL and login-attempt contract types
+  (`op.Authenticator`, `op.BeginInput`, `op.RiskAssessor`, `op.RiskInput`,
+  `op.CaptchaVerifier`, `op.LoginAttempt`, `op.AAL` and the types around them)
+  are declared in the new package `op/authn`, and the CIBA hint types in
+  `op/ciba`. Package `op` re-exports each as an alias, so the two spellings are
+  one type and existing code compiles unchanged; godoc now shows the fields
+  and methods under the `op/authn` page.
+
+- `op.WithNaming` accepts the key `schema_migrations`, so the version table
+  `Store.Migrate` records in can be renamed together with the other tables.
+  With `op.WithNaming` replacing every name, no `oidc_schema_migrations`
+  table is left behind.
+
+- A stored password hash that is neither argon2id nor claimed by a configured
+  scheme logs one WARN per process that names `PrimaryPassword.LegacySchemes`.
+  The log carries neither the user nor the hash, and the login fails as
+  before. A table of bcrypt hashes needs
+  `LegacySchemes: []op.PasswordHashScheme{op.BcryptHashScheme()}`.
+
+- The option index in `op/doc.go` is checked by a test against the exported
+  `op.With*` constructors. `op.WithTokenExchange` was missing from it and is
+  listed now.
 
 ### Added
 
@@ -864,9 +944,10 @@ a later release records the release it was created at with that `INSERT` once.
   `op.WithLoginAttemptObserver`, `op.WithUI` with `op.HTMLUI`, `op.SPAUI`,
   `op.DriverUI` and `op.PageTemplate`, the whole `op/interaction` package, and the DynamoDB
   storage adapter (`op/storeadapter/dynamodb`, its package and `Store`).
-  Grant Management (`op.GrantManagementAction`, `op.WithGrantManagement`)
-  stays experimental: it follows an IETF draft whose wire format may still
-  change.
+  Grant Management (`op.GrantManagement`, `op.GrantManagementAction`,
+  `op.WithGrantManagement`), ID-JAG, Client ID Metadata Documents and the RISC
+  account events stay experimental: they follow IETF drafts whose wire format
+  may still change.
 
 - `op.StepOneOf` asks for any one of several steps. Only the steps the
   user is enrolled in are offered; with two or more the user picks one
@@ -1027,8 +1108,8 @@ a later release records the release it was created at with that `INSERT` once.
   poll (RFC 8936), including long poll. The OP reports RP-Initiated Logout as
   session-revoked, and `Provider.EmitSecurityEvent` reports credential
   changes and the other supported events; both go to the receivers whose client
-  holds a grant for the subject. `op.WithAllowPrivateNetworkSharedSignals` and
-  `op.WithAllowInsecureSharedSignalsPushForDev` relax the push destination
+  holds a grant for the subject. `op.WithAllowPrivateNetwork(op.OutboundSharedSignals)` and
+  `op.WithAllowInsecureOutboundForDev(op.OutboundSharedSignals)` relax the push destination
   checks. A user-delegated token carrying an `ssf.*` scope is refused, and a
   PATCH that moves a push stream to a new `endpoint_url` must supply its
   `authorization_header` again. Persistence is the optional
@@ -1049,17 +1130,70 @@ a later release records the release it was created at with that `INSERT` once.
   `op.WithSigningAlgorithm(op.AlgRS256)`.
 - `op.DeviceCodeOption`. `op.WithDeviceCodeGrant` now takes the device-code
   settings the way `op.WithCIBA` takes its own:
-  `op.WithDeviceCodeGrant(op.WithDeviceCodeExpiry(d), op.WithDeviceCodePollInterval(i))`.
-  `op.WithDeviceVerificationURI`, `op.WithDeviceCodeExpiry` and
-  `op.WithDeviceCodePollInterval` return `op.DeviceCodeOption`, which is also an
-  `op.Option`, so existing calls compile unchanged.
-- `op.WithAllowPrivateNetworkBackchannel()`, named and shaped like the other
-  `op.WithAllowPrivateNetwork*` options.
+  `op.WithDeviceCodeGrant(op.WithDeviceCodeTTL(d), op.WithDeviceCodePollInterval(i))`.
+  `op.WithDeviceVerificationURI`, `op.WithDeviceCodeTTL` and
+  `op.WithDeviceCodePollInterval` return `op.DeviceCodeOption`.
 - When `op.WithLogger` is set, `op.New` logs one INFO line naming the optional
   store capabilities the configuration would use and the store does not
   implement, such as `store.IssuanceRevocationChecker` or, with dynamic
   registration, `store.RevokeByClient`. Each has a fallback; the line makes a
   capability hidden by a hand-written wrapper around a bundled store visible.
+
+- `tls_client_auth` and `self_signed_tls_client_auth` (RFC 8705 §2) are
+  supported with `feature.MTLS` at every endpoint that authenticates a client:
+  token, pushed authorization, introspection, revocation, CIBA backchannel
+  authentication and device authorization. The certificate that authenticated
+  the client also binds the access token (`cnf.x5t#S256`).
+  - `tls_client_auth` accepts a certificate only after chain verification:
+    `r.TLS.VerifiedChains` on a direct connection, or `op.WithMTLSRootCAs`
+    for a certificate forwarded through `op.WithMTLSProxy`. The client
+    registers exactly one of `tls_client_auth_subject_dn`,
+    `tls_client_auth_san_dns`, `tls_client_auth_san_uri`,
+    `tls_client_auth_san_ip` and `tls_client_auth_san_email`.
+  - `self_signed_tls_client_auth` matches the certificate's public key against
+    the client's JWKS or `jwks_uri`. It needs no chain, and such a client is
+    exempt from `op.WithMTLSRootCAs`.
+  - Static clients: `op.TLSClientAuthClient{SubjectDN, SANDNS, SANURI, SANIP,
+    SANEmail}` takes exactly one matcher, and
+    `op.SelfSignedTLSClientAuthClient{JWKS | JWKSURI}` exactly one key source.
+  - Dynamic registration and RFC 7592 accept and return the five matcher
+    members, and `op.ClientMetadata` carries them to a `ValidateMetadata` hook.
+  - Discovery lists both methods in `token_endpoint_auth_methods_supported`
+    and the introspection and revocation lists when `feature.MTLS` is on.
+  - `store.Client` gains `TLSClientAuthSubjectDN`, `TLSClientAuthSANDNS`,
+    `TLSClientAuthSANURI`, `TLSClientAuthSANIP` and `TLSClientAuthSANEmail`.
+    The in-memory, composite, DynamoDB and SQL adapters persist them, the SQL
+    adapter in five columns added by migration `000006`, and
+    `op/store/contract` covers them.
+  - `profile.FAPI2Baseline`, `profile.FAPI2MessageSigning` and
+    `profile.FAPICIBA` allow both methods next to `private_key_jwt`; the
+    `profile.AllowedClientAuthMethods` returns all three.
+
+- `op.PrivateKeyJWTClient.JWKSURI` registers a static client by `jwks_uri`.
+  Exactly one of `JWKS` and `JWKSURI` is required. The fetch goes through the
+  same path as a registered client's `jwks_uri`: the private-network deny-list
+  (`op.WithAllowPrivateNetwork(op.OutboundJWKS)`) and
+  `op.WithJWKSHTTPTransport`.
+
+- `Store.DPoPNonceSource` in `op/storeadapter/redis` returns an
+  `op.DPoPNonceSource` whose nonces are shared by every replica that uses the
+  same key prefix and rotate on the interval given. It follows the adapter's
+  TLS and authentication requirements.
+
+- `op-schema export` (`op/storeadapter/sql/cmd/op-schema`) writes the SQL
+  adapter's migrations as files for a migration tool, without a database
+  connection:
+  `go run github.com/libraz/go-oidc-provider/op/storeadapter/sql/cmd/op-schema export --dialect postgres --format goose --out db/migrations`.
+  `--format` is `golang-migrate`, `goose` or `flyway`, and `--prefix` follows
+  `oidcsql.WithTablePrefix`. The files hold what `Store.Migrations()` returns
+  for that dialect and prefix, with the tool's file names and header.
+
+- `op/authn` and `op/ciba`, the packages named under `Changed` that hold the
+  login-flow and CIBA contract types.
+
+- `profile.RequiresIssuerAssertionAudience` and
+  `profile.ForbidsRefreshTokenRotation`, the two predicates behind the FAPI 2.0
+  behaviour above.
 
 ### Experimental
 
@@ -1134,7 +1268,7 @@ covered by the SemVer promise.
   - A client requesting `resource` can obtain access tokens for the resources
     declared with `op.WithProtectedResources`, so the OP and the MCP server it
     protects are served from one deployment.
-  - `op.WithAllowPrivateNetworkClientIDMetadata` admits `http` and private
+  - `op.WithAllowPrivateNetwork(op.OutboundClientIDMetadata)` admits `http` and private
     addresses for development and tests only. `op.New` refuses the feature
     together with a FAPI profile.
 
@@ -1271,7 +1405,7 @@ its replacement.
 
 - **BREAKING:** `profile.Baseline`. Use `profile.OAuth21`, the same value.
 - **BREAKING:** `op.WithBackchannelAllowPrivateNetwork(bool)`. Use
-  `op.WithAllowPrivateNetworkBackchannel()`.
+  `op.WithAllowPrivateNetwork(op.OutboundBackchannel)`.
 - **BREAKING:** `op.NewEmailOTPAuthenticator`, with `op.EmailOTPConfig`,
   `op.Mailer`, `op.MailerFunc`, `op.EmailOTPMessage` and
   `op.DefaultEmailOTPCodeTTL`. Use `op.StepEmailOTP` in a `LoginFlow`.
@@ -1286,7 +1420,7 @@ its replacement.
 - **BREAKING:** `testkit.ApproveAllScopes`. Use `testkit.ApprovedScopesFrom`.
 - **BREAKING:** `devicecodekit.Deps.Audit`. Use `Deps.AuditLogger`.
 - **BREAKING:** a `DeviceCodeOption` is no longer an `op.Option`.
-  `op.WithDeviceVerificationURI`, `op.WithDeviceCodeExpiry` and
+  `op.WithDeviceVerificationURI`, `op.WithDeviceCodeTTL` and
   `op.WithDeviceCodePollInterval` go inside `op.WithDeviceCodeGrant`, the
   same shape as the CIBA options.
 
@@ -1335,6 +1469,52 @@ combine, so the rules between the old options go with them.
     `op.WithDefaults`, so a test's own `op.WithUI` replaces it. An
     `op.HTMLUI` page template wraps the built-in HTML driver, not the testkit
     driver the old page options used to wrap.
+
+The configuration options are folded or renamed. Each old call maps onto one
+new one.
+
+- **BREAKING:** the six `op.WithAllowPrivateNetwork*` options and the two
+  `op.WithAllowInsecure*ForDev` options for outbound delivery:
+
+  | Removed | Use |
+  | --- | --- |
+  | `op.WithAllowPrivateNetworkJWKS()` | `op.WithAllowPrivateNetwork(op.OutboundJWKS)` |
+  | `op.WithAllowPrivateNetworkJAR()` | `op.WithAllowPrivateNetwork(op.OutboundJAR)` |
+  | `op.WithAllowPrivateNetworkSector()` | `op.WithAllowPrivateNetwork(op.OutboundSector)` |
+  | `op.WithAllowPrivateNetworkClientIDMetadata()` | `op.WithAllowPrivateNetwork(op.OutboundClientIDMetadata)` |
+  | `op.WithAllowPrivateNetworkBackchannel()` | `op.WithAllowPrivateNetwork(op.OutboundBackchannel)` |
+  | `op.WithAllowPrivateNetworkSharedSignals()` | `op.WithAllowPrivateNetwork(op.OutboundSharedSignals)` |
+  | `op.WithAllowInsecureBackchannelLogoutForDev()` | `op.WithAllowInsecureOutboundForDev(op.OutboundBackchannel)` |
+  | `op.WithAllowInsecureSharedSignalsPushForDev()` | `op.WithAllowInsecureOutboundForDev(op.OutboundSharedSignals)` |
+
+  `op.WithAllowInsecureOutboundForDev` takes `op.OutboundBackchannel` or
+  `op.OutboundSharedSignals` only, and keeps the development-issuer
+  requirement. Several targets go in one call.
+
+- **BREAKING:** the three back-channel logout tuning options:
+
+  | Removed | Use |
+  | --- | --- |
+  | `op.WithBackchannelLogoutHTTPClient(c)` | `op.WithBackchannelLogout(op.BackchannelLogout{Transport: c.Transport})` |
+  | `op.WithBackchannelLogoutTimeout(d)` | `BackchannelLogout.Timeout` |
+  | `op.WithBackchannelFanOutBudget(d)` | `BackchannelLogout.FanOutBudget` |
+
+  A zero field keeps the default. Only the transport of the `*http.Client`
+  was ever used, so `Transport` takes it directly.
+
+- **BREAKING:** positional arguments and other renames:
+
+  | Removed | Use |
+  | --- | --- |
+  | `op.WithGrantManagement(actions, required)` | `op.WithGrantManagement(op.GrantManagement{Actions, ActionRequired})` |
+  | `op.WithSupportedEncryptionAlgs(algs, encs)` | `op.WithSupportedEncryptionAlgs(op.EncryptionAlgs{KeyManagement, ContentEncryption})` |
+  | `op.WithPARLifetime(d)` | `op.WithPARTTL(d)` |
+  | `op.WithDeviceCodeExpiry(d)` | `op.WithDeviceCodeTTL(d)` |
+  | `op.WithClaimsParameterSupported(false)` | `op.WithClaimsParameterDisabled()`; the default is on, so `true` needs no option |
+  | `op.WithAllowLocalhostLoopback()` | `op.WithAllowLocalhostRedirectURIs()`, plus `op.WithAllowLocalhostIssuerForDev()` for a `localhost` issuer |
+  | `op.WithMTLSProxy(header, cidrs)` | `op.WithMTLSProxy(op.MTLSProxy{HeaderName, TrustedProxies})` |
+  | `op.MTLSProxyConfig(p)` | `(*op.Provider).MTLSProxy()` |
+  | `op.Resolver` | `op.LocaleResolver` |
 
 ## [v1.4.0] — 2026-10-23
 
