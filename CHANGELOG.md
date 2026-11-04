@@ -131,9 +131,27 @@ each one. The first v1.5.0 `Store.Migrate` call records an existing database
 whose schema is complete in the new version table; see `Changed`. A
 bring-your-own store behind a login flow with a password or second-factor step
 must implement `AuthnLockouts()` or be paired with
-`op.WithAuthnLockoutStore`, or `op.New` refuses to start.
+`op.WithAuthnLockoutStore`, or `op.New` refuses to start. A static
+`op.ConfidentialClient` whose plaintext `Secret` is shorter than 32 bytes
+must be given a new one from `op.NewClientSecret`, or `op.New` refuses to
+start.
 
 ### Security
+
+- A client listed in `op.WithFirstPartyClients` now skips the consent screen
+  when the request has to sign the user in first (no session, `prompt=login`,
+  `max_age` or an ACR step-up), not only when a session already exists. The
+  grant is bound to the subject that sign-in establishes and recorded as
+  `consent.granted.first_party`. `prompt=consent`, `offline_access`, a
+  navigation whose `Sec-Fetch-Site` is not trusted, new registration
+  (`prompt=create`) and the account chooser still show the consent screen.
+
+- **BREAKING:** `op.New` refuses a static `op.ConfidentialClient` whose
+  plaintext `Secret` is shorter than 32 bytes, the minimum OpenID Connect Core
+  §16.19 sets for a secret used as an HS256 key. `op.NewClientSecret` returns
+  a secret for `Secret` and a hash for `SecretHash`. `PreviousSecret` is
+  exempt, so a short secret can still be rotated out; `SecretHash`, clients
+  read from a store and dynamic registration are not affected.
 
 - An account picked at `prompt=select_account` now goes through the same
   `LoginFlow` rules, `Decider` and risk step-up as a returning session. A
@@ -234,6 +252,14 @@ must implement `AuthnLockouts()` or be paired with
   `store.StandardClaims` builds the map with the right types.
 
 ### Changed
+
+- `op.New` reports every missing or invalid required option in one error
+  (issuer, store, keyset, cookie keys and login flow), each still matched by
+  `errors.Is` against its sentinel. A single problem is returned as before.
+
+- A confidential client refused at `/authorize` for a missing
+  `code_challenge`, when only the active profile made PKCE mandatory, logs one
+  WARN per `client_id` naming `op.WithProfile(profile.OIDCCore)`.
 
 - **BREAKING:** an OP built without `op.WithProfile` now runs
   `profile.OAuth21`, so every authorization-code request needs PKCE. The
@@ -641,6 +667,14 @@ a later release records the release it was created at with that `INSERT` once.
   subject mapping to `op.WithJWTBearerGrant`.
 
 ### Added
+
+- `op.WithLoginUI(op.LoginUI{Template, ContentSecurityPolicy})` renders every
+  sign-in prompt other than consent, the account chooser and passkey through
+  an embedder template: password, TOTP, email OTP, recovery code, factor
+  choice, captcha, custom steps and `op.WithInteractions` prompts. The template
+  receives `interaction.LoginTemplateData`; `TemplateOverlayDriver` gains
+  `LoginTemplate` and `LoginCSP`. It is exclusive with `op.WithSPAUI`.
+  `examples/37-custom-login-ui` shows it.
 
 - The SQL adapter's version table `<prefix>schema_migrations`, written by
   `Store.Migrate`. Its columns and primary key match golang-migrate's version
@@ -1262,6 +1296,13 @@ The SQL adapter no longer closes the database it was handed.
 - **BREAKING:** `(*oidcsql.Store).Close`. The adapter wraps the `*sql.DB`
   the application opened and does not own it, so closing the application's
   shared pool was the wrong thing for it to do. Close the `*sql.DB` itself.
+
+The client builders lose a field they could only ever set to `false`.
+
+- **BREAKING:** `BackchannelLogoutSessionRequired` on `op.PublicClient`,
+  `op.ConfidentialClient` and `op.PrivateKeyJWTClient`. `op.New` already
+  refused `true`; delete the field. The dynamic-registration metadata field is
+  unchanged.
 
 ## [v1.4.0] — 2026-10-23
 
