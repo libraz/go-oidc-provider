@@ -116,6 +116,7 @@ github.com/libraz/go-oidc-provider/op	LoginContext.AAL	v1.5
 github.com/libraz/go-oidc-provider/op	LoginContext.SessionReused	v1.5
 github.com/libraz/go-oidc-provider/op	LoginFlow	v1.5
 github.com/libraz/go-oidc-provider/op	LoginFlow.Registration	v1.5
+github.com/libraz/go-oidc-provider/op	LoginUI	v1.5
 github.com/libraz/go-oidc-provider/op	LogoutUI	v1.5
 github.com/libraz/go-oidc-provider/op	MTLSProxy	v1.1
 github.com/libraz/go-oidc-provider/op	New	v1.0
@@ -234,6 +235,7 @@ github.com/libraz/go-oidc-provider/op	WithLocale	v1.0
 github.com/libraz/go-oidc-provider/op	WithLogger	v1.0
 github.com/libraz/go-oidc-provider/op	WithLoginAttemptObserver	v1.5
 github.com/libraz/go-oidc-provider/op	WithLoginFlow	v1.5
+github.com/libraz/go-oidc-provider/op	WithLoginUI	v1.5
 github.com/libraz/go-oidc-provider/op	WithLogoutUI	v1.5
 github.com/libraz/go-oidc-provider/op	WithMFAEncryptionKeys	v1.0
 github.com/libraz/go-oidc-provider/op	WithMTLSProxy	v1.0
@@ -271,6 +273,7 @@ github.com/libraz/go-oidc-provider/op/interaction	FactorOption	v1.5
 github.com/libraz/go-oidc-provider/op/interaction	FactorOption.LabelText	v1.5
 github.com/libraz/go-oidc-provider/op/interaction	FieldSpec.LabelText	v1.5
 github.com/libraz/go-oidc-provider/op/interaction	HiddenField	v1.5
+github.com/libraz/go-oidc-provider/op/interaction	LoginTemplateData	v1.5
 github.com/libraz/go-oidc-provider/op/interaction	LogoutConfirmTemplateData	v1.5
 github.com/libraz/go-oidc-provider/op/interaction	LogoutSignedOutTemplateData	v1.5
 github.com/libraz/go-oidc-provider/op/interaction	NormalizeCSP	v1.1
@@ -279,6 +282,8 @@ github.com/libraz/go-oidc-provider/op/interaction	PromptError	v1.5
 github.com/libraz/go-oidc-provider/op/interaction	PromptErrorCredentialsRejected	v1.5
 github.com/libraz/go-oidc-provider/op/interaction	PromptErrorMessageKey	v1.5
 github.com/libraz/go-oidc-provider/op/interaction	PromptTypeChooseFactor	v1.5
+github.com/libraz/go-oidc-provider/op/interaction	TemplateOverlayDriver.LoginCSP	v1.5
+github.com/libraz/go-oidc-provider/op/interaction	TemplateOverlayDriver.LoginTemplate	v1.5
 github.com/libraz/go-oidc-provider/op/passkeykit	*	v1.0
 github.com/libraz/go-oidc-provider/op/profile	MaxRequestObjectAge	v1.1
 github.com/libraz/go-oidc-provider/op/profile	OAuth21	v1.5
