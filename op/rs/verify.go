@@ -157,22 +157,65 @@ func (v *Verifier) verifyJWT(ctx context.Context, raw string) (*tokens.AccessTok
 	return claims, all, nil
 }
 
-// verifySignature checks the JWS header rules and the signature, and
-// returns the verified payload.
+// jwtKind names the issuer-signed JWT being verified; each has its own
+// typ header.
+type jwtKind int
+
+const (
+	jwtAccessToken jwtKind = iota
+	jwtIntrospection
+)
+
+// Reasons [Verifier.verifyIssuerJWS] rejects a JWS. An unreachable key set
+// is reported as the [*Error] the caller returns instead.
+var (
+	errJWSMalformed = errors.New("rs: not an acceptable JWS")
+	errJWSType      = errors.New("rs: unexpected typ header")
+	errJWSSignature = errors.New("rs: signature is not valid")
+)
+
+// verifySignature checks the JWS header rules and the signature of an
+// access token, and returns the verified payload.
+func (v *Verifier) verifySignature(ctx context.Context, raw string) ([]byte, *Error) {
+	payload, err := v.verifyIssuerJWS(ctx, raw, jwtAccessToken)
+	var e *Error
+	switch {
+	case err == nil:
+		return payload, nil
+	case errors.As(err, &e):
+		return nil, e
+	case errors.Is(err, errJWSType):
+		return nil, invalidToken("access token typ header is not at+jwt")
+	case errors.Is(err, errJWSSignature):
+		return nil, invalidToken("access token signature is not valid")
+	default:
+		return nil, invalidToken("access token is not an acceptable JWS")
+	}
+}
+
+// verifyIssuerJWS checks that raw is a JWS of the given kind signed by a
+// key in the issuer's JWK Set, and returns the verified payload.
 //
 // The alg is already inside the allow-list once jose.ParseSigned accepts
 // the token. A JWK that declares an alg must declare that same one, and a
 // JWK whose use is not "sig" never verifies. A kid the cached set does
 // not hold triggers one throttled refetch, which is how a key rotation
 // propagates.
-func (v *Verifier) verifySignature(ctx context.Context, raw string) ([]byte, *Error) {
+func (v *Verifier) verifyIssuerJWS(ctx context.Context, raw string, kind jwtKind) ([]byte, error) {
 	jws, alg, err := jose.ParseSigned(raw)
 	if err != nil {
-		return nil, invalidToken("access token is not an acceptable JWS")
+		return nil, errors.Join(errJWSMalformed, err)
 	}
 	sig := jws.Signatures[0]
-	if !tokens.ResourceServerTypHeaderMatches(sig) {
-		return nil, invalidToken("access token typ header is not at+jwt")
+	var typOK bool
+	switch kind {
+	case jwtAccessToken:
+		typOK = tokens.ResourceServerTypHeaderMatches(sig)
+	case jwtIntrospection:
+		typOK = isIntrospectionTyp(sig.Protected.ExtraHeaders["typ"])
+	}
+	if !typOK {
+		return nil, errJWSType
 	}
 	uri, e := v.jwksEndpoint(ctx)
 	if e != nil {
@@ -185,7 +228,7 @@ func (v *Verifier) verifySignature(ctx context.Context, raw string) ([]byte, *Er
 		set, err = v.keys.FetchFresh(ctx, uri)
 		if err != nil && errors.Is(err, rpjwks.ErrOverloaded) {
 			// Capacity pressure must not turn a held key set into a 503; the
-			// unknown kid is then rejected as an invalid token.
+			// unknown kid is then rejected as an invalid signature.
 			set, err = cached, nil
 		}
 	}
@@ -201,7 +244,14 @@ func (v *Verifier) verifySignature(ctx context.Context, raw string) ([]byte, *Er
 			return payload, nil
 		}
 	}
-	return nil, invalidToken("access token signature is not valid")
+	return nil, errJWSSignature
+}
+
+// isIntrospectionTyp reports whether a "typ" header value names an RFC
+// 9701 response, in its short or its full media-type form.
+func isIntrospectionTyp(typ any) bool {
+	s, _ := typ.(string)
+	return strings.EqualFold(s, typIntrospectionJWT) || strings.EqualFold(s, mediaTypeIntrospectionJWT)
 }
 
 // keyEligible reports whether a JWK may verify a JWS with header kid and

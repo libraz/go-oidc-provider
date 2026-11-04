@@ -292,6 +292,13 @@ func newProofKey(t *testing.T, alg josev4.SignatureAlgorithm) proofKey {
 // accessToken adds the matching ath claim.
 func (k proofKey) proof(t *testing.T, method, htu string, iat time.Time, accessToken string) string {
 	t.Helper()
+	return k.proofWithNonce(t, method, htu, iat, accessToken, "")
+}
+
+// proofWithNonce is proof with a server-provided nonce claim; an empty
+// nonce omits it.
+func (k proofKey) proofWithNonce(t *testing.T, method, htu string, iat time.Time, accessToken, nonce string) string {
+	t.Helper()
 	opts := (&josev4.SignerOptions{}).
 		WithType("dpop+jwt").
 		WithHeader("jwk", josev4.JSONWebKey{Key: k.priv.Public()})
@@ -308,6 +315,9 @@ func (k proofKey) proof(t *testing.T, method, htu string, iat time.Time, accessT
 	if accessToken != "" {
 		sum := sha256.Sum256([]byte(accessToken))
 		claims["ath"] = base64.RawURLEncoding.EncodeToString(sum[:])
+	}
+	if nonce != "" {
+		claims["nonce"] = nonce
 	}
 	payload, err := json.Marshal(claims)
 	if err != nil {

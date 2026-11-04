@@ -6,9 +6,13 @@ import (
 	"errors"
 	"net/http"
 	"net/url"
+	"slices"
 	"strings"
 
+	"github.com/libraz/go-oidc-provider/internal/clientauth"
+	"github.com/libraz/go-oidc-provider/internal/jose"
 	"github.com/libraz/go-oidc-provider/internal/rpjwks"
+	"github.com/libraz/go-oidc-provider/internal/securefetch"
 	"github.com/libraz/go-oidc-provider/internal/tokens"
 )
 
@@ -18,7 +22,24 @@ type serverMetadata struct {
 	Issuer                string `json:"issuer"`
 	JWKSURI               string `json:"jwks_uri"`
 	IntrospectionEndpoint string `json:"introspection_endpoint"`
+	MTLSEndpointAliases   struct {
+		IntrospectionEndpoint string `json:"introspection_endpoint"`
+	} `json:"mtls_endpoint_aliases"`
 }
+
+// mediaTypeIntrospectionJWT is the RFC 9701 §5 response media type, and
+// typIntrospectionJWT the "typ" header such a response carries (§6).
+const (
+	mediaTypeIntrospectionJWT = "application/token-introspection+jwt"
+	typIntrospectionJWT       = "token-introspection+jwt"
+)
+
+// introspectionAccept prefers the RFC 9701 JWT response and admits JSON.
+const introspectionAccept = mediaTypeIntrospectionJWT + ", application/json;q=0.5"
+
+// errIntrospectionJWT reports a JWT introspection response whose claims
+// the verifier cannot accept.
+var errIntrospectionJWT = errors.New("rs: unacceptable introspection response JWT")
 
 // errMetadata reports a discovery document the verifier cannot use.
 var errMetadata = errors.New("rs: unusable discovery document")
@@ -34,10 +55,16 @@ func (v *Verifier) introspect(ctx context.Context, raw string) (*tokens.AccessTo
 	if e != nil {
 		return nil, nil, e
 	}
-	body, err := v.postIntrospection(ctx, endpoint, raw)
+	body, contentType, err := v.postIntrospection(ctx, endpoint, raw)
 	if err != nil {
 		v.logFault("introspection request failed", err)
 		return nil, nil, unavailable("token introspection is unavailable")
+	}
+	if securefetch.ContentTypeAllowed(contentType, []string{mediaTypeIntrospectionJWT}) {
+		if body, err = v.openIntrospectionJWT(ctx, string(body)); err != nil {
+			v.logFault("introspection response JWT is not acceptable", err)
+			return nil, nil, unavailable("token introspection is unavailable")
+		}
 	}
 	var all map[string]any
 	if err := json.Unmarshal(body, &all); err != nil {
@@ -64,19 +91,69 @@ func (v *Verifier) introspect(ctx context.Context, raw string) (*tokens.AccessTo
 	return claims, all, nil
 }
 
-// postIntrospection sends the RFC 7662 §2.1 request, authenticated with
-// client_secret_basic (RFC 6749 §2.3.1 form-encodes both halves).
-func (v *Verifier) postIntrospection(ctx context.Context, endpoint, raw string) ([]byte, error) {
+// postIntrospection sends the RFC 7662 §2.1 request and returns the
+// response body and Content-Type. The client authenticates with
+// private_key_jwt (RFC 7523 §2.2), mutual TLS (RFC 8705 §2, the
+// certificate rides on the connection) or client_secret_basic (RFC 6749
+// §2.3.1 form-encodes both halves).
+func (v *Verifier) postIntrospection(ctx context.Context, endpoint, raw string) ([]byte, string, error) {
+	in := v.introspection
 	form := url.Values{"token": {raw}, "token_type_hint": {"access_token"}}
-	req, err := v.fetch.NewRequest(ctx, http.MethodPost, endpoint, strings.NewReader(form.Encode()))
+	switch {
+	case v.assertion != nil:
+		assertion, err := v.assertion.sign(v.clock.Now())
+		if err != nil {
+			return nil, "", err
+		}
+		form.Set("client_id", in.ClientID)
+		form.Set("client_assertion_type", clientauth.AssertionType)
+		form.Set("client_assertion", assertion)
+	case in.TLSCertificate != nil:
+		form.Set("client_id", in.ClientID)
+	}
+	req, err := v.introspectFetch.NewRequest(ctx, http.MethodPost, endpoint, strings.NewReader(form.Encode()))
+	if err != nil {
+		return nil, "", err
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("Accept", introspectionAccept)
+	if in.ClientSecret != "" {
+		req.SetBasicAuth(url.QueryEscape(in.ClientID), url.QueryEscape(in.ClientSecret))
+	}
+	body, resp, err := v.introspectFetch.Do(req) //nolint:bodyclose // securefetch.Do drains and closes the body internally.
+	if err != nil {
+		return nil, "", err
+	}
+	return body, resp.Header.Get("Content-Type"), nil
+}
+
+// openIntrospectionJWT verifies an RFC 9701 response against the issuer's
+// JWK Set and returns its token_introspection member as JSON. The JWT must
+// name this issuer and be addressed to the introspecting client (§5).
+func (v *Verifier) openIntrospectionJWT(ctx context.Context, raw string) ([]byte, error) {
+	payload, err := v.verifyIssuerJWS(ctx, raw, jwtIntrospection)
 	if err != nil {
 		return nil, err
 	}
-	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	req.Header.Set("Accept", "application/json")
-	req.SetBasicAuth(url.QueryEscape(v.introspection.ClientID), url.QueryEscape(v.introspection.ClientSecret))
-	body, _, err := v.fetch.Do(req) //nolint:bodyclose // securefetch.Do drains and closes the body internally.
-	return body, err
+	var envelope struct {
+		Issuer   string          `json:"iss"`
+		Audience json.RawMessage `json:"aud"`
+		Response json.RawMessage `json:"token_introspection"`
+	}
+	if err := json.Unmarshal(payload, &envelope); err != nil {
+		return nil, errors.Join(errIntrospectionJWT, err)
+	}
+	if envelope.Issuer != v.issuer {
+		return nil, errors.Join(errIntrospectionJWT, errors.New("iss does not match Config.Issuer"))
+	}
+	aud, err := jose.DecodeAudience(envelope.Audience)
+	if err != nil || !slices.Contains(aud, v.introspection.ClientID) {
+		return nil, errors.Join(errIntrospectionJWT, errors.New("aud does not name the introspecting client"))
+	}
+	if len(envelope.Response) == 0 || envelope.Response[0] != '{' {
+		return nil, errors.Join(errIntrospectionJWT, errors.New("token_introspection is not an object"))
+	}
+	return envelope.Response, nil
 }
 
 // jwksEndpoint returns the configured JWK Set URL, or the discovered one.
@@ -103,6 +180,11 @@ func (v *Verifier) introspectionEndpoint(ctx context.Context) (string, *Error) {
 	meta, e := v.metadata(ctx)
 	if e != nil {
 		return "", e
+	}
+	// A client authenticating with mutual TLS uses the alias when the
+	// issuer publishes one (RFC 8705 §5).
+	if alias := meta.MTLSEndpointAliases.IntrospectionEndpoint; alias != "" && v.introspection.TLSCertificate != nil {
+		return alias, nil
 	}
 	if meta.IntrospectionEndpoint == "" {
 		return "", unavailable("the issuer publishes no introspection_endpoint")
@@ -156,6 +238,7 @@ func (v *Verifier) discover(ctx context.Context) (*serverMetadata, error) {
 	for _, ep := range [...]struct{ name, raw string }{
 		{"jwks_uri", meta.JWKSURI},
 		{"introspection_endpoint", meta.IntrospectionEndpoint},
+		{"mtls_endpoint_aliases.introspection_endpoint", meta.MTLSEndpointAliases.IntrospectionEndpoint},
 	} {
 		if ep.raw == "" {
 			continue

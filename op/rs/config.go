@@ -1,6 +1,8 @@
 package rs
 
 import (
+	"crypto"
+	"crypto/tls"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -13,6 +15,7 @@ import (
 
 	"github.com/libraz/go-oidc-provider/internal/dpop"
 	"github.com/libraz/go-oidc-provider/internal/mtls"
+	"github.com/libraz/go-oidc-provider/internal/nilcheck"
 	"github.com/libraz/go-oidc-provider/internal/rpjwks"
 	"github.com/libraz/go-oidc-provider/internal/securefetch"
 	"github.com/libraz/go-oidc-provider/internal/timex"
@@ -81,7 +84,8 @@ type Config struct {
 	AllowPrivateNetwork bool
 
 	// Introspection enables RFC 7662 introspection for access tokens that
-	// are not JWTs. Nil rejects every non-JWT token as invalid_token.
+	// are not JWTs. Nil rejects every non-JWT token as invalid_token. See
+	// [IntrospectionConfig] for the client authentication methods.
 	Introspection *IntrospectionConfig
 
 	// DPoP selects the DPoP posture. The zero value is [DPoPAllowed].
@@ -111,7 +115,16 @@ type Config struct {
 }
 
 // IntrospectionConfig configures RFC 7662 introspection of opaque access
-// tokens. The resource server authenticates with client_secret_basic.
+// tokens. Exactly one client authentication method is set: ClientSecret
+// (client_secret_basic), PrivateKey (private_key_jwt, RFC 7523) or
+// TLSCertificate (tls_client_auth / self_signed_tls_client_auth, RFC 8705).
+// An OP running a FAPI 2.0 profile refuses client_secret_basic, so a FAPI
+// deployment sets PrivateKey or TLSCertificate.
+//
+// The request asks for an RFC 9701 JWT response and accepts plain JSON.
+// A JWT response must carry typ "token-introspection+jwt", be signed by a
+// key in the issuer's JWK Set, name Issuer as "iss" and ClientID in "aud";
+// its token_introspection member is then read like a JSON response.
 //
 // The OP answers with the token's contents only when the authenticating
 // client is listed in the IntrospectionClients of a protected resource
@@ -135,8 +148,29 @@ type IntrospectionConfig struct {
 	// Required.
 	ClientID string
 
-	// ClientSecret is that client's secret. Required.
+	// ClientSecret selects client_secret_basic with this secret.
 	ClientSecret string
+
+	// PrivateKey selects private_key_jwt: each request carries a client
+	// assertion signed with this key, with iss and sub set to ClientID and
+	// aud set to Config.Issuer. The key is ECDSA P-256 (ES256), RSA of at
+	// least 2048 bits (PS256) or Ed25519 (EdDSA).
+	PrivateKey crypto.Signer
+
+	// KeyID is the "kid" header of the client assertion, naming the
+	// PrivateKey's public key in the client's registered JWK Set.
+	// Required with PrivateKey.
+	KeyID string
+
+	// TLSCertificate selects mutual-TLS client authentication: the
+	// certificate is presented on the connection to the introspection
+	// endpoint. When Endpoint is empty, the discovery document's
+	// "mtls_endpoint_aliases" introspection_endpoint is preferred over
+	// "introspection_endpoint". The TLS settings of Config.HTTPClient's
+	// transport are kept when it is an [*http.Transport]; any other
+	// round-tripper is replaced by a clone of [http.DefaultTransport]
+	// without its environment proxy.
+	TLSCertificate *tls.Certificate
 }
 
 // Verifier checks access tokens for one resource server. It is safe for
@@ -157,6 +191,11 @@ type Verifier struct {
 	keys   *rpjwks.Fetcher
 	fetch  *securefetch.Client
 	rule   schemeRule
+
+	// introspectFetch carries introspection requests: it accepts the RFC
+	// 9701 JWT media type and, under mTLS, presents the client certificate.
+	introspectFetch *securefetch.Client
+	assertion       *clientAssertion
 
 	metaMu       sync.Mutex
 	meta         *serverMetadata
@@ -209,32 +248,46 @@ func New(cfg Config) (*Verifier, error) {
 		OptIn:               optInAllowPrivateNetwork,
 		BaseTransport:       transport,
 	})
-	fetch := securefetch.NewClient(securefetch.Policy{
+	policy := securefetch.Policy{
 		AllowPrivateNetwork: cfg.AllowPrivateNetwork,
 		OptIn:               optInAllowPrivateNetwork,
 		AllowedSchemes:      rule.schemes(),
 		AcceptContentTypes:  []string{"application/json"},
 		Timeout:             timeout,
 		BaseTransport:       transport,
-	})
-	var introspection *IntrospectionConfig
+	}
+	fetch := securefetch.NewClient(policy)
+	var (
+		introspection   *IntrospectionConfig
+		introspectFetch *securefetch.Client
+		assertion       *clientAssertion
+	)
 	if cfg.Introspection != nil {
 		c := *cfg.Introspection
 		introspection = &c
+		introspectFetch = newIntrospectFetch(c, policy)
+		if !nilcheck.IsNil(c.PrivateKey) {
+			assertion, err = newClientAssertion(c.ClientID, c.KeyID, cfg.Issuer, c.PrivateKey)
+			if err != nil {
+				return nil, fmt.Errorf("rs: Config.Introspection.PrivateKey: %w", err)
+			}
+		}
 	}
 	return &Verifier{
-		issuer:        cfg.Issuer,
-		audience:      cfg.Audience,
-		jwksURI:       cfg.JWKSURI,
-		introspection: introspection,
-		dpopMode:      cfg.DPoP,
-		clock:         clock,
-		logger:        cfg.Logger,
-		dpop:          dv,
-		mtls:          mv,
-		keys:          keys,
-		fetch:         fetch,
-		rule:          rule,
+		issuer:          cfg.Issuer,
+		audience:        cfg.Audience,
+		jwksURI:         cfg.JWKSURI,
+		introspection:   introspection,
+		introspectFetch: introspectFetch,
+		assertion:       assertion,
+		dpopMode:        cfg.DPoP,
+		clock:           clock,
+		logger:          cfg.Logger,
+		dpop:            dv,
+		mtls:            mv,
+		keys:            keys,
+		fetch:           fetch,
+		rule:            rule,
 	}, nil
 }
 
@@ -284,8 +337,28 @@ func (c Config) validateIntrospection(rule schemeRule) error {
 	if in == nil {
 		return nil
 	}
-	if in.ClientID == "" || in.ClientSecret == "" {
-		return errors.New("rs: Config.Introspection requires ClientID and ClientSecret")
+	if in.ClientID == "" {
+		return errors.New("rs: Config.Introspection requires ClientID")
+	}
+	methods := 0
+	for _, set := range [...]bool{in.ClientSecret != "", !nilcheck.IsNil(in.PrivateKey), in.TLSCertificate != nil} {
+		if set {
+			methods++
+		}
+	}
+	if methods != 1 {
+		return errors.New("rs: Config.Introspection requires exactly one of ClientSecret, PrivateKey and TLSCertificate")
+	}
+	if !nilcheck.IsNil(in.PrivateKey) {
+		if in.KeyID == "" {
+			return errors.New("rs: Config.Introspection.PrivateKey requires KeyID")
+		}
+		if _, ok := assertionAlg(in.PrivateKey); !ok {
+			return errors.New("rs: Config.Introspection.PrivateKey must be an ECDSA P-256, RSA (2048 bits or more) or Ed25519 key")
+		}
+	}
+	if c := in.TLSCertificate; c != nil && (len(c.Certificate) == 0 || c.PrivateKey == nil) {
+		return errors.New("rs: Config.Introspection.TLSCertificate requires a certificate and its private key")
 	}
 	if in.Endpoint != "" {
 		return rule.check("Config.Introspection.Endpoint", in.Endpoint)

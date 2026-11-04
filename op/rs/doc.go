@@ -19,7 +19,12 @@
 //     of RS256, PS256, ES256 and EdDSA and, when the JWK declares an alg,
 //     equal to it; "none" and the HMAC family are never accepted.
 //   - Opaque access tokens, through RFC 7662 introspection when
-//     [Config.Introspection] is set.
+//     [Config.Introspection] is set. The resource server authenticates
+//     with client_secret_basic, private_key_jwt (RFC 7523) or mutual TLS
+//     (RFC 8705); a FAPI 2.0 OP accepts only the latter two. An RFC 9701
+//     JWT response is verified against the issuer's JWK Set, and must
+//     name the issuer and the introspecting client, before its
+//     token_introspection member is read like a JSON response.
 //   - Sender constraints: a token whose cnf carries "jkt" must arrive under
 //     the DPoP scheme with a valid proof for the same key (RFC 9449 §7); a
 //     token whose cnf carries "x5t#S256" must arrive over a connection
