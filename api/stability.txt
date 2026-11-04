@@ -143,7 +143,6 @@ github.com/libraz/go-oidc-provider/op	PtrBool	v1.0
 github.com/libraz/go-oidc-provider/op	PublicClient.DefaultACRValues	v1.5
 github.com/libraz/go-oidc-provider/op	PublicClient.DefaultMaxAge	v1.5
 github.com/libraz/go-oidc-provider/op	PublicClient.RequireAuthTime	v1.5
-github.com/libraz/go-oidc-provider/op	RegisterTokenExchange	v1.0
 github.com/libraz/go-oidc-provider/op	Reloadable	v1.5
 github.com/libraz/go-oidc-provider/op	Reloadable.Provider	v1.5
 github.com/libraz/go-oidc-provider/op	Reloadable.Reload	v1.5
@@ -261,6 +260,7 @@ github.com/libraz/go-oidc-provider/op	WithStore	v1.0
 github.com/libraz/go-oidc-provider/op	WithStrictOfflineAccess	v1.0
 github.com/libraz/go-oidc-provider/op	WithSubjectGenerator	v1.0
 github.com/libraz/go-oidc-provider/op	WithSupportedEncryptionAlgs	v1.0
+github.com/libraz/go-oidc-provider/op	WithTokenExchange	v1.5
 github.com/libraz/go-oidc-provider/op	WithTrustedProxies	v1.0
 github.com/libraz/go-oidc-provider/op	WithTrustedProxyHosts	v1.0
 github.com/libraz/go-oidc-provider/op	WithUserStore	v1.0
