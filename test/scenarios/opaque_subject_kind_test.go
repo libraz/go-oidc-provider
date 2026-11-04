@@ -63,7 +63,7 @@ func newSubjectKindProvider(t *testing.T, format op.AccessTokenFormat) (*testkit
 		op.WithFeature(feature.Introspect),
 		op.WithGrants(grant.AuthorizationCode, grant.RefreshToken, grant.ClientCredentials),
 		op.WithCustomGrant(handler),
-		op.RegisterTokenExchange(txAllowAllPolicy{}),
+		op.WithTokenExchange(txAllowAllPolicy{}),
 		op.WithDeviceCodeGrant(),
 		op.WithCIBA(op.WithCIBAHintResolver(cibaHintResolver{})),
 	))

@@ -49,7 +49,7 @@ func builtinGrantTypeWireSet() map[string]struct{} {
 // it is not appended at the end.
 //
 // Token exchange is the one wire with no [grant.Type] constant: it is
-// enabled through [RegisterTokenExchange] rather than [WithGrants] and
+// enabled through [WithTokenExchange] rather than [WithGrants] and
 // its handler rides the extension dispatcher, where a same-named
 // custom registration would win the lookup outright. It is added by
 // name, and a test pins the result against every extension grant the
@@ -172,7 +172,7 @@ func (c *config) customGrantHandlers() []CustomGrantHandler {
 	return out
 }
 
-// RegisterTokenExchange enables the RFC 8693 token-exchange grant_type
+// WithTokenExchange enables the RFC 8693 token-exchange grant_type
 // at the token endpoint, gated by the supplied [TokenExchangePolicy].
 // The provider verifies subject_token / actor_token, normalises the
 // requested audience, intersects the requested scope with the
@@ -187,14 +187,14 @@ func (c *config) customGrantHandlers() []CustomGrantHandler {
 //
 //   - [ErrTokenExchangePolicyNil] — policy is nil. Token-exchange
 //     requires an explicit deny-by-default hook.
-//   - [ErrTokenExchangeDuplicate] — RegisterTokenExchange was already
+//   - [ErrTokenExchangeDuplicate] — WithTokenExchange was already
 //     invoked. The grant_type has a single canonical URN; a second
 //     registration would shadow the first silently.
 //
-// Stable since v1.0.
-func RegisterTokenExchange(policy TokenExchangePolicy) Option {
+// Stable since v1.5.
+func WithTokenExchange(policy TokenExchangePolicy) Option {
 	return optionFunc(func(c *config) error {
-		if err := c.claimOnce("RegisterTokenExchange"); err != nil {
+		if err := c.claimOnce("WithTokenExchange"); err != nil {
 			if errors.Is(err, errShadowedDefault) {
 				return err
 			}

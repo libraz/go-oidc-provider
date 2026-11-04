@@ -104,7 +104,7 @@ func buildProvider(issuer string) (*op.Provider, error) {
 		// defaults; the dispatcher caps the TTL at the global
 		// access-token ceiling (1 h by default), and we narrow further
 		// here to keep the chain short-lived.
-		op.RegisterTokenExchange(downscopePolicy{
+		op.WithTokenExchange(downscopePolicy{
 			maxTTL: tokenExchangeMaxLifetime,
 		}),
 		// Register the public scopes service-b serves so the auth-code

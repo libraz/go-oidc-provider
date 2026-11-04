@@ -85,7 +85,7 @@ func TestTokenExchange_SubjectRevokedDuringIssuance_LeavesNoLiveRefreshToken(t *
 				op.WithStore(decorated),
 				op.WithAccessTokenRevocationStrategy(strategy),
 				op.WithFeature(feature.Introspect),
-				op.RegisterTokenExchange(txDecisionPolicy{decision: &op.TokenExchangeDecision{IssueRefreshToken: op.PtrBool(true)}}),
+				op.WithTokenExchange(txDecisionPolicy{decision: &op.TokenExchangeDecision{IssueRefreshToken: op.PtrBool(true)}}),
 			))
 			tk.Store = backing
 			hash, err := op.HashClientSecret(glSecret)

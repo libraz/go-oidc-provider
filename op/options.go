@@ -627,11 +627,11 @@ type config struct {
 	customGrants []CustomGrantHandler
 
 	// tokenExchangePolicy stores the [TokenExchangePolicy] the embedder
-	// supplied through [RegisterTokenExchange]. Nil means token-exchange
+	// supplied through [WithTokenExchange]. Nil means token-exchange
 	// is not enabled on this provider; non-nil means the dispatcher
 	// hosts the in-tree RFC 8693 handler with the policy as its admission
 	// hook. At most one policy may be registered; a second
-	// [RegisterTokenExchange] call yields [ErrTokenExchangeDuplicate].
+	// [WithTokenExchange] call yields [ErrTokenExchangeDuplicate].
 	tokenExchangePolicy TokenExchangePolicy
 
 	// idjagIssuancePolicy stores the [IDJAGIssuancePolicy] supplied

@@ -8,7 +8,7 @@ package scenarios_test
 //   - RFC 9449 — OAuth 2.0 DPoP
 //   - RFC 8705 — OAuth 2.0 Mutual-TLS Client Authentication
 //
-// The TX rows exercise op.RegisterTokenExchange end-to-end. Each test
+// The TX rows exercise op.WithTokenExchange end-to-end. Each test
 // stands up a testkit provider, mints a subject_token directly with
 // the OP signing key (via the access-token signer), registers the
 // shadow row in the inmem store so revocation gates fire, and POSTs
@@ -120,7 +120,7 @@ func newTXProviderOpts(t *testing.T, policy op.TokenExchangePolicy, extra ...op.
 		t.Fatalf("HashClientSecret: %v", err)
 	}
 	opts := make([]op.Option, 0, 1+len(extra))
-	opts = append(opts, op.RegisterTokenExchange(policy))
+	opts = append(opts, op.WithTokenExchange(policy))
 	opts = append(opts, extra...)
 	tk := testkit.NewProvider(t, testkit.WithOptions(opts...))
 	caller := tk.RegisterClient(t, testkit.ClientFixture{
@@ -1034,9 +1034,9 @@ func TestTokenExchange_AccessTokenStandardExtrasDropped(t *testing.T) {
 	}
 }
 
-func TestScenario_TX_024_RegisterTokenExchangeRequiredAtNew(t *testing.T) {
+func TestScenario_TX_024_WithTokenExchangeRequiredAtNew(t *testing.T) {
 	t.Parallel()
-	_, err := op.New(testkit.MinimalOptions(t, op.RegisterTokenExchange(nil))...)
+	_, err := op.New(testkit.MinimalOptions(t, op.WithTokenExchange(nil))...)
 	if !errors.Is(err, op.ErrTokenExchangePolicyNil) {
 		t.Fatalf("op.New err=%v, want %v", err, op.ErrTokenExchangePolicyNil)
 	}

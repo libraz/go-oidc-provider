@@ -19,7 +19,7 @@ const TokenExchangeGrantType = "urn:ietf:params:oauth:grant-type:token-exchange"
 
 // TokenExchangePolicy decides which subject / actor combinations may
 // exchange tokens, and what the issued credential may carry. The
-// interface is the embedder seam mandated by [RegisterTokenExchange];
+// interface is the embedder seam mandated by [WithTokenExchange];
 // the provider rejects op.New when the option is supplied with a nil
 // policy, so deployments cannot accidentally enable token-exchange
 // without a deny-by-default hook.

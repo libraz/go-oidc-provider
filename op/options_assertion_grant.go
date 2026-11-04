@@ -66,7 +66,7 @@ func cloneJWTBearerGrant(g JWTBearerGrant) *JWTBearerGrant {
 // with invalid_request.
 //
 // The option enables the token-exchange grant type on its own; it does
-// not require [RegisterTokenExchange]. p MUST be non-nil, and the option
+// not require [WithTokenExchange]. p MUST be non-nil, and the option
 // may be supplied at most once.
 //
 // Experimental: tracks an IETF draft, so the surface MAY change in a

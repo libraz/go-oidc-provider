@@ -284,8 +284,8 @@ func TestPublicAuthnOptions_RejectTypedNilDependencies(t *testing.T) {
 		},
 		{
 			name:   "token-exchange-policy",
-			field:  "RegisterTokenExchange",
-			option: op.RegisterTokenExchange(typedNilFrom[op.TokenExchangePolicy](t, &typedNilTokenExchangePolicy{})),
+			field:  "WithTokenExchange",
+			option: op.WithTokenExchange(typedNilFrom[op.TokenExchangePolicy](t, &typedNilTokenExchangePolicy{})),
 		},
 		{
 			name:   "static-client-seed",

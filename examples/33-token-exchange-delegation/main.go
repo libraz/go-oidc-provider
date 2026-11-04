@@ -4,7 +4,7 @@
 // Token Exchange in the canonical on-behalf-of (delegation) shape.
 // Three actors live in one process:
 //
-//   - The OP (gated by [op.RegisterTokenExchange]) on an ephemeral
+//   - The OP (gated by [op.WithTokenExchange]) on an ephemeral
 //     loopback port.
 //   - Service A — the "exchanger". A confidential client that already
 //     holds a user's access_token (issued for service-a's audience)

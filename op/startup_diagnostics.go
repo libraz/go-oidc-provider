@@ -83,7 +83,7 @@ func (c *config) enabledGrantWires() map[string]struct{} {
 // given wire form.
 func seedGrantActivation(wire string) string {
 	if wire == TokenExchangeGrantType {
-		return "RegisterTokenExchange(...)"
+		return "WithTokenExchange(...)"
 	}
 	for _, g := range []grant.Type{
 		grant.AuthorizationCode, grant.RefreshToken, grant.ClientCredentials,

@@ -128,7 +128,7 @@ func newIJGIdP(t *testing.T, cfg ijgIDPConfig, tk ...testkit.Option) *ijgIDP {
 		op.WithAuditLogger(jbgAuditLogger(idp.audit)),
 	}
 	if cfg.accessTokenExchangeOnly {
-		opts = append(opts, op.RegisterTokenExchange(txAllowAllPolicy{}))
+		opts = append(opts, op.WithTokenExchange(txAllowAllPolicy{}))
 	} else {
 		opts = append(opts, op.WithIDJAGIssuance(idp.policy))
 	}

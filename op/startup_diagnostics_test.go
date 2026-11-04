@@ -75,13 +75,13 @@ func TestNew_WarnsOncePerUnenabledSeedGrant(t *testing.T) {
 			name:       "token exchange not registered",
 			opts:       []op.Option{seedWithGrants("authorization_code", op.TokenExchangeGrantType)},
 			wantLines:  1,
-			wantInLine: []string{"level=WARN", "seed-app", op.TokenExchangeGrantType, "RegisterTokenExchange(...)"},
+			wantInLine: []string{"level=WARN", "seed-app", op.TokenExchangeGrantType, "WithTokenExchange(...)"},
 		},
 		{
 			name: "token exchange registered",
 			opts: []op.Option{
 				seedWithGrants("authorization_code", op.TokenExchangeGrantType),
-				op.RegisterTokenExchange(allowAllTokenExchange{}),
+				op.WithTokenExchange(allowAllTokenExchange{}),
 			},
 		},
 		{

@@ -393,7 +393,7 @@ var ErrCustomGrantNameEmpty = &Error{
 // grant_type the token endpoint routes natively — one per constant of
 // the grant.Type enumeration — together with each extension grant the
 // OP ships a handler for, such as the RFC 8693 token exchange enabled
-// by [RegisterTokenExchange]. The set is a property of the library
+// by [WithTokenExchange]. The set is a property of the library
 // rather than of the deployment, so a registration is refused whether
 // or not the colliding grant is enabled on this provider.
 //
@@ -432,24 +432,24 @@ var ErrCustomGrantSecretLikeExempt = &Error{
 	Description: "ParamPolicy.DupesAllowed names a security-sensitive parameter that cannot be exempted",
 }
 
-// ErrTokenExchangePolicyNil is returned when [RegisterTokenExchange]
+// ErrTokenExchangePolicyNil is returned when [WithTokenExchange]
 // is called with a nil [TokenExchangePolicy]. Token-exchange admission
 // requires an explicit deny-by-default decision hook; the OP refuses
 // the registration so a deployment cannot accidentally enable
 // RFC 8693 exchange without naming the policy that gates it.
 var ErrTokenExchangePolicyNil = &Error{
 	Code:        codeConfiguration,
-	Description: "RegisterTokenExchange requires a non-nil TokenExchangePolicy",
+	Description: "WithTokenExchange requires a non-nil TokenExchangePolicy",
 }
 
-// ErrTokenExchangeDuplicate is returned when [RegisterTokenExchange]
+// ErrTokenExchangeDuplicate is returned when [WithTokenExchange]
 // is called more than once. Token-exchange has a single canonical
 // grant_type URN so a second registration would shadow the first
 // silently; the OP refuses the duplicate so the misconfiguration
 // surfaces at construction time.
 var ErrTokenExchangeDuplicate = &Error{
 	Code:        codeConfiguration,
-	Description: "RegisterTokenExchange was already invoked on this configuration",
+	Description: "WithTokenExchange was already invoked on this configuration",
 }
 
 // newConfigurationError returns a fresh configuration_error wrapping
