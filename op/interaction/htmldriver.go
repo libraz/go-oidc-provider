@@ -112,7 +112,7 @@ func (d HTMLDriver) Render(w http.ResponseWriter, _ *http.Request, prompt Prompt
 	// body is assembled exclusively by buildHTMLDocument, which applies
 	// html.EscapeString at every prompt- and translator-controlled emission
 	// site. Keeping the final write whole preserves deterministic output.
-	if _, err := io.WriteString(w, body); err != nil {
+	if _, err := io.WriteString(w, body); err != nil { //nolint:gosec // G705: every emission site in buildHTMLDocument escapes its input.
 		return fmt.Errorf("interaction: render html prompt: %w", err)
 	}
 	return nil

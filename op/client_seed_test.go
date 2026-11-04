@@ -209,7 +209,7 @@ func TestStaticClientDefaults_NegativeMaxAgeRejected(t *testing.T) {
 			return op.PublicClient{ID: "rp-age", DefaultMaxAge: m}
 		},
 		"confidential": func(m *int64) op.ClientSeed {
-			return op.ConfidentialClient{ID: "rp-age", Secret: "rp-age-secret-0123456789-abcdefghijklmnopqrstu", DefaultMaxAge: m}
+			return op.ConfidentialClient{ID: "rp-age", Secret: "rp-age-secret-0123456789-abcdefghijklmnopqrstu", DefaultMaxAge: m} //nolint:gosec // G101: test fixture secret, not a credential.
 		},
 		"private_key_jwt": func(m *int64) op.ClientSeed {
 			return op.PrivateKeyJWTClient{ID: "rp-age", JWKS: []byte(`{"keys":[]}`), DefaultMaxAge: m}
