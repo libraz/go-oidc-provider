@@ -2,25 +2,23 @@
 
 <!-- Generated from tables.go by TestTablesDoc; regenerate with `go test -run TestTablesDoc -update .` in op/storeadapter/sql. -->
 
-Apply every migration file (a new database applies them all). Create every
-table whatever your configuration uses; the unused ones stay empty. The only
-column you add to your own users table is an opaque subject, when it lacks
-one.
+Two things to do, whatever your configuration:
 
-With your own user store, `oidc_users` stays empty: the OP reads users through
-your `store.UserStore` and writes to that table only through the bundled one.
+- **Apply every file from `Store.Migrations()`.** It creates all the tables
+  below; the ones your configuration does not use stay empty.
+- **Give your users table an opaque subject column, if it lacks one.** It is
+  the only change to your own tables. An identifier assigned once and never
+  reused already qualifies; an auto-increment id or an email address does not.
 
-`op.New` checks, at construction, the tables the configuration uses (the
-"Checked when" column) and names any that are missing. Run against an empty
-database, its error lists every table your configuration needs in one pass.
-`Store.ValidateSchema`, the deploy gate, checks every table, and the release
-files under `migrations/<dialect>` alter optional tables too. A table checked
-always must exist even while it stays empty; its row says what reaches it.
-`WithTablePrefix` replaces the `oidc_` prefix of every name and `WithNaming`
-renames one table through its key; the columns are fixed. Your users table
-needs no new column when it already has an opaque identifier that is assigned
-once and never reused: the OP only needs that subject from it. A table keyed
-only by an auto-increment id or an email address adds one such column.
+With your own user store, `oidc_users` exists but stays empty and needs no
+sync: the OP reads users through your `store.UserStore`.
+
+`op.New` checks the tables the configuration uses (the "Checked when"
+column) and names every missing one in a single error, so a run against an
+empty database lists what the configuration needs. `Store.ValidateSchema`,
+the deploy gate, checks every table. `WithTablePrefix` replaces the `oidc_`
+prefix of every name and `WithNaming` renames one table through its key; the
+columns are fixed.
 
 ## Which tables a configuration reads
 
