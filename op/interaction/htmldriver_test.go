@@ -308,16 +308,16 @@ func TestHTMLDriver_RenderDeterministic(t *testing.T) {
 	if first != second {
 		t.Errorf("Render is not deterministic\nfirst:  %s\nsecond: %s", first, second)
 	}
-	// Field inputs MUST appear in name-sorted order so the golden test
-	// is stable regardless of the slice the caller hands in.
+	// Field inputs MUST keep the order the authenticator listed them in,
+	// so a login form shows the identifier above the password.
 	idxAlpha := strings.Index(first, `name="alpha"`)
 	idxMike := strings.Index(first, `name="mike"`)
 	idxZeta := strings.Index(first, `name="zeta"`)
 	if idxAlpha < 0 || idxMike < 0 || idxZeta < 0 {
 		t.Fatalf("inputs missing: %s", first)
 	}
-	if idxAlpha >= idxMike || idxMike >= idxZeta {
-		t.Errorf("inputs not sorted: alpha=%d mike=%d zeta=%d", idxAlpha, idxMike, idxZeta)
+	if idxZeta >= idxAlpha || idxAlpha >= idxMike {
+		t.Errorf("inputs reordered: zeta=%d alpha=%d mike=%d", idxZeta, idxAlpha, idxMike)
 	}
 }
 

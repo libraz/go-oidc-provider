@@ -1364,6 +1364,10 @@ covered by the SemVer promise.
 - On DynamoDB, a device-code or CIBA poll that loses a consume race is
   reported as already consumed instead of a server error.
 
+- The built-in HTML login page (`op.HTMLUI`) shows the username field above
+  the password field. `interaction.HTMLDriver` now renders a prompt's inputs
+  in the order the authenticator lists them instead of sorting them by name.
+
 - Two replicas reconciling the same static client at once no longer fail
   with a conflict on the SQL and DynamoDB adapters when the client records
   are equivalent.

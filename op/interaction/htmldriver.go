@@ -6,7 +6,6 @@ import (
 	"html"
 	"io"
 	"net/http"
-	"sort"
 	"strconv"
 	"strings"
 
@@ -511,20 +510,11 @@ func writeConsentApprovedField(b *strings.Builder, data ConsentScopePromptData) 
 	writeHiddenInput(b, ConsentApprovedScopesField, strings.Join(names, " "))
 }
 
-// writeFieldInputs renders one labelled <input> per [FieldSpec]. The
-// fields are emitted in [FieldSpec.Name] sort order so the output is
-// deterministic for golden testing; the orchestrator does not rely on
-// input ordering at the wire level.
+// writeFieldInputs renders one labelled <input> per [FieldSpec], in the
+// order the authenticator listed them, so a login form shows the
+// identifier above the password.
 func (d HTMLDriver) writeFieldInputs(b *strings.Builder, locale string, inputs []FieldSpec) {
-	if len(inputs) == 0 {
-		return
-	}
-	sorted := make([]FieldSpec, len(inputs))
-	copy(sorted, inputs)
-	sort.SliceStable(sorted, func(i, j int) bool {
-		return sorted[i].Name < sorted[j].Name
-	})
-	for _, in := range sorted {
+	for _, in := range inputs {
 		d.writeFieldInput(b, locale, in)
 	}
 }
