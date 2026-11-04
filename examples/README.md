@@ -89,6 +89,7 @@ it boots with
 | drive login / consent from a SPA | [`10-react-login`](10-react-login/main.go) — bundle is dependency-free vanilla JS, so it runs with no build step; the JSON contract is the same one a React / Vue / Svelte build output consumes |
 | run a SPA against MySQL + Redis (the usual deployment shape) | [`17-spa-composite-store`](17-spa-composite-store/main.go) |
 | customise the consent screen | [`11-custom-consent-ui`](11-custom-consent-ui/main.go) |
+| customise the sign-in screens (password, MFA, factor choice) | [`37-custom-login-ui`](37-custom-login-ui/main.go) |
 | support `prompt=select_account` (multi-account) | [`13-multi-account`](13-multi-account/main.go) |
 | customise the account chooser (HTML template) | [`12-custom-chooser-ui`](12-custom-chooser-ui/main.go) |
 | serve a SPA from a different origin (CORS) | [`14-cors-spa`](14-cors-spa/main.go) |
@@ -145,7 +146,7 @@ in-flight or v1.x work:
 | 00–09 | bootstrap, core flows, profiles, storage adapters              |
 | 10–19 | UI and browser integration (SPA, consent, chooser, CORS, i18n); 18 holds the storage-adapter overflow, 00–09 being full |
 | 20–29 | MFA, authentication rules, and user-store projection           |
-| 30–39 | advanced grants, subject modes, encrypted tokens, resource servers, federation |
+| 30–39 | advanced grants, subject modes, encrypted tokens, resource servers, federation; 37 holds the UI overflow |
 | 40–49 | governance: first-party, DCR, back-channel logout              |
 | 50–59 | operations: FAPI helpers, metrics, tracing, DPoP nonce, production wiring |
 | 60–69 | scopes, claims, and compliance-adjacent examples               |
