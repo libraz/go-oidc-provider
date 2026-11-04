@@ -50,6 +50,13 @@ type FAPI2Options struct {
 
 	// Clock supplies JWT and DPoP timestamps. Nil uses timex.SystemClock.
 	Clock timex.Clock
+
+	// MessageSigning switches the RP to the FAPI 2.0 Message Signing
+	// shape: the authorization request is pushed as a signed request
+	// object (JAR, RFC 9101) and the authorization response is read as a
+	// signed JARM response (response_mode=jwt) whose signature is checked
+	// against the OP's JWKS.
+	MessageSigning bool
 }
 
 // FAPI2Flow drives a FAPI 2.0 Baseline Authorization Code flow:
@@ -72,6 +79,10 @@ type FAPI2Flow struct {
 
 	endpoints discoveryDoc
 	verifier  *oidc.IDTokenVerifier
+
+	// messageSigning and opKeys are set only for FAPI2Options.MessageSigning.
+	messageSigning bool
+	opKeys         *oidc.RemoteKeySet
 
 	mu      sync.Mutex
 	pending map[string]string // state -> code_verifier
@@ -123,6 +134,14 @@ func NewFAPI2(ctx context.Context, opts FAPI2Options) (*FAPI2Flow, error) {
 		scopes = append([]string{oidc.ScopeOpenID}, scopes...)
 	}
 
+	var opKeys *oidc.RemoteKeySet
+	if opts.MessageSigning {
+		if doc.JWKSURI == "" {
+			return nil, errors.New("rpkit: OP discovery missing jwks_uri")
+		}
+		opKeys = oidc.NewRemoteKeySet(ctx, doc.JWKSURI)
+	}
+
 	return &FAPI2Flow{
 		issuer:      opts.Issuer,
 		clientID:    opts.ClientID,
@@ -135,6 +154,9 @@ func NewFAPI2(ctx context.Context, opts FAPI2Options) (*FAPI2Flow, error) {
 		endpoints:   doc,
 		verifier:    provider.Verifier(&oidc.Config{ClientID: opts.ClientID}),
 		pending:     make(map[string]string),
+
+		messageSigning: opts.MessageSigning,
+		opKeys:         opKeys,
 	}, nil
 }
 
@@ -189,6 +211,16 @@ func (f *FAPI2Flow) login(w http.ResponseWriter, r *http.Request) {
 	form.Set("code_challenge", challenge)
 	form.Set("code_challenge_method", "S256")
 
+	if f.messageSigning {
+		// The request object carries every parameter; only client_id
+		// stays outside it, next to the client assertion.
+		object, err := f.signRequestObject(form)
+		if err != nil {
+			http.Error(w, "rpkit: build request object: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+		form = url.Values{"request": {object}}
+	}
 	if err := f.attachClientAssertion(form); err != nil {
 		http.Error(w, "rpkit: build private_key_jwt: "+err.Error(), http.StatusInternalServerError)
 		return
@@ -212,6 +244,15 @@ func (f *FAPI2Flow) login(w http.ResponseWriter, r *http.Request) {
 
 func (f *FAPI2Flow) callback(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
+	if f.messageSigning {
+		// The whole response is one signed JWT; its claims replace the
+		// query parameters, "iss" included.
+		var err error
+		if q, err = f.openJARM(r.Context(), q.Get("response")); err != nil {
+			http.Error(w, "rpkit: JARM response: "+err.Error(), http.StatusBadRequest)
+			return
+		}
+	}
 	// FAPI 2.0 Baseline mandates RFC 9207 as its mix-up defence, so "iss"
 	// is required here rather than conditional on OP metadata: a response
 	// that omits it is not a FAPI 2.0 response and is rejected on the same
@@ -265,6 +306,10 @@ func (f *FAPI2Flow) callback(w http.ResponseWriter, r *http.Request) {
 	}
 	claims["_token_type"] = tokens.TokenType
 	claims["_access_token_cnf_jkt"] = jkt
+	if f.messageSigning {
+		claims["_authorization_response"] = "JARM"
+		claims["_dpop_nonce_retried"] = tokens.nonceRetried
+	}
 
 	f.mu.Lock()
 	f.last = claims
@@ -352,6 +397,10 @@ type tokenResponse struct {
 	TokenType    string `json:"token_type"`
 	ExpiresIn    int    `json:"expires_in"`
 	RefreshToken string `json:"refresh_token,omitempty"`
+
+	// nonceRetried records that the first token request drew a DPoP nonce
+	// challenge and succeeded on the retry.
+	nonceRetried bool
 }
 
 func (f *FAPI2Flow) exchange(ctx context.Context, code, codeVerifier string) (*tokenResponse, error) {
@@ -368,12 +417,14 @@ func (f *FAPI2Flow) exchange(ctx context.Context, code, codeVerifier string) (*t
 	if err != nil {
 		return nil, err
 	}
+	retried := false
 	if status == http.StatusUnauthorized || status == http.StatusBadRequest {
 		// RFC 9449 §8 nonce challenge: retry once with the supplied
 		// DPoP-Nonce. The OP issues the nonce out-of-band; the RP just
 		// echoes it in the next proof.
 		if nonce := headers.Get("DPoP-Nonce"); nonce != "" {
 			log.Printf("rpkit: DPoP nonce challenge received, retrying")
+			retried = true
 			status, _, body, err = f.exchangeRequest(ctx, form, nonce)
 			if err != nil {
 				return nil, err
@@ -391,6 +442,7 @@ func (f *FAPI2Flow) exchange(ctx context.Context, code, codeVerifier string) (*t
 	if tr.IDToken == "" {
 		return nil, errors.New("token response missing id_token")
 	}
+	tr.nonceRetried = retried
 	return &tr, nil
 }
 

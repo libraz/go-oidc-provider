@@ -82,6 +82,8 @@ it boots with
 | declare which security posture the OP runs (OAuth 2.1 vs plain OIDC) | [`00-security-profile`](00-security-profile/main.go) |
 | see every option a typical embedder reaches for | [`02-bundle`](02-bundle/main.go) |
 | run a FAPI 2.0 Baseline OP (PAR + JAR + DPoP) | [`03-fapi2`](03-fapi2/main.go), [`50-fapi-tls-jwks`](50-fapi-tls-jwks/main.go) |
+| run a FAPI 2.0 Message Signing OP (signed request object, JARM response, DPoP nonce) | [`54-fapi2-message-signing`](54-fapi2-message-signing/main.go) |
+| bind access tokens to a client certificate behind a TLS-terminating reverse proxy (mTLS, RFC 8705) | [`55-mtls-proxy`](55-mtls-proxy/main.go) |
 | issue tokens to backend services (no end user) | [`05-client-credentials`](05-client-credentials/main.go) |
 | serve plain OAuth 2.0 alongside OIDC | [`04-oauth2-only`](04-oauth2-only/main.go) |
 | persist on a real database (SQLite / MySQL), with the adapter-owned users table | [`06-sql-store`](06-sql-store/main.go), [`07-mysql-store`](07-mysql-store/main.go) |
@@ -111,6 +113,7 @@ it boots with
 | let users sign in with a password or a passwordless passkey (WebAuthn) | [`29-passkey`](29-passkey/main.go) |
 | protect an API with access tokens (`op/rs`) and mount the OP under your own router | [`36-resource-server`](36-resource-server/main.go) |
 | drive a TV / IoT / CLI tool via RFC 8628 device authorization | [`31-device-code-cli`](31-device-code-cli/main.go) |
+| sign in a native / CLI app with a public client and a loopback redirect (RFC 8252) | [`38-native-app`](38-native-app/main.go) |
 | issue tokens via Client-Initiated Backchannel Authentication (CIBA) | [`32-ciba-pos`](32-ciba-pos/main.go) |
 | exchange a service token for an audience-narrowed token (RFC 8693) | [`33-token-exchange-delegation`](33-token-exchange-delegation/main.go) |
 | issue distinct `sub` per RP sector for the same end-user (pairwise) | [`34-pairwise-saas`](34-pairwise-saas/main.go) |
@@ -151,7 +154,7 @@ in-flight or v1.x work:
 | 00–09 | bootstrap, core flows, profiles, storage adapters              |
 | 10–19 | UI and browser integration (SPA, consent, chooser, CORS, i18n); 18 holds the storage-adapter overflow, 00–09 being full |
 | 20–29 | MFA, authentication rules, and user-store projection           |
-| 30–39 | advanced grants, subject modes, encrypted tokens, resource servers, federation; 37 holds the UI overflow |
+| 30–39 | advanced grants, subject modes, encrypted tokens, resource servers, native apps, federation; 37 holds the UI overflow |
 | 40–49 | governance: first-party, DCR, back-channel logout              |
-| 50–59 | operations: FAPI helpers, metrics, tracing, DPoP nonce, production wiring |
+| 50–59 | operations: FAPI helpers, metrics, tracing, DPoP nonce, production wiring, message signing, mTLS behind a proxy |
 | 60–69 | scopes, claims, and compliance-adjacent examples               |

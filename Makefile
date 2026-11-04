@@ -85,7 +85,7 @@ verify-examples-harness:
 # through a development `replace`, so the run is GOWORK=off like the
 # per-module commands in scripts/ — the repository workspace covers
 # only the published modules.
-EXAMPLE_SMOKE := 01-minimal 03-fapi2 41-dynamic-registration 51-dpop-nonce 61-claims-request
+EXAMPLE_SMOKE := 01-minimal 03-fapi2 38-native-app 41-dynamic-registration 51-dpop-nonce 54-fapi2-message-signing 55-mtls-proxy 61-claims-request
 EXAMPLE_TARGETS := $(foreach e,$(EXAMPLE_SMOKE),example-$(word 1,$(subst -, ,$(e))))
 
 .PHONY: $(EXAMPLE_TARGETS)
