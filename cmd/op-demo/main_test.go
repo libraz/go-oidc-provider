@@ -234,6 +234,9 @@ func TestBuildOPStore_WrapsForCIBAProfile(t *testing.T) {
 	if _, ok := got.(store.Transactional); !ok {
 		t.Error("wrapped store no longer implements store.Transactional; the token endpoint stops staging")
 	}
+	if _, ok := got.(store.AuthnLockoutProvider); !ok {
+		t.Error("wrapped store no longer implements store.AuthnLockoutProvider; op.New refuses the password login flow")
+	}
 }
 
 // TestBuildOPStore_WrapsForCIBAProfileWithCompositeStore pins

@@ -191,11 +191,16 @@ func wrapStoreForCIBA(
 	if !ok {
 		return nil, errors.New("op-demo: CIBA store wrapper requires a store.Transactional backend")
 	}
+	lockouts, ok := base.(store.AuthnLockoutProvider)
+	if !ok {
+		return nil, errors.New("op-demo: CIBA store wrapper requires a store.AuthnLockoutProvider backend")
+	}
 	return &cibaAutoApproveStore{
 		Store:         base,
 		registry:      registry,
 		reconciler:    reconciler,
 		transactional: transactional,
+		lockouts:      lockouts,
 		auto: &autoApprovingCIBA{
 			inner:    base.CIBARequests(),
 			delay:    cfg.cibaAutoApproveDelay,
@@ -248,6 +253,7 @@ type cibaAutoApproveStore struct {
 	registry      store.ClientRegistry
 	reconciler    store.StaticClientReconciler
 	transactional store.Transactional
+	lockouts      store.AuthnLockoutProvider
 }
 
 // CIBARequests overrides the embedded store's method so the
@@ -284,6 +290,12 @@ func (s *cibaAutoApproveStore) DeleteClient(ctx context.Context, id string) erro
 // atomic seed path.
 func (s *cibaAutoApproveStore) ReconcileStaticClients(ctx context.Context, clients []*store.Client) error {
 	return s.reconciler.ReconcileStaticClients(ctx, clients)
+}
+
+// AuthnLockouts forwards to the wrapped store's lockout substore, which
+// op.New requires for the password login flow.
+func (s *cibaAutoApproveStore) AuthnLockouts() store.AuthnLockoutStore {
+	return s.lockouts.AuthnLockouts()
 }
 
 // BeginTx forwards to the backend's [store.Transactional] so the token
