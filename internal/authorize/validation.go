@@ -101,7 +101,7 @@ func (req *Request) Validate(client *store.Client, scopes *scoperegistry.Registr
 	if err := req.validateNonce(policy.NonceRequired); err != nil {
 		return err
 	}
-	if err := req.validatePKCE(policy.PKCERequired || clientRequiresPKCE(client)); err != nil {
+	if err := req.validatePKCE(policy.PKCERequired || ClientRequiresPKCE(client)); err != nil {
 		return err
 	}
 	if err := req.validatePrompt(policy.PromptCreate); err != nil {
@@ -336,7 +336,7 @@ func (req *Request) validateNonce(required bool) error {
 	return nil
 }
 
-// clientRequiresPKCE reports whether the client type mandates PKCE
+// ClientRequiresPKCE reports whether the client type mandates PKCE
 // regardless of the OP-wide [Policy.PKCERequired] flag. Public clients —
 // including native apps per RFC 8252 §8.1 and the OAuth 2.1 draft §7.6 —
 // MUST use PKCE on the authorization-code flow: they cannot authenticate
@@ -346,7 +346,7 @@ func (req *Request) validateNonce(required bool) error {
 // credentials and remain governed by [Policy.PKCERequired] alone, except
 // a client resolved from a client ID metadata document: its keys were
 // never vetted out of band, so PKCE is mandatory even with private_key_jwt.
-func clientRequiresPKCE(client *store.Client) bool {
+func ClientRequiresPKCE(client *store.Client) bool {
 	if client == nil {
 		return false
 	}
@@ -358,7 +358,7 @@ func clientRequiresPKCE(client *store.Client) bool {
 // validatePKCE enforces the OP's PKCE policy and delegates challenge
 // format checks to [pkce.ValidateChallenge]. When required is true,
 // every request MUST carry a code_challenge (FAPI 2.0 / OAuth 2.1
-// posture, or a public / native client per [clientRequiresPKCE]). When
+// posture, or a public / native client per [ClientRequiresPKCE]). When
 // required is false, an absent challenge falls through silently and the
 // PKCE flow is opted out for this request, whether or not a
 // code_challenge_method was sent; a present challenge is still

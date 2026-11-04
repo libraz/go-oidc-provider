@@ -1,7 +1,9 @@
 package authorizeendpoint
 
 import (
+	"context"
 	"errors"
+	"log/slog"
 	"net/http"
 	"net/url"
 
@@ -68,7 +70,7 @@ func serveAuthorize(w http.ResponseWriter, r *http.Request, deps resolved) {
 		return
 	}
 	if err := req.ValidateEffectiveRequest(client, deps.Scopes, deps.RequestPolicy, deps.ACRValuesSupported); err != nil {
-		writeAuthorizeValidationError(w, r, req, deps, err)
+		writeAuthorizeValidationError(w, r, req, client, deps, err)
 		return
 	}
 	if !validateRequestExtensions(w, r, deps, req, client) {
@@ -207,12 +209,15 @@ func writeAuthorizeParseError(w http.ResponseWriter, r *http.Request, deps resol
 // into either a redirect or a pre-redirect envelope, depending on
 // whether the redirect target has been trusted yet. JARM-mode requests
 // get the signed-JWT envelope automatically via [emitAuthorizeError].
-func writeAuthorizeValidationError(w http.ResponseWriter, r *http.Request, req *authorize.Request, deps resolved, err error) {
+func writeAuthorizeValidationError(w http.ResponseWriter, r *http.Request, req *authorize.Request, client *store.Client, deps resolved, err error) {
 	var ae *authorize.Error
 	if !errors.As(err, &ae) {
 		logServerError(r, deps, "", err)
 		renderBrowserError(w, r, deps.Driver, http.StatusInternalServerError, errServerError, "", req.State)
 		return
+	}
+	if errors.Is(err, authorize.ErrPKCERequired) && client != nil && !authorize.ClientRequiresPKCE(client) {
+		logPKCERequiredHint(r.Context(), deps, client.ID)
 	}
 	if errors.Is(err, authorize.ErrRedirectURIInvalid) {
 		deps.auditEmitter().Emit(r.Context(), audit.Event{
@@ -231,6 +236,21 @@ func writeAuthorizeValidationError(w http.ResponseWriter, r *http.Request, req *
 		return
 	}
 	emitAuthorizeError(w, r, deps, req, ae.Code, ae.Description)
+}
+
+// logPKCERequiredHint warns, once per client_id per handler, that a
+// confidential client was refused only because the active profile makes
+// PKCE mandatory. A nil Logger discards.
+func logPKCERequiredHint(ctx context.Context, deps resolved, clientID string) {
+	if deps.Logger == nil {
+		return
+	}
+	if _, seen := deps.pkceHintLogged.LoadOrStore(clientID, struct{}{}); seen {
+		return
+	}
+	deps.Logger.LogAttrs(ctx, slog.LevelWarn, "authorization request refused: code_challenge is required",
+		slog.String("client_id", clientID),
+		slog.String("hint", "the active profile requires PKCE for every client; op.WithProfile(profile.OIDCCore) makes it optional for confidential clients"))
 }
 
 // dispatchAuthorize chooses between the three terminal outcomes (silent

@@ -4,6 +4,7 @@ import (
 	"context"
 	"log/slog"
 	"net/http"
+	"sync"
 	"time"
 
 	"github.com/libraz/go-oidc-provider/internal/audit"
@@ -413,7 +414,9 @@ type Deps struct {
 	Audit audit.Emitter
 
 	// Logger receives the cause of every 500 the endpoint answers and each
-	// deny-list refusal of a request_uri fetch. A nil Logger discards.
+	// deny-list refusal of a request_uri fetch, plus the first PKCE refusal
+	// per client that only the active profile made mandatory. A nil Logger
+	// discards.
 	Logger *slog.Logger
 }
 
@@ -436,6 +439,11 @@ type resolved struct {
 	// every fetch acquires. Both are built once, like jarFetch.
 	jarRequestURIs *remotecache.Cache[string]
 	jarLoads       remotecache.LoadGate
+
+	// pkceHintLogged records the client_ids already given the PKCE
+	// guidance log, so each is logged once per handler. Built once in
+	// resolveDeps, which Handler calls a single time.
+	pkceHintLogged *sync.Map
 }
 
 // resolveDeps fills in defaults the caller chose to omit. The returned
@@ -455,6 +463,7 @@ func resolveDeps(d Deps) resolved {
 		jarFetch:       securefetch.NewClient(jarRequestURIPolicy(d.AllowPrivateNetworkJAR)),
 		jarRequestURIs: newJARRequestURICache(d.Clock),
 		jarLoads:       remotecache.SharedLoadGate(remotecache.DefaultMaxInflight),
+		pkceHintLogged: &sync.Map{},
 	}
 }
 
