@@ -132,7 +132,7 @@ func TestWithLogoutUI_Validation(t *testing.T) {
 	}
 }
 
-func TestWithLogoutUI_ComposesWithSPAUI(t *testing.T) {
+func TestWithLogoutUI_ComposesWithTheSPAMode(t *testing.T) {
 	t.Parallel()
 
 	for name, order := range map[string]func(spa, logout op.Option) []op.Option{
