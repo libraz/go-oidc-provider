@@ -372,6 +372,43 @@ type ConsentUI struct {
 	ContentSecurityPolicy string
 }
 
+// LoginUI declares the template the [Provider] uses to render every
+// sign-in prompt except consent, the account chooser and passkey: password,
+// TOTP, email OTP, recovery code, factor choice, captcha, custom [Step]
+// prompts and [WithInteractions] prompts. Mutually exclusive with
+// [WithSPAUI]. One template serves all of them; branch on the prompt type.
+//
+// The template receives [interaction.LoginTemplateData] and MUST:
+//   - (a) echo StateRef and CSRFToken as hidden fields named
+//     [interaction.StateRefField] and [interaction.CSRFTokenField]; a form
+//     that drops either is refused on submission (fail-closed);
+//   - (b) guard Data with {{with .Data}} or a branch on .Type: Data is nil
+//     for a custom Step and for [WithInteractions] prompts;
+//   - (c) for the factor-choice prompt, submit the chosen option's Kind
+//     under .FactorField, listing .Data.Options.
+//
+// Also note:
+//   - (d) the CSP applies to every login prompt. Loosening script-src for a
+//     captcha widget loosens the password and TOTP pages too: name hosts
+//     only, never 'unsafe-inline'.
+//   - (e) the template is meaningful only on top of a driver that returns
+//     HTML; do not combine it with a non-HTML [WithInteractionDriver].
+//   - (f) passkey prompts and error pages are not templated and stay with
+//     the underlying driver.
+//
+// Stable since v1.5.
+type LoginUI struct {
+	// Template is the [html/template.Template] every login prompt renders.
+	// MUST be non-nil; the option site rejects a nil template so the
+	// misconfiguration surfaces at [New].
+	Template *template.Template
+
+	// ContentSecurityPolicy is the policy sent with every rendered login
+	// page. It follows the rules of [ConsentUI.ContentSecurityPolicy];
+	// empty keeps the library default, which forbids every subresource.
+	ContentSecurityPolicy string
+}
+
 // ChooserUI declares the template the [Provider] uses to render the
 // account chooser screen when prompt=select_account fires for a
 // session that already has a chooser group. Composes with [WithSPAUI]
@@ -477,8 +514,9 @@ func checkLoginFlowRuleKinds(flow LoginFlow) error {
 // SPA consumes; unset, [interaction.JSONDriver] is used, and a bundled HTML
 // driver fails [New]. The RP-Initiated Logout pages stay
 // server-rendered ([WithLogoutUI] restyles them). Mutually exclusive with
-// [WithConsentUI]; supplying both fails [New], unless one of the two is
-// wrapped in [WithDefaults], in which case the explicit one wins.
+// [WithConsentUI] and [WithLoginUI]; supplying both fails [New], unless one
+// of the two is wrapped in [WithDefaults], in which case the explicit one
+// wins.
 //
 // The front end is fully replaceable, so the wire contract it has to
 // implement is part of this option's surface rather than a property of
@@ -500,6 +538,9 @@ func WithSPAUI(ui SPAUI) Option {
 			return err
 		}
 		if err := c.claimExclusive("WithSPAUI", "WithConsentUI"); err != nil {
+			return err
+		}
+		if err := c.claimExclusive("WithSPAUI", "WithLoginUI"); err != nil {
 			return err
 		}
 		if err := validateSPAUIMounts(ui); err != nil {
@@ -609,6 +650,47 @@ func WithConsentUI(ui ConsentUI) Option {
 		c.consentUI.ContentSecurityPolicy = policy
 		c.consentUISet = true
 		c.recordBrowserSurface("WithConsentUI")
+		return nil
+	})
+}
+
+// WithLoginUI registers the [LoginUI] template the HTML driver uses for
+// every sign-in prompt other than consent, chooser and passkey. Mutually
+// exclusive with [WithSPAUI]; supplying both fails [New] with a structured
+// configuration error, unless one of the two is wrapped in [WithDefaults],
+// in which case the explicit one wins.
+//
+// The template contract (a)-(f) is documented on [LoginUI]: echo the hidden
+// state_ref and csrf_token fields, guard the nil Data of custom steps,
+// render factor choice from .Data.Options and .FactorField, keep the shared
+// CSP tight, use it only over an HTML driver, and expect passkey and error
+// pages to stay untemplated.
+// Validation:
+//   - Template MUST be non-nil.
+//   - ContentSecurityPolicy, when set, MUST pass
+//     [interaction.NormalizeCSP].
+//   - Repeated [WithLoginUI] calls are rejected.
+//
+// Stable since v1.5.
+func WithLoginUI(ui LoginUI) Option {
+	return optionFunc(func(c *config) error {
+		if err := c.claimOnce("WithLoginUI"); err != nil {
+			return err
+		}
+		if err := c.claimExclusive("WithLoginUI", "WithSPAUI"); err != nil {
+			return err
+		}
+		if ui.Template == nil {
+			return newConfigurationError("WithLoginUI: Template must not be nil", nil)
+		}
+		policy, err := normalizeUICSP("WithLoginUI", ui.ContentSecurityPolicy)
+		if err != nil {
+			return err
+		}
+		c.loginUI = ui
+		c.loginUI.ContentSecurityPolicy = policy
+		c.loginUISet = true
+		c.recordBrowserSurface("WithLoginUI")
 		return nil
 	})
 }

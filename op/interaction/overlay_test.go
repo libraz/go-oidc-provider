@@ -378,6 +378,191 @@ func TestTemplateOverlay_SubmitActionReflectsRequestURL(t *testing.T) {
 	}
 }
 
+// renderLoginPrompt runs overlay.Render for p against a fixed request and
+// returns the recorder.
+func renderLoginPrompt(t *testing.T, overlay interaction.TemplateOverlayDriver, p interaction.Prompt) *httptest.ResponseRecorder {
+	t.Helper()
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequestWithContext(context.Background(), "GET", "/oidc/interaction/u-1?step=1", nil)
+	if err := overlay.Render(rec, req, p); err != nil {
+		t.Fatalf("overlay Render: %v", err)
+	}
+	return rec
+}
+
+// TestTemplateOverlay_LoginTemplateRendersPasswordPrompt confirms a
+// built-in prompt reaches LoginTemplate with the full data context.
+func TestTemplateOverlay_LoginTemplateRendersPasswordPrompt(t *testing.T) {
+	t.Parallel()
+
+	tmpl := template.Must(template.New("login").Parse(
+		`T={{.Type}};H={{with .Data}}{{.UsernameHint}}{{end}};L={{.Locale}};` +
+			`M={{.SubmitMethod}};A={{.SubmitAction}};F={{.FactorField}};E={{with .Error}}{{.Code}}{{end}};` +
+			`<input type="hidden" name="state_ref" value="{{.StateRef}}">` +
+			`<input type="hidden" name="csrf_token" value="{{.CSRFToken}}">` +
+			`{{range .Fields}}<label>{{.LabelText}}</label><input name="{{.Name}}">{{end}}`,
+	))
+	overlay := interaction.TemplateOverlayDriver{Inner: interaction.HTMLDriver{}, LoginTemplate: tmpl}
+
+	rec := renderLoginPrompt(t, overlay, interaction.Prompt{
+		Type:      interaction.PromptTypePassword,
+		Data:      interaction.PasswordPromptData{UsernameHint: "alice"},
+		Inputs:    []interaction.FieldSpec{{Name: "password", Kind: interaction.FieldPassword, Label: "auth.password.label", LabelText: "Password"}},
+		StateRef:  "ref-pw",
+		CSRFToken: "csrf-pw",
+		Locale:    "en",
+		Error:     &interaction.PromptError{Code: interaction.PromptErrorCredentialsRejected},
+	})
+
+	if got := rec.Header().Get("Content-Type"); got != "text/html; charset=utf-8" {
+		t.Errorf("Content-Type = %q, want text/html; charset=utf-8", got)
+	}
+	body := rec.Body.String()
+	for _, want := range []string{
+		"T=auth.password;",
+		"H=alice;",
+		"L=en;",
+		"M=POST;",
+		"A=/oidc/interaction/u-1?step=1;",
+		"F=factor;",
+		"E=credentials_rejected;",
+		`name="state_ref" value="ref-pw"`,
+		`name="csrf_token" value="csrf-pw"`,
+		`<label>Password</label><input name="password">`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("rendered body missing %q\n--- body ---\n%s", want, body)
+		}
+	}
+}
+
+// TestTemplateOverlay_LoginTemplateRendersCustomStepWithNilData confirms a
+// prompt without typed Data renders, that an empty LabelText falls back to
+// Label, and that the fallback does not mutate the prompt.
+func TestTemplateOverlay_LoginTemplateRendersCustomStepWithNilData(t *testing.T) {
+	t.Parallel()
+
+	tmpl := template.Must(template.New("login").Parse(
+		`{{with .Data}}DATA{{end}}{{range .Fields}}<label>{{.LabelText}}</label>{{end}}`,
+	))
+	overlay := interaction.TemplateOverlayDriver{Inner: interaction.HTMLDriver{}, LoginTemplate: tmpl}
+
+	prompt := interaction.Prompt{
+		Type:   "myorg.pin",
+		Inputs: []interaction.FieldSpec{{Name: "pin", Kind: interaction.FieldText, Label: "myorg.pin.label"}},
+	}
+	body := renderLoginPrompt(t, overlay, prompt).Body.String()
+
+	if strings.Contains(body, "DATA") {
+		t.Errorf("body rendered the Data branch for a nil Data:\n%s", body)
+	}
+	if !strings.Contains(body, "<label>myorg.pin.label</label>") {
+		t.Errorf("LabelText did not fall back to Label:\n%s", body)
+	}
+	if got := prompt.Inputs[0].LabelText; got != "" {
+		t.Errorf("prompt.Inputs[0].LabelText = %q, want it left empty", got)
+	}
+}
+
+// TestTemplateOverlay_LoginTemplateRendersFactorChoice confirms the factor
+// options and the submission field name reach the template.
+func TestTemplateOverlay_LoginTemplateRendersFactorChoice(t *testing.T) {
+	t.Parallel()
+
+	tmpl := template.Must(template.New("login").Parse(
+		`{{$f := .FactorField}}{{with .Data}}{{range .Options}}<input type="radio" name="{{$f}}" value="{{.Kind}}">{{.Kind}}{{end}}{{end}}`,
+	))
+	overlay := interaction.TemplateOverlayDriver{Inner: interaction.HTMLDriver{}, LoginTemplate: tmpl}
+
+	body := renderLoginPrompt(t, overlay, interaction.Prompt{
+		Type: interaction.PromptTypeChooseFactor,
+		Data: interaction.FactorChoicePromptData{Options: []interaction.FactorOption{
+			{Kind: "totp", Label: "auth.factor.totp"},
+			{Kind: "email_otp", Label: "auth.factor.email_otp"},
+		}},
+	}).Body.String()
+
+	for _, want := range []string{
+		`<input type="radio" name="factor" value="totp">totp`,
+		`<input type="radio" name="factor" value="email_otp">email_otp`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("rendered body missing %q\n--- body ---\n%s", want, body)
+		}
+	}
+}
+
+// TestTemplateOverlay_LoginTemplatePasskeyFallsThroughToInner confirms a
+// passkey prompt is never templated.
+func TestTemplateOverlay_LoginTemplatePasskeyFallsThroughToInner(t *testing.T) {
+	t.Parallel()
+
+	inner := &recordingDriver{}
+	overlay := interaction.TemplateOverlayDriver{
+		Inner:         inner,
+		LoginTemplate: template.Must(template.New("login").Parse(`LOGIN`)),
+	}
+	rec := renderLoginPrompt(t, overlay, interaction.Prompt{
+		Type: interaction.PromptTypePasskey,
+		Data: interaction.PasskeyPromptData{Challenge: []byte("c")},
+	})
+	if inner.renderCalls != 1 {
+		t.Errorf("inner Render calls = %d, want 1", inner.renderCalls)
+	}
+	if strings.Contains(rec.Body.String(), "LOGIN") {
+		t.Errorf("passkey prompt rendered through LoginTemplate: %s", rec.Body.String())
+	}
+}
+
+// TestTemplateOverlay_LoginTemplateExecutionErrorDoesNotCommitResponse
+// confirms a login template execution error leaves the response untouched.
+func TestTemplateOverlay_LoginTemplateExecutionErrorDoesNotCommitResponse(t *testing.T) {
+	t.Parallel()
+
+	overlay := interaction.TemplateOverlayDriver{
+		Inner:         interaction.HTMLDriver{},
+		LoginTemplate: template.Must(template.New("login").Parse(`before {{.MissingField}} after`)),
+	}
+	rec := &commitRecorder{header: make(http.Header)}
+	req := httptest.NewRequestWithContext(context.Background(), "GET", "/oidc/interaction/u-1", nil)
+	err := overlay.Render(rec, req, interaction.Prompt{Type: interaction.PromptTypePassword})
+	if err == nil {
+		t.Fatal("Render error = nil, want template execution error")
+	}
+	if rec.status != 0 || rec.body.Len() != 0 {
+		t.Errorf("response committed: status=%d body=%q", rec.status, rec.body.String())
+	}
+	if got := rec.header.Get("Content-Type"); got != "" {
+		t.Errorf("Content-Type = %q, want empty before successful render", got)
+	}
+}
+
+// TestTemplateOverlay_LoginCSP confirms LoginCSP is the policy sent with a
+// login page and that the default applies when it is empty.
+func TestTemplateOverlay_LoginCSP(t *testing.T) {
+	t.Parallel()
+
+	tmpl := template.Must(template.New("login").Parse(`ok`))
+	prompt := interaction.Prompt{Type: interaction.PromptTypePassword}
+
+	custom := renderLoginPrompt(t, interaction.TemplateOverlayDriver{
+		Inner:         interaction.HTMLDriver{},
+		LoginTemplate: tmpl,
+		LoginCSP:      "default-src 'none'; style-src 'self'",
+	}, prompt)
+	if csp := custom.Header().Get("Content-Security-Policy"); !strings.Contains(csp, "style-src 'self'") {
+		t.Errorf("Content-Security-Policy = %q, want the declared style-src", csp)
+	}
+
+	def := renderLoginPrompt(t, interaction.TemplateOverlayDriver{
+		Inner:         interaction.HTMLDriver{},
+		LoginTemplate: tmpl,
+	}, prompt)
+	if csp := def.Header().Get("Content-Security-Policy"); strings.Contains(csp, "style-src 'self'") {
+		t.Errorf("default Content-Security-Policy = %q, must not carry the custom style-src", csp)
+	}
+}
+
 type commitRecorder struct {
 	header http.Header
 	status int

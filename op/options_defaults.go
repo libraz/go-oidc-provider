@@ -85,19 +85,21 @@ func (c *config) applyDefaults() {
 	// when the embedder configured a consent or chooser template and SPA
 	// mode is not active. The overlay degrades to a passthrough for
 	// prompt types whose template field is nil, so wrapping is safe even
-	// when only one of the two templates is provided. Under SPA mode the
-	// JSON state envelope owns both surfaces, so the overlay is not
+	// when only some of the templates are provided. Under SPA mode the
+	// JSON state envelope owns every surface, so the overlay is not
 	// composed in that path.
-	if !c.spaUISet && (c.consentUISet || c.chooserUISet) {
+	if !c.spaUISet && (c.consentUISet || c.chooserUISet || c.loginUISet) {
 		c.interactionD = interaction.TemplateOverlayDriver{
 			Inner:           c.interactionD,
 			ConsentTemplate: c.consentUI.Template,
 			ChooserTemplate: c.chooserUI.Template,
+			LoginTemplate:   c.loginUI.Template,
 			// Already normalized by the option site; an unset option
 			// leaves the empty string, which the overlay reads as
 			// "keep the default policy".
 			ConsentCSP: c.consentUI.ContentSecurityPolicy,
 			ChooserCSP: c.chooserUI.ContentSecurityPolicy,
+			LoginCSP:   c.loginUI.ContentSecurityPolicy,
 		}
 	}
 	if c.chooserUIShadowedBySPA {

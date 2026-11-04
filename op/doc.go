@@ -108,7 +108,7 @@
 //   - Login and UI: [WithCookieKeys], [WithLoginFlow], [WithMFAEncryptionKeys],
 //     [WithAuthnLockoutStore], [WithLoginAttemptObserver], [WithUserStore],
 //     [WithInteractionDriver], [WithInteractions], [WithSPAUI], [WithConsentUI],
-//     [WithChooserUI], [WithLogoutUI], [WithDefaultLocale], [WithLocale],
+//     [WithLoginUI], [WithChooserUI], [WithLogoutUI], [WithDefaultLocale], [WithLocale],
 //     [WithPreferredLocaleStore].
 //   - Clients: [WithStaticClients], [WithHighEntropyClientSecrets],
 //     [WithFirstPartyClients], [WithDynamicRegistration],

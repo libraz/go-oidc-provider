@@ -287,6 +287,57 @@ type ConsentTemplateData struct {
 	SubmitAction string
 }
 
+// LoginTemplateData is the data context [TemplateOverlayDriver] passes to
+// LoginTemplate.Execute for every prompt except consent, chooser and
+// passkey. It carries the prompt's public fields unchanged, so a template
+// sees the same vocabulary a SPA reads from the JSON envelope.
+//
+// A template MUST:
+//   - echo StateRef and CSRFToken as hidden fields named [StateRefField]
+//     ("state_ref") and [CSRFTokenField] ("csrf_token"); a form that drops
+//     either is refused on submission;
+//   - guard every Data access with {{with .Data}} or a branch on Type: Data
+//     is nil for a custom Step and for [op.WithInteractions] prompts, and
+//     reading a field of a nil Data fails the render;
+//   - for [PromptTypeChooseFactor], render Data.(FactorChoicePromptData)
+//     .Options as radio inputs submitted under FactorField.
+//
+// Stable since v1.5.
+type LoginTemplateData struct {
+	// Type is the [Prompt.Type] being rendered, e.g. "auth.password".
+	Type string
+
+	// Data is the typed payload of a built-in step. It is nil for a custom
+	// Step and for [op.WithInteractions] prompts.
+	Data PromptData
+
+	// Fields is [Prompt.Inputs]. LabelText is never empty: where the OP
+	// resolved no text, it carries the Label key.
+	Fields []FieldSpec
+
+	// FactorField is the form field the factor-choice prompt submits the
+	// chosen option under. Always [FactorChoiceField].
+	FactorField string
+
+	// Error is the one-shot notice of a rejected submission, or nil.
+	Error *PromptError
+
+	// Locale is the BCP 47 tag the OP resolved for this prompt.
+	Locale string
+
+	// StateRef is the continuation token; echo it as a hidden field.
+	StateRef string
+
+	// CSRFToken is the per-render CSRF token; echo it as a hidden field.
+	CSRFToken string
+
+	// SubmitMethod is the HTTP method the form must use. Always "POST".
+	SubmitMethod string
+
+	// SubmitAction is the URL the form must POST to.
+	SubmitAction string
+}
+
 // ChooserAccount is a single row in the account chooser screen.
 // The struct intentionally exposes only the fields a chooser UI
 // can render without leaking session-internal state: the SessionID

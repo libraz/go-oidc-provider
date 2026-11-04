@@ -40,16 +40,16 @@ var ErrTemplateOverlayNoInnerErrorRenderer = errors.New(
 )
 
 // TemplateOverlayDriver wraps an inner [Driver] and intercepts
-// [Driver.Render] for the two well-known prompt types
-// "consent.scope" and "interaction.chooser" when the corresponding
-// *html/template.Template is non-nil. ParseSubmission is delegated
-// to the inner Driver verbatim — submission shape is owned by the
-// built-in consent and chooser interactions and is unaffected by
-// custom templating.
+// [Driver.Render] for the well-known prompt types "consent.scope" and
+// "interaction.chooser", and for every other non-passkey prompt through
+// LoginTemplate, when the corresponding *html/template.Template is
+// non-nil. ParseSubmission is delegated to the inner Driver verbatim —
+// submission shape is owned by the built-in interactions and is
+// unaffected by custom templating.
 //
 // Embedders do not construct TemplateOverlayDriver directly. op.New
-// wires it automatically when [op.WithConsentUI] or [op.WithChooserUI]
-// is configured (and [op.WithSPAUI] is not). Custom Driver
+// wires it automatically when [op.WithConsentUI], [op.WithChooserUI] or
+// [op.WithLoginUI] is configured (and [op.WithSPAUI] is not). Custom Driver
 // implementations may compose TemplateOverlayDriver themselves to opt
 // into the same render seam.
 //
@@ -94,6 +94,22 @@ type TemplateOverlayDriver struct {
 	// ConsentCSP and is separate because the two surfaces are
 	// independent templates that need not share an asset origin.
 	ChooserCSP string
+
+	// LoginTemplate, when non-nil, renders every prompt that is not
+	// consent, chooser or passkey — password, TOTP, email OTP, recovery
+	// code, factor choice, captcha, custom Step and [op.WithInteractions]
+	// prompts — using [LoginTemplateData] as the data context. Passkey
+	// prompts and error pages stay with Inner.
+	//
+	// Stable since v1.5.
+	LoginTemplate *template.Template
+
+	// LoginCSP is the Content-Security-Policy sent with a page rendered
+	// from LoginTemplate. It follows the same rules as ConsentCSP and
+	// applies to every login prompt alike.
+	//
+	// Stable since v1.5.
+	LoginCSP string
 }
 
 // Compile-time confirmation that TemplateOverlayDriver satisfies Driver,
@@ -116,11 +132,12 @@ var (
 // [ConsentScopePromptData] with a non-nil ConsentTemplate, Render
 // projects the payload onto a [ConsentTemplateData] and executes the
 // template. For [ChooserPromptData] with a non-nil ChooserTemplate, it
-// does the same with [ChooserTemplateData]. Any other case (unknown
-// payload type, or matching payload type whose template is nil) is
-// delegated to Inner.Render. Headers ("Content-Type",
-// "Cache-Control", "X-Frame-Options") are stamped before any byte is
-// written, mirroring [HTMLDriver.Render].
+// does the same with [ChooserTemplateData]. [PasskeyPromptData] always goes
+// to Inner. Any other prompt is rendered from a non-nil LoginTemplate with
+// [LoginTemplateData]; with a nil LoginTemplate, and for a matching payload
+// type whose template is nil, it is delegated to Inner.Render. Headers
+// ("Content-Type", "Cache-Control", "X-Frame-Options") are stamped before
+// any byte is written, mirroring [HTMLDriver.Render].
 func (d TemplateOverlayDriver) Render(w http.ResponseWriter, r *http.Request, p Prompt) error {
 	switch data := p.Data.(type) {
 	case ConsentScopePromptData:
@@ -131,7 +148,30 @@ func (d TemplateOverlayDriver) Render(w http.ResponseWriter, r *http.Request, p 
 		if d.ChooserTemplate != nil {
 			return d.renderChooser(w, r, p, data)
 		}
+	case PasskeyPromptData:
+		// WebAuthn needs the Inner driver's script.
+		return d.renderInner(w, r, p)
 	}
+	if d.LoginTemplate != nil && !isOverlayOwnedData(p.Data) {
+		return d.renderLogin(w, r, p)
+	}
+	return d.renderInner(w, r, p)
+}
+
+// isOverlayOwnedData reports whether data belongs to the consent or chooser
+// surface, which a login template must not take over when their own
+// template is unset.
+func isOverlayOwnedData(data PromptData) bool {
+	switch data.(type) {
+	case ConsentScopePromptData, ChooserPromptData:
+		return true
+	default:
+		return false
+	}
+}
+
+// renderInner delegates to Inner.
+func (d TemplateOverlayDriver) renderInner(w http.ResponseWriter, r *http.Request, p Prompt) error {
 	if d.Inner == nil {
 		return ErrTemplateOverlayInnerNil
 	}
@@ -198,6 +238,31 @@ func (d TemplateOverlayDriver) renderChooser(w http.ResponseWriter, r *http.Requ
 		SubmitAction:   r.URL.RequestURI(),
 	}
 	return executeOverlay(w, d.ChooserTemplate, td, d.ChooserCSP, "chooser")
+}
+
+// renderLogin executes LoginTemplate against a [LoginTemplateData]. Inputs
+// are copied so the empty-LabelText fallback never mutates the prompt.
+func (d TemplateOverlayDriver) renderLogin(w http.ResponseWriter, r *http.Request, p Prompt) error {
+	fields := make([]FieldSpec, len(p.Inputs))
+	copy(fields, p.Inputs)
+	for i := range fields {
+		if fields[i].LabelText == "" {
+			fields[i].LabelText = fields[i].Label
+		}
+	}
+	td := LoginTemplateData{
+		Type:         p.Type,
+		Data:         p.Data,
+		Fields:       fields,
+		FactorField:  FactorChoiceField,
+		Error:        p.Error,
+		Locale:       p.Locale,
+		StateRef:     p.StateRef,
+		CSRFToken:    p.CSRFToken,
+		SubmitMethod: http.MethodPost,
+		SubmitAction: r.URL.RequestURI(),
+	}
+	return executeOverlay(w, d.LoginTemplate, td, d.LoginCSP, "login")
 }
 
 // executeOverlay renders tmpl with data into a buffer, then commits it with

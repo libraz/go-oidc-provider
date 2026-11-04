@@ -516,6 +516,83 @@ func TestWithConsentUI_RejectsSPAUICombination(t *testing.T) {
 	}
 }
 
+func TestWithLoginUI_RejectsNilTemplate(t *testing.T) {
+	t.Parallel()
+
+	_, err := op.New(append(validBaseOpts(t),
+		op.WithLoginUI(op.LoginUI{Template: nil}),
+	)...)
+	if err == nil {
+		t.Fatal("expected error for nil Template, got nil")
+	}
+	if !strings.Contains(err.Error(), "WithLoginUI: Template must not be nil") {
+		t.Errorf("err = %v, want it to mention Template", err)
+	}
+}
+
+func TestWithLoginUI_ExclusiveWithSPAUI(t *testing.T) {
+	t.Parallel()
+
+	tmpl := template.Must(template.New("l").Parse("ok"))
+	spa := op.WithSPAUI(op.SPAUI{LoginMount: "/login"})
+	login := op.WithLoginUI(op.LoginUI{Template: tmpl})
+	for name, opts := range map[string][]op.Option{
+		"login first": {login, spa},
+		"SPA first":   {spa, login},
+	} {
+		_, err := op.New(append(validBaseOpts(t), opts...)...)
+		if err == nil {
+			t.Errorf("%s: expected error for WithLoginUI + WithSPAUI, got nil", name)
+			continue
+		}
+		if !strings.Contains(err.Error(), "mutually exclusive") {
+			t.Errorf("%s: err = %v, want mutually-exclusive diagnostic", name, err)
+		}
+	}
+}
+
+func TestWithLoginUI_RejectsInvalidCSP(t *testing.T) {
+	t.Parallel()
+
+	for name, policy := range map[string]string{
+		"framing allowed": "default-src 'none'; frame-ancestors https://portal.example",
+		"form-action set": "default-src 'none'; form-action 'self'",
+		"base-uri set":    "default-src 'none'; base-uri 'self'",
+	} {
+		tmpl := template.Must(template.New("l").Parse("ok"))
+		_, err := op.New(append(validBaseOpts(t),
+			op.WithLoginUI(op.LoginUI{Template: tmpl, ContentSecurityPolicy: policy}),
+		)...)
+		if err == nil {
+			t.Errorf("%s: expected error for %q, got nil", name, policy)
+			continue
+		}
+		if !strings.Contains(err.Error(), "WithLoginUI: ContentSecurityPolicy") {
+			t.Errorf("%s: err = %v, want it to name the option and field", name, err)
+		}
+	}
+}
+
+// The translator is wired into the composed driver at New; a login overlay
+// must come through that rewrite intact and construct.
+func TestWithLoginUI_SurvivesLocaleInjection(t *testing.T) {
+	t.Parallel()
+
+	tmpl := template.Must(template.New("login").Parse("hi"))
+	provider, err := op.New(append(validBaseOpts(t),
+		op.WithLoginUI(op.LoginUI{
+			Template:              tmpl,
+			ContentSecurityPolicy: "default-src 'none'; style-src 'self'",
+		}),
+	)...)
+	if err != nil {
+		t.Fatalf("op.New with WithLoginUI: %v", err)
+	}
+	if provider == nil {
+		t.Fatal("expected non-nil Provider")
+	}
+}
+
 func TestWithChooserUI_AcceptsValid(t *testing.T) {
 	t.Parallel()
 

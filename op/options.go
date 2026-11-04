@@ -356,6 +356,13 @@ type config struct {
 	// consentUISet records whether [WithConsentUI] was invoked.
 	consentUISet bool
 
+	// loginUI stores the [LoginUI] supplied through [WithLoginUI].
+	// Mutually exclusive with [config.spaUI].
+	loginUI LoginUI
+
+	// loginUISet records whether [WithLoginUI] was invoked.
+	loginUISet bool
+
 	// chooserUI stores the [ChooserUI] supplied through
 	// [WithChooserUI]. Mutually exclusive with [config.spaUI];
 	// validation runs at the option site so the conflict surfaces

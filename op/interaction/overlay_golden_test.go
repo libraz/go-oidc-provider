@@ -158,6 +158,54 @@ func TestTemplateOverlay_GoldenChooser(t *testing.T) {
 	checkOverlayGolden(t, path, rec.Body.Bytes())
 }
 
+// loginOverlayTemplate is the inline minimal login template the golden
+// harness pins. The second field has no LabelText, so the fixture also
+// pins the Label fallback.
+const loginOverlayTemplate = `<!doctype html><html><body>
+<form method="{{.SubmitMethod}}" action="{{.SubmitAction}}">
+<input type="hidden" name="state_ref" value="{{.StateRef}}">
+<input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
+{{range .Fields}}<label>{{.LabelText}}</label><input name="{{.Name}}">{{end}}
+<button type="submit">Sign in</button>
+</form>
+</body></html>`
+
+// TestTemplateOverlay_GoldenLogin pins the byte output of
+// TemplateOverlayDriver.Render against a fixed login prompt fixture.
+func TestTemplateOverlay_GoldenLogin(t *testing.T) {
+	t.Parallel()
+
+	tmpl := template.Must(template.New("login").Parse(loginOverlayTemplate))
+	overlay := interaction.TemplateOverlayDriver{
+		Inner:         interaction.HTMLDriver{},
+		LoginTemplate: tmpl,
+	}
+	prompt := interaction.Prompt{ //nolint:gosec // golden-test fixture, no real credentials
+		Type: "auth.password",
+		Data: interaction.PasswordPromptData{},
+		Inputs: []interaction.FieldSpec{
+			{Name: "username", Kind: interaction.FieldText, Label: "auth.username", LabelText: "Username"},
+			{Name: "password", Kind: interaction.FieldPassword, Label: "auth.password"},
+		},
+		StateRef:  "state-ref-FIXED",
+		CSRFToken: "csrf-FIXED",
+	}
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequestWithContext(context.Background(), "GET",
+		"/oidc/interaction/abc?step=1", nil)
+	if err := overlay.Render(rec, req, prompt); err != nil {
+		t.Fatalf("overlay Render: %v", err)
+	}
+
+	if got := rec.Header().Get("Content-Type"); got != "text/html; charset=utf-8" {
+		t.Errorf("Content-Type = %q, want text/html; charset=utf-8", got)
+	}
+
+	path := filepath.Join("testdata", "overlay", "login.golden.html")
+	checkOverlayGolden(t, path, rec.Body.Bytes())
+}
+
 // checkOverlayGolden compares got against the fixture at path. The
 // helper mirrors htmldriver_test.go's golden idiom: when -update or
 // -update-overlay is set the fixture is regenerated (with a single
