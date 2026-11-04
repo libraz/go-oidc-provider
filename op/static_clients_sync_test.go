@@ -44,9 +44,9 @@ func syncSeed(tb testing.TB, id, kind string, meta, secret int) op.ClientSeed { 
 
 func syncPlain(secret int) string {
 	if secret == 2 {
-		return "plain-secret-two"
+		return "plain-secret-two-0123456789-abcdefghijkl"
 	}
-	return "plain-secret-one"
+	return "plain-secret-one-0123456789-abcdefghijkl"
 }
 
 // syncHashes are minted once so a cell that re-derives its seed gets the
@@ -250,7 +250,7 @@ func TestSyncStaticClients_ThenNewBoots(t *testing.T) {
 	seeds := []op.ClientSeed{
 		op.PublicClient{ID: "spa", RedirectURIs: []string{syncRedirect}, Scopes: []string{"openid"}},
 		op.ConfidentialClient{
-			ID: "svc", Secret: "plain-secret-one",
+			ID: "svc", Secret: "plain-secret-one-0123456789-abcdefghijkl",
 			RedirectURIs: []string{syncRedirect}, Scopes: []string{"openid"},
 		},
 	}
@@ -267,7 +267,7 @@ func TestSyncStaticClients_PlaintextThenHighEntropyNewRefuses(t *testing.T) {
 	ctx := context.Background()
 	st := inmem.New()
 	seeds := []op.ClientSeed{op.ConfidentialClient{
-		ID: "svc", Secret: "plain-secret-one",
+		ID: "svc", Secret: "plain-secret-one-0123456789-abcdefghijkl",
 		RedirectURIs: []string{syncRedirect}, Scopes: []string{"openid"},
 	}}
 	if _, err := op.SyncStaticClients(ctx, st, seeds...); err != nil {
@@ -299,7 +299,7 @@ func TestSyncStaticClients_RotationCarriesPreviousHash(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	st := inmem.New()
-	if _, err := op.SyncStaticClients(ctx, st, syncRotationSeed("secret-before", "")); err != nil {
+	if _, err := op.SyncStaticClients(ctx, st, syncRotationSeed("secret-before-0123456789-abcdefghijklmnop", "")); err != nil {
 		t.Fatalf("initial sync: %v", err)
 	}
 	before, err := st.GetClient(ctx, "svc")
@@ -307,7 +307,7 @@ func TestSyncStaticClients_RotationCarriesPreviousHash(t *testing.T) {
 		t.Fatalf("GetClient before: %v", err)
 	}
 
-	results, err := op.SyncStaticClients(ctx, st, syncRotationSeed("secret-after", "secret-before"))
+	results, err := op.SyncStaticClients(ctx, st, syncRotationSeed("secret-after-0123456789-abcdefghijklmnopq", "secret-before-0123456789-abcdefghijklmnop"))
 	if err != nil {
 		t.Fatalf("rotation sync: %v", err)
 	}
@@ -324,8 +324,8 @@ func TestSyncStaticClients_RotationCarriesPreviousHash(t *testing.T) {
 	if !after.PreviousSecretExpiresAt.Equal(syncRotationExpiry) {
 		t.Errorf("PreviousSecretExpiresAt=%v want %v", after.PreviousSecretExpiresAt, syncRotationExpiry)
 	}
-	if !op.VerifyPassword([]byte(after.SecretHash), "secret-after") ||
-		op.VerifyPassword([]byte(after.SecretHash), "secret-before") {
+	if !op.VerifyPassword([]byte(after.SecretHash), "secret-after-0123456789-abcdefghijklmnopq") ||
+		op.VerifyPassword([]byte(after.SecretHash), "secret-before-0123456789-abcdefghijklmnop") {
 		t.Error("current hash does not verify exactly the new secret")
 	}
 }
@@ -335,8 +335,8 @@ func TestSyncStaticClients_RotationRerunIsUnchanged(t *testing.T) {
 	ctx := context.Background()
 	st := inmem.New()
 	for _, seed := range []op.ConfidentialClient{
-		syncRotationSeed("secret-before", ""),
-		syncRotationSeed("secret-after", "secret-before"),
+		syncRotationSeed("secret-before-0123456789-abcdefghijklmnop", ""),
+		syncRotationSeed("secret-after-0123456789-abcdefghijklmnopq", "secret-before-0123456789-abcdefghijklmnop"),
 	} {
 		if _, err := op.SyncStaticClients(ctx, st, seed); err != nil {
 			t.Fatalf("sync: %v", err)
@@ -347,7 +347,7 @@ func TestSyncStaticClients_RotationRerunIsUnchanged(t *testing.T) {
 		t.Fatalf("GetClient: %v", err)
 	}
 
-	results, err := op.SyncStaticClients(ctx, st, syncRotationSeed("secret-after", "secret-before"))
+	results, err := op.SyncStaticClients(ctx, st, syncRotationSeed("secret-after-0123456789-abcdefghijklmnopq", "secret-before-0123456789-abcdefghijklmnop"))
 	if err != nil {
 		t.Fatalf("rerun: %v", err)
 	}
@@ -382,7 +382,7 @@ func TestSyncStaticClients_HighEntropyUnverifiedPreviousRefused(t *testing.T) {
 	// leave the earlier, writable seed unwritten.
 	_, err = op.SyncStaticClients(ctx, st,
 		op.PublicClient{ID: "spa", RedirectURIs: []string{syncRedirect}, Scopes: []string{"openid"}},
-		syncRotationSeed("secret-after", "unverifiable-previous"),
+		syncRotationSeed("secret-after-0123456789-abcdefghijklmnopq", "unverifiable-previous"),
 	)
 	if err == nil {
 		t.Fatal("Sync accepted a previous plaintext it cannot match to a high-entropy hash")

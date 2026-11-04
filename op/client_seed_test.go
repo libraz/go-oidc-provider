@@ -209,7 +209,7 @@ func TestStaticClientDefaults_NegativeMaxAgeRejected(t *testing.T) {
 			return op.PublicClient{ID: "rp-age", DefaultMaxAge: m}
 		},
 		"confidential": func(m *int64) op.ClientSeed {
-			return op.ConfidentialClient{ID: "rp-age", Secret: "rp-age-secret", DefaultMaxAge: m}
+			return op.ConfidentialClient{ID: "rp-age", Secret: "rp-age-secret-0123456789-abcdefghijklmnopqrstu", DefaultMaxAge: m}
 		},
 		"private_key_jwt": func(m *int64) op.ClientSeed {
 			return op.PrivateKeyJWTClient{ID: "rp-age", JWKS: []byte(`{"keys":[]}`), DefaultMaxAge: m}
@@ -464,7 +464,7 @@ func TestClientSeed_PreviousSecret_Validation(t *testing.T) {
 			name: "plaintext previous with expiry",
 			seed: func() op.ConfidentialClient {
 				c := base()
-				c.Secret, c.PreviousSecret, c.PreviousSecretExpiresAt = "new-secret", "old-secret", future
+				c.Secret, c.PreviousSecret, c.PreviousSecretExpiresAt = "new-secret-0123456789-abcdefghijklmnopqrstuv", "old-secret", future
 				return c
 			},
 		},
@@ -472,7 +472,7 @@ func TestClientSeed_PreviousSecret_Validation(t *testing.T) {
 			name: "hash previous with expiry",
 			seed: func() op.ConfidentialClient {
 				c := base()
-				c.Secret, c.PreviousSecretHash, c.PreviousSecretExpiresAt = "new-secret", hePrevious, future
+				c.Secret, c.PreviousSecretHash, c.PreviousSecretExpiresAt = "new-secret-0123456789-abcdefghijklmnopqrstuv", hePrevious, future
 				return c
 			},
 		},
@@ -480,7 +480,7 @@ func TestClientSeed_PreviousSecret_Validation(t *testing.T) {
 			name: "past expiry is not an error",
 			seed: func() op.ConfidentialClient {
 				c := base()
-				c.Secret, c.PreviousSecret, c.PreviousSecretExpiresAt = "new-secret", "old-secret", past
+				c.Secret, c.PreviousSecret, c.PreviousSecretExpiresAt = "new-secret-0123456789-abcdefghijklmnopqrstuv", "old-secret", past
 				return c
 			},
 		},
@@ -488,7 +488,7 @@ func TestClientSeed_PreviousSecret_Validation(t *testing.T) {
 			name: "both previous forms are exclusive",
 			seed: func() op.ConfidentialClient {
 				c := base()
-				c.Secret, c.PreviousSecret, c.PreviousSecretHash = "new-secret", "old-secret", hePrevious
+				c.Secret, c.PreviousSecret, c.PreviousSecretHash = "new-secret-0123456789-abcdefghijklmnopqrstuv", "old-secret", hePrevious
 				c.PreviousSecretExpiresAt = future
 				return c
 			},
@@ -498,7 +498,7 @@ func TestClientSeed_PreviousSecret_Validation(t *testing.T) {
 			name: "plaintext previous needs an expiry",
 			seed: func() op.ConfidentialClient {
 				c := base()
-				c.Secret, c.PreviousSecret = "new-secret", "old-secret"
+				c.Secret, c.PreviousSecret = "new-secret-0123456789-abcdefghijklmnopqrstuv", "old-secret"
 				return c
 			},
 			wantError: "PreviousSecretExpiresAt",
@@ -507,7 +507,7 @@ func TestClientSeed_PreviousSecret_Validation(t *testing.T) {
 			name: "hash previous needs an expiry",
 			seed: func() op.ConfidentialClient {
 				c := base()
-				c.Secret, c.PreviousSecretHash = "new-secret", hePrevious
+				c.Secret, c.PreviousSecretHash = "new-secret-0123456789-abcdefghijklmnopqrstuv", hePrevious
 				return c
 			},
 			wantError: "PreviousSecretExpiresAt",
@@ -556,6 +556,72 @@ func TestClientSeed_PreviousSecret_Validation(t *testing.T) {
 	}
 }
 
+// TestConfidentialClient_SecretFloor pins the 32-byte floor on a
+// plaintext Secret: one byte short fails op.New with a message that
+// points at op.NewClientSecret; the previous secret and a pre-hashed
+// SecretHash are outside the floor.
+func TestConfidentialClient_SecretFloor(t *testing.T) {
+	t.Parallel()
+
+	_, hash, err := op.NewClientSecret()
+	if err != nil {
+		t.Fatalf("NewClientSecret: %v", err)
+	}
+	future := time.Date(2099, 1, 1, 0, 0, 0, 0, time.UTC)
+	tests := []struct {
+		name      string
+		seed      op.ConfidentialClient
+		wantError bool
+	}{
+		{
+			name:      "31 bytes fails",
+			seed:      op.ConfidentialClient{Secret: strings.Repeat("a", 31)},
+			wantError: true,
+		},
+		{
+			name: "32 bytes succeeds",
+			seed: op.ConfidentialClient{Secret: strings.Repeat("a", 32)},
+		},
+		{
+			name: "short previous secret with expiry succeeds",
+			seed: op.ConfidentialClient{
+				Secret:                  strings.Repeat("a", 32),
+				PreviousSecret:          "short",
+				PreviousSecretExpiresAt: future,
+			},
+		},
+		{
+			name: "SecretHash passes through",
+			seed: op.ConfidentialClient{SecretHash: hash},
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			seed := tc.seed
+			seed.ID = "rp-floor"
+			seed.RedirectURIs = []string{scdCallback}
+			seed.Scopes = []string{"openid"}
+			_, err := op.New(testkit.MinimalOptions(t, op.WithStaticClients(seed))...)
+			if !tc.wantError {
+				if err != nil {
+					t.Fatalf("op.New: %v", err)
+				}
+				return
+			}
+			if err == nil {
+				t.Fatal("op.New accepted a 31-byte Secret")
+			}
+			desc := configurationDescription(t, err)
+			for _, want := range []string{"rp-floor", "31 bytes", "op.NewClientSecret", "SecretHash"} {
+				if !strings.Contains(desc, want) {
+					t.Errorf("description %q must mention %q", desc, want)
+				}
+			}
+		})
+	}
+}
+
 // TestClientSeed_PublicSurface pins the public-API shape of the
 // three typed builders — every field that embedders set is exported
 // and the zero value is a valid (if unsuitable) starting point for
@@ -578,7 +644,7 @@ func TestClientSeed_PublicSurface(t *testing.T) {
 
 	conf := op.ConfidentialClient{
 		ID:           "demo-confidential",
-		Secret:       "demo-secret",
+		Secret:       "demo-secret-0123456789-abcdefghijklmnopqrstu",
 		AuthMethod:   op.AuthClientSecretBasic,
 		RedirectURIs: []string{"https://app.example.com/cb"},
 		Scopes:       []string{"openid"},

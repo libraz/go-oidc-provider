@@ -28,7 +28,7 @@
 //
 //  3. Request a token for the API (resource) with the orders:read scope:
 //
-//     TOKEN=$(curl -s -u orders-client:orders-demo-secret-4f9k \
+//     TOKEN=$(curl -s -u orders-client:orders-demo-secret-4f9k-36-resource-server \
 //     -d 'grant_type=client_credentials&scope=orders:read' \
 //     --data-urlencode 'resource=http://127.0.0.1:8080/api' \
 //     http://127.0.0.1:8080/identity/token | jq -r .access_token)
@@ -44,7 +44,7 @@
 //  5. Token without the scope (orders:write only): expect 403 and
 //     error="insufficient_scope":
 //
-//     W=$(curl -s -u orders-client:orders-demo-secret-4f9k \
+//     W=$(curl -s -u orders-client:orders-demo-secret-4f9k-36-resource-server \
 //     -d 'grant_type=client_credentials&scope=orders:write' \
 //     --data-urlencode 'resource=http://127.0.0.1:8080/api' \
 //     http://127.0.0.1:8080/identity/token | jq -r .access_token)
@@ -53,7 +53,7 @@
 //  6. Token for another audience (no resource, so aud is the issuer):
 //     expect 401 and error="invalid_token":
 //
-//     O=$(curl -s -u orders-client:orders-demo-secret-4f9k \
+//     O=$(curl -s -u orders-client:orders-demo-secret-4f9k-36-resource-server \
 //     -d 'grant_type=client_credentials&scope=orders:read' \
 //     http://127.0.0.1:8080/identity/token | jq -r .access_token)
 //     curl -i -H "Authorization: Bearer $O" http://127.0.0.1:8080/api/orders
@@ -93,7 +93,7 @@ const (
 	apiResource = issuer + "/api"
 
 	clientID     = "orders-client"
-	clientSecret = "orders-demo-secret-4f9k"
+	clientSecret = "orders-demo-secret-4f9k-36-resource-server"
 )
 
 func main() {

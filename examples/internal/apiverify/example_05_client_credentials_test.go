@@ -10,5 +10,5 @@ import "testing"
 func TestExample05ClientCredentials(t *testing.T) {
 	runClientCredentials(t, "../../05-client-credentials",
 		"http://127.0.0.1:8080",
-		"backend-service", "cc-demo-secret-rotate-me", "api:read")
+		"backend-service", "cc-demo-secret-rotate-me-05-client-credentials", "api:read")
 }

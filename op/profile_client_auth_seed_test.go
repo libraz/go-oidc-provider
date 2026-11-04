@@ -29,7 +29,7 @@ func staticSeedForAuthMethod(tb testing.TB, method, id string) op.Option {
 		//nolint:gosec // G101: test-fixture client secret, never a real credential.
 		return op.WithStaticClients(op.ConfidentialClient{
 			ID:           id,
-			Secret:       "seeded-client-secret",
+			Secret:       "seeded-client-secret-0123456789-abcdef",
 			AuthMethod:   op.AuthMethod(method),
 			RedirectURIs: []string{redirect},
 			Scopes:       []string{"openid"},

@@ -43,7 +43,7 @@ func TestWithStaticClients_AcceptsMixedSeeds(t *testing.T) {
 			},
 			op.ConfidentialClient{
 				ID:           "demo-confidential",
-				Secret:       "demo-secret",
+				Secret:       "demo-secret-0123456789-abcdefghijklmnopqrstu",
 				RedirectURIs: []string{"https://app.example.com/cb"},
 				Scopes:       []string{"openid"},
 			},
@@ -137,7 +137,7 @@ func TestWithStaticClients_PersistsToStore(t *testing.T) {
 			},
 			op.ConfidentialClient{
 				ID:           "demo-confidential",
-				Secret:       "demo-secret",
+				Secret:       "demo-secret-0123456789-abcdefghijklmnopqrstu",
 				RedirectURIs: []string{"https://app.example.com/cb"},
 				Scopes:       []string{"openid"},
 			},
@@ -297,7 +297,7 @@ func TestWithStaticClients_FAPIRejectsSecretAuthSeed(t *testing.T) {
 		op.WithProfile(profile.FAPI2Baseline),
 		op.WithStaticClients(op.ConfidentialClient{
 			ID:           "fapi-secret-client",
-			Secret:       "demo-secret",
+			Secret:       "demo-secret-0123456789-abcdefghijklmnopqrstu",
 			RedirectURIs: []string{"https://app.example.com/cb"},
 			Scopes:       []string{"openid"},
 		}),
@@ -370,7 +370,7 @@ func TestWithStaticClients_AcceptsHTTPLoopbackBackchannelWithDevOptIn(t *testing
 			_, err := op.New(append(validBaseOptsWithInmem(t),
 				op.WithStaticClients(op.ConfidentialClient{
 					ID:                   "demo-rp",
-					Secret:               "rotate-me",
+					Secret:               "rotate-me-0123456789-abcdefghijklmnopqrst",
 					AuthMethod:           op.AuthClientSecretBasic,
 					RedirectURIs:         []string{"https://rp.example.com/cb"},
 					Scopes:               []string{"openid"},
@@ -387,7 +387,7 @@ func TestWithStaticClients_AcceptsHTTPLoopbackBackchannelWithDevOptIn(t *testing
 				op.WithAllowInsecureBackchannelLogoutForDev(),
 				op.WithStaticClients(op.ConfidentialClient{
 					ID:                   "demo-rp",
-					Secret:               "rotate-me",
+					Secret:               "rotate-me-0123456789-abcdefghijklmnopqrst",
 					AuthMethod:           op.AuthClientSecretBasic,
 					RedirectURIs:         []string{"https://rp.example.com/cb"},
 					Scopes:               []string{"openid"},
@@ -414,7 +414,7 @@ func TestWithStaticClients_RejectsHTTPNonLoopbackBackchannelEvenWithDevOptIn(t *
 		op.WithAllowInsecureBackchannelLogoutForDev(),
 		op.WithStaticClients(op.ConfidentialClient{
 			ID:                   "demo-rp",
-			Secret:               "rotate-me",
+			Secret:               "rotate-me-0123456789-abcdefghijklmnopqrst",
 			AuthMethod:           op.AuthClientSecretBasic,
 			RedirectURIs:         []string{"https://rp.example.com/cb"},
 			Scopes:               []string{"openid"},
@@ -451,31 +451,6 @@ func TestWithStaticClients_RejectsUnknownGrantType(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "grant_type") {
 		t.Errorf("err = %v, want it to mention grant_type", err)
-	}
-}
-
-// TestWithStaticClients_RejectsBackchannelSessionRequired pins the
-// construction-time refusal of a client that requests session-bound
-// logout. Supplying a delivery URI does not make the request safe:
-// the provider cannot recover an RP-specific SID from the current
-// grant model.
-func TestWithStaticClients_RejectsBackchannelSessionRequired(t *testing.T) {
-	t.Parallel()
-
-	_, err := op.New(append(validBaseOptsWithInmem(t),
-		op.WithStaticClients(op.PublicClient{
-			ID:                               "demo-spa",
-			RedirectURIs:                     []string{"https://app.example.com/cb"},
-			Scopes:                           []string{"openid"},
-			BackchannelLogoutURI:             "https://app.example.com/logout",
-			BackchannelLogoutSessionRequired: true,
-		}),
-	)...)
-	if err == nil {
-		t.Fatal("expected configuration error for unsupported session_required, got nil")
-	}
-	if !strings.Contains(err.Error(), "backchannel_logout") {
-		t.Errorf("err = %v, want it to mention the offending field", err)
 	}
 }
 

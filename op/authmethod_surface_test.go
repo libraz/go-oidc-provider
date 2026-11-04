@@ -15,7 +15,7 @@ import (
 )
 
 //nolint:gosec // opaque test fixture secret, not a credential.
-const authMethodSurfaceSecret = "authmethod-surface-secret"
+const authMethodSurfaceSecret = "authmethod-surface-secret-0123456789"
 
 // enumeratedAuthMethods lists every [op.AuthMethod] constant the package
 // exports. A constant added without a row here is invisible to the

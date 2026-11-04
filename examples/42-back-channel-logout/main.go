@@ -31,7 +31,7 @@
 //  2. Copy the "code" query parameter off the failed redirect and
 //     exchange it, keeping the id_token from the response:
 //
-//     curl -s -u demo-rp:bcl-demo-secret-rotate-me \
+//     curl -s -u demo-rp:bcl-demo-secret-rotate-me-42-back-channel-logout \
 //     -d grant_type=authorization_code -d code=$CODE \
 //     -d redirect_uri=http://127.0.0.1:5173/callback \
 //     -d code_verifier=dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk \
@@ -128,7 +128,7 @@ func main() {
 		op.WithAllowInsecureBackchannelLogoutForDev(),
 		op.WithStaticClients(op.ConfidentialClient{
 			ID:                   clientID,
-			Secret:               "bcl-demo-secret-rotate-me",
+			Secret:               "bcl-demo-secret-rotate-me-42-back-channel-logout",
 			RedirectURIs:         []string{"http://127.0.0.1:5173/callback"},
 			Scopes:               []string{"openid", "profile"},
 			BackchannelLogoutURI: "http://127.0.0.1" + rpAddr + "/backchannel-logout",

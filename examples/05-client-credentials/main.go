@@ -11,7 +11,7 @@
 //
 // Then exchange the credential for an access token:
 //
-//	curl -u backend-service:cc-demo-secret-rotate-me \
+//	curl -u backend-service:cc-demo-secret-rotate-me-05-client-credentials \
 //	     -d 'grant_type=client_credentials&scope=api:read' \
 //	     http://127.0.0.1:8080/oidc/token | jq
 //
@@ -67,7 +67,7 @@ func main() {
 		op.WithStaticClients(
 			op.ConfidentialClient{
 				ID:         "backend-service",
-				Secret:     "cc-demo-secret-rotate-me",
+				Secret:     "cc-demo-secret-rotate-me-05-client-credentials",
 				AuthMethod: op.AuthClientSecretBasic,
 				// client_credentials clients do not visit /authorize;
 				// RedirectURIs may be empty. The grant set is overridden
@@ -87,7 +87,7 @@ func main() {
 	mux.Handle("/", provider)
 
 	log.Printf("client-credentials example listening on %s (issuer %s)", opAddr, issuer)
-	log.Println("try: curl -u backend-service:cc-demo-secret-rotate-me \\")
+	log.Println("try: curl -u backend-service:cc-demo-secret-rotate-me-05-client-credentials \\")
 	log.Println("         -d 'grant_type=client_credentials&scope=api:read' \\")
 	log.Printf("         %s/oidc/token | jq", issuer)
 	if err := serve.Listen(opAddr, mux, provider); err != nil {

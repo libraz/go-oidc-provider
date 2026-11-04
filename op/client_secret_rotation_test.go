@@ -74,7 +74,7 @@ func TestClientSecretRotation_EndToEnd(t *testing.T) {
 
 	const (
 		clientID = "rp-rotation"
-		current  = "rotation-secret-current"
+		current  = "rotation-secret-current-0123456789-abcdef"
 		previous = "rotation-secret-previous"
 	)
 	start := time.Date(2026, 10, 30, 12, 0, 0, 0, time.UTC)

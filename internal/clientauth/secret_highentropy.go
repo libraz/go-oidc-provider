@@ -29,8 +29,9 @@ const (
 	// stored value, which a dump would otherwise show.
 	highEntropySaltBytes = 16
 
-	// highEntropyMinSecretChars is the floor [HashHighEntropySecret]
-	// enforces on the plaintext.
+	// MinSecretBytes is the floor [HashHighEntropySecret] enforces on
+	// the plaintext, and the floor the static client seed applies to
+	// ConfidentialClient.Secret.
 	//
 	// The number is a length, not an entropy measurement, because a
 	// string carries no way to measure the latter: "aaaa…" and 32
@@ -42,7 +43,7 @@ const (
 	// construction. The library's own minted secret is 32 random
 	// bytes, 43 characters in base64url, so it clears this with room
 	// to spare.
-	highEntropyMinSecretChars = 32
+	MinSecretBytes = 32
 
 	// highEntropyMaxEncodingChars caps the stored value before
 	// parsing, mirroring the bound the argon2id parser applies. A real
@@ -51,7 +52,7 @@ const (
 )
 
 // ErrSecretTooShort reports that a plaintext offered to
-// [HashHighEntropySecret] is below [highEntropyMinSecretChars]. It is
+// [HashHighEntropySecret] is below [MinSecretBytes]. It is
 // a provisioning-time error — never a verification outcome — so it
 // never reaches the wire and callers surface it verbatim to the
 // operator who wrote the configuration.
@@ -116,15 +117,15 @@ func (HighEntropy) VerifyDummy(presented string) {
 
 // HashHighEntropySecret renders the stored encoding for a plaintext
 // the caller asserts is machine generated, refusing anything shorter
-// than [highEntropyMinSecretChars] with [ErrSecretTooShort].
+// than [MinSecretBytes] with [ErrSecretTooShort].
 //
 // Callers that can mint the credential themselves should use
 // [NewHighEntropySecret] instead: it removes the assertion entirely
 // rather than checking a proxy for it.
 func HashHighEntropySecret(secret string) (string, error) {
-	if len(secret) < highEntropyMinSecretChars {
+	if len(secret) < MinSecretBytes {
 		return "", fmt.Errorf("%w: %d characters, minimum %d",
-			ErrSecretTooShort, len(secret), highEntropyMinSecretChars)
+			ErrSecretTooShort, len(secret), MinSecretBytes)
 	}
 	salt := make([]byte, highEntropySaltBytes)
 	if _, err := rand.Read(salt); err != nil {

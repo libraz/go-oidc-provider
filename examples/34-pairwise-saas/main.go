@@ -106,11 +106,11 @@ const (
 	demoPassword = "pairwise-demo-password"
 
 	tenantAClientID     = "tenant-a"
-	tenantAClientSecret = "tenant-a-secret-rotate-me"
+	tenantAClientSecret = "tenant-a-secret-rotate-me-34-pairwise-saas"
 	tenantARedirectURI  = "https://tenant-a.example.com/callback"
 
 	tenantBClientID     = "tenant-b"
-	tenantBClientSecret = "tenant-b-secret-rotate-me"
+	tenantBClientSecret = "tenant-b-secret-rotate-me-34-pairwise-saas"
 	tenantBRedirectURI  = "https://tenant-b.example.com/callback"
 
 	// pairwiseSaltLen matches subject.MinSaltLength (32 bytes / 256

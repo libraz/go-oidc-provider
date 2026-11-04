@@ -27,7 +27,7 @@ func TestWithStaticClients_IsIdempotentAcrossProviderConstruction(t *testing.T) 
 			fixtureAuthenticator(),
 			op.WithStaticClients(op.ConfidentialClient{
 				ID:           "restart-client",
-				Secret:       "restart-secret",
+				Secret:       "restart-secret-0123456789-abcdefghijkl",
 				RedirectURIs: []string{"https://app.example.com/cb"},
 				Scopes:       []string{"openid"},
 			}),
@@ -154,14 +154,14 @@ func TestWithStaticClients_DifferentSecretConflicts(t *testing.T) {
 		)
 		return err
 	}
-	if err := build("original-secret"); err != nil {
+	if err := build("original-secret-0123456789-abcdefghijklm"); err != nil {
 		t.Fatalf("initial op.New: %v", err)
 	}
 	before, err := st.GetClient(context.Background(), "secret-client")
 	if err != nil {
 		t.Fatalf("GetClient before conflict: %v", err)
 	}
-	err = build("rotated-secret")
+	err = build("rotated-secret-0123456789-abcdefghijklmn")
 	if !errors.Is(err, store.ErrConflict) {
 		t.Fatalf("rotated secret error=%v want ErrConflict", err)
 	}
@@ -179,14 +179,14 @@ func TestNew_RotatedSeedConflictsBeforeSync(t *testing.T) {
 	t.Parallel()
 
 	st := inmem.New()
-	if _, err := op.New(syncProviderOpts(t, st, syncRotationSeed("secret-before", ""))...); err != nil {
+	if _, err := op.New(syncProviderOpts(t, st, syncRotationSeed("secret-before-0123456789-abcdefghijklmnop", ""))...); err != nil {
 		t.Fatalf("initial op.New: %v", err)
 	}
 	before, err := st.GetClient(context.Background(), "svc")
 	if err != nil {
 		t.Fatalf("GetClient: %v", err)
 	}
-	_, err = op.New(syncProviderOpts(t, st, syncRotationSeed("secret-after", "secret-before"))...)
+	_, err = op.New(syncProviderOpts(t, st, syncRotationSeed("secret-after-0123456789-abcdefghijklmnopq", "secret-before-0123456789-abcdefghijklmnop"))...)
 	if !errors.Is(err, store.ErrConflict) {
 		t.Fatalf("rotated seed error=%v want ErrConflict", err)
 	}
@@ -205,8 +205,8 @@ func TestNew_RotatedSeedAfterSync(t *testing.T) {
 	ctx := context.Background()
 	st := inmem.New()
 	for _, seed := range []op.ConfidentialClient{
-		syncRotationSeed("secret-before", ""),
-		syncRotationSeed("secret-after", "secret-before"),
+		syncRotationSeed("secret-before-0123456789-abcdefghijklmnop", ""),
+		syncRotationSeed("secret-after-0123456789-abcdefghijklmnopq", "secret-before-0123456789-abcdefghijklmnop"),
 	} {
 		if _, err := op.SyncStaticClients(ctx, st, seed); err != nil {
 			t.Fatalf("sync: %v", err)
@@ -216,7 +216,7 @@ func TestNew_RotatedSeedAfterSync(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetClient: %v", err)
 	}
-	if _, err := op.New(syncProviderOpts(t, st, syncRotationSeed("secret-after", "secret-before"))...); err != nil {
+	if _, err := op.New(syncProviderOpts(t, st, syncRotationSeed("secret-after-0123456789-abcdefghijklmnopq", "secret-before-0123456789-abcdefghijklmnop"))...); err != nil {
 		t.Fatalf("op.New after sync: %v", err)
 	}
 	after, err := st.GetClient(ctx, "svc")

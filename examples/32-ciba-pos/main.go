@@ -81,7 +81,7 @@ const (
 	opAddr       = ":8080"
 	issuer       = "http://127.0.0.1" + opAddr
 	clientID     = "ciba-poll-demo"
-	clientSecret = "ciba-poll-demo-secret-rotate-me"
+	clientSecret = "ciba-poll-demo-secret-rotate-me-32-ciba-pos"
 
 	// loginHint is the deterministic identifier the demo RP supplies
 	// at /bc-authorize. The HintResolver maps it to demoSubject; any

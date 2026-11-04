@@ -91,7 +91,7 @@ func main() {
 		op.WithStaticClients(
 			op.ConfidentialClient{
 				ID:           "demo-rp",
-				Secret:       "chooser-demo-secret-rotate-me",
+				Secret:       "chooser-demo-secret-rotate-me-13-multi-account",
 				AuthMethod:   op.AuthClientSecretBasic,
 				RedirectURIs: []string{"http://localhost:8081/callback"},
 				Scopes:       []string{"openid", "profile", "email"},

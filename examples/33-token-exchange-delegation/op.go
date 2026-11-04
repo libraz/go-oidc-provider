@@ -91,7 +91,7 @@ func buildProvider(issuer string) (*op.Provider, error) {
 				// against the union of registered Resources. The
 				// client itself never visits /token in this example.
 				ID:           serviceBID,
-				Secret:       "tx-svc-b-secret-rotate-me",
+				Secret:       "tx-svc-b-secret-rotate-me-33-token-exchange",
 				AuthMethod:   op.AuthClientSecretBasic,
 				RedirectURIs: []string{rpRedirectURI},
 				GrantTypes:   []string{"authorization_code"},

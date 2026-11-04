@@ -186,7 +186,7 @@ func run() error {
 			},
 			op.ConfidentialClient{
 				ID:           "backend-service",
-				Secret:       "bundle-demo-secret-rotate-me",
+				Secret:       "bundle-demo-secret-rotate-me-02-bundle",
 				AuthMethod:   op.AuthClientSecretBasic,
 				RedirectURIs: []string{"https://backend.example.com/callback"},
 				Scopes:       []string{"openid", "profile"},

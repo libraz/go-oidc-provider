@@ -100,7 +100,7 @@ const (
 	// secret to bind. The frontend never performs the exchange; the
 	// token it receives is what service-a presents as subject_token.
 	frontendID     = "frontend"
-	frontendSecret = "tx-frontend-secret-rotate-me"
+	frontendSecret = "tx-frontend-secret-rotate-me-33-token-exchange"
 
 	// serviceAID is the calling client — the one performing the
 	// exchange. The OP authenticates it via client_secret_post. The
@@ -108,7 +108,7 @@ const (
 	// token (the OP injects the calling client when no actor_token is
 	// supplied, per RFC 8693 §1.3).
 	serviceAID     = "service-a"
-	serviceASecret = "tx-svc-a-secret-rotate-me"
+	serviceASecret = "tx-svc-a-secret-rotate-me-33-token-exchange"
 
 	// serviceBID is the resource server's identifier. The OP never
 	// authenticates this client for the exchange; service-b's role is

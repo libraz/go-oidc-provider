@@ -45,7 +45,7 @@ func TestWithHighEntropyClientSecrets_RejectsAnArgon2idStaticClient(t *testing.T
 		op.WithHighEntropyClientSecrets(),
 		op.WithStaticClients(op.ConfidentialClient{
 			ID:           "legacy",
-			Secret:       "a-statically-provisioned-secret",
+			Secret:       "a-statically-provisioned-secret-value",
 			RedirectURIs: []string{"https://app.example.com/callback"},
 		}),
 	)...)
@@ -95,7 +95,7 @@ func TestConfidentialClient_RejectsBothSecretForms(t *testing.T) {
 	_, err = op.New(append(staticClientBaseOpts(t),
 		op.WithStaticClients(op.ConfidentialClient{
 			ID:           "ambiguous",
-			Secret:       "a-statically-provisioned-secret",
+			Secret:       "a-statically-provisioned-secret-value",
 			SecretHash:   hash,
 			RedirectURIs: []string{"https://app.example.com/callback"},
 		}),
@@ -146,7 +146,7 @@ func TestStaticClientsWithoutTheOption_StillAcceptPlaintextSecrets(t *testing.T)
 	if _, err := op.New(append(staticClientBaseOpts(t),
 		op.WithStaticClients(op.ConfidentialClient{
 			ID:           "legacy",
-			Secret:       "a-statically-provisioned-secret",
+			Secret:       "a-statically-provisioned-secret-value",
 			RedirectURIs: []string{"https://app.example.com/callback"},
 		}),
 	)...); err != nil {

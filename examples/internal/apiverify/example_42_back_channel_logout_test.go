@@ -23,7 +23,7 @@ func TestExample42BackChannelLogout(t *testing.T) {
 	const (
 		baseURL     = "http://127.0.0.1:8080"
 		clientID    = "demo-rp"
-		secret      = "bcl-demo-secret-rotate-me"
+		secret      = "bcl-demo-secret-rotate-me-42-back-channel-logout"
 		redirectURI = "http://127.0.0.1:5173/callback"
 	)
 

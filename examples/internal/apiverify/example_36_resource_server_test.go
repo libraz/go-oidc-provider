@@ -20,7 +20,7 @@ func TestExample36ResourceServer(t *testing.T) {
 		base      = "http://127.0.0.1:8080"
 		resource  = base + "/api"
 		clientID  = "orders-client"
-		clientPwd = "orders-demo-secret-4f9k"
+		clientPwd = "orders-demo-secret-4f9k-36-resource-server"
 	)
 	p := buildAndStart(t, "../../36-resource-server")
 	defer p.kill()

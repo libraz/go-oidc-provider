@@ -5,6 +5,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/libraz/go-oidc-provider/internal/clientauth"
 	"github.com/libraz/go-oidc-provider/internal/clone"
 	"github.com/libraz/go-oidc-provider/op/grant"
 	"github.com/libraz/go-oidc-provider/op/store"
@@ -128,12 +129,6 @@ type PublicClient struct {
 	// the empty path so the wire never sees a malformed delivery.
 	BackchannelLogoutURI string
 
-	// BackchannelLogoutSessionRequired requests a "sid" claim on the
-	// Logout Token (OIDC Back-Channel Logout 1.0 §2.4). The provider
-	// currently rejects true because it cannot recover an RP-specific
-	// session lineage; sub-only back-channel logout remains available.
-	BackchannelLogoutSessionRequired bool
-
 	// ApplicationType mirrors OIDC Dynamic Client Registration 1.0's
 	// "application_type" metadata. Typical values are "native" and
 	// "web". The library does not enforce a specific value but
@@ -184,23 +179,22 @@ func (c PublicClient) seed() (store.Client, error) {
 	}
 	grants, responses := seedGrantAndResponseTypes(c.GrantTypes, c.ResponseTypes)
 	return store.Client{
-		ID:                               c.ID,
-		RedirectURIs:                     slices.Clone(c.RedirectURIs),
-		Scopes:                           slices.Clone(c.Scopes),
-		Resources:                        slices.Clone(c.Resources),
-		GrantTypes:                       grants,
-		ResponseTypes:                    responses,
-		TokenEndpointAuthMethod:          AuthNone.String(),
-		PublicClient:                     true,
-		Source:                           store.ClientSourceStatic,
-		PostLogoutRedirectURIs:           slices.Clone(c.PostLogoutRedirectURIs),
-		BackchannelLogoutURI:             c.BackchannelLogoutURI,
-		BackchannelLogoutSessionRequired: c.BackchannelLogoutSessionRequired,
-		ApplicationType:                  c.ApplicationType,
-		SubjectType:                      c.SubjectType,
-		DefaultMaxAge:                    clone.Int64Ptr(c.DefaultMaxAge),
-		RequireAuthTime:                  c.RequireAuthTime,
-		DefaultACRValues:                 slices.Clone(c.DefaultACRValues),
+		ID:                      c.ID,
+		RedirectURIs:            slices.Clone(c.RedirectURIs),
+		Scopes:                  slices.Clone(c.Scopes),
+		Resources:               slices.Clone(c.Resources),
+		GrantTypes:              grants,
+		ResponseTypes:           responses,
+		TokenEndpointAuthMethod: AuthNone.String(),
+		PublicClient:            true,
+		Source:                  store.ClientSourceStatic,
+		PostLogoutRedirectURIs:  slices.Clone(c.PostLogoutRedirectURIs),
+		BackchannelLogoutURI:    c.BackchannelLogoutURI,
+		ApplicationType:         c.ApplicationType,
+		SubjectType:             c.SubjectType,
+		DefaultMaxAge:           clone.Int64Ptr(c.DefaultMaxAge),
+		RequireAuthTime:         c.RequireAuthTime,
+		DefaultACRValues:        slices.Clone(c.DefaultACRValues),
 	}, nil
 }
 
@@ -220,7 +214,7 @@ func (c PublicClient) seed() (store.Client, error) {
 //	op.WithStaticClients(
 //	    op.ConfidentialClient{
 //	        ID:           "demo-confidential",
-//	        Secret:       "demo-secret",
+//	        Secret:       "demo-secret-from-op-new-client-secret-0123456789",
 //	        AuthMethod:   op.AuthClientSecretBasic,
 //	        RedirectURIs: []string{"https://app.example.com/callback"},
 //	        Scopes:       []string{"openid", "profile"},
@@ -233,6 +227,11 @@ type ConfidentialClient struct {
 	// Secret is the plaintext client_secret. The seed hashes it
 	// through [HashClientSecret]; the library never persists the
 	// raw value.
+	//
+	// A Secret shorter than 32 bytes is refused by [New]; mint one
+	// with [NewClientSecret]. The floor applies to this field only:
+	// [HashClientSecret], SecretHash, clients read from a store and
+	// Dynamic Client Registration are not subject to it.
 	//
 	// Mutually exclusive with SecretHash.
 	Secret string
@@ -257,6 +256,10 @@ type ConfidentialClient struct {
 	// outage. It is hashed with Argon2id, or, when it still verifies
 	// against the stored record, the stored hash is reused so repeated
 	// runs of [SyncStaticClients] stay unchanged.
+	//
+	// The 32-byte floor on Secret does not apply here, so a secret
+	// issued before the floor can still be rotated out; its exposure
+	// is bounded by PreviousSecretExpiresAt.
 	//
 	// Mutually exclusive with PreviousSecretHash. Requires
 	// PreviousSecretExpiresAt.
@@ -311,11 +314,6 @@ type ConfidentialClient struct {
 	// BackchannelLogoutURI mirrors [PublicClient.BackchannelLogoutURI].
 	BackchannelLogoutURI string
 
-	// BackchannelLogoutSessionRequired mirrors
-	// [PublicClient.BackchannelLogoutSessionRequired]. The provider
-	// currently rejects true.
-	BackchannelLogoutSessionRequired bool
-
 	// ApplicationType mirrors [PublicClient.ApplicationType].
 	ApplicationType string
 
@@ -368,6 +366,12 @@ func (c ConfidentialClient) secretHash(method AuthMethod) (string, error) {
 			return "", newConfigurationError("ConfidentialClient "+c.ID+": Secret or SecretHash is required", nil)
 		}
 		return "", nil
+	}
+	if len(c.Secret) < clientauth.MinSecretBytes {
+		return "", newConfigurationError("ConfidentialClient "+strconv.Quote(c.ID)+": Secret is "+
+			strconv.Itoa(len(c.Secret))+" bytes; use at least "+strconv.Itoa(clientauth.MinSecretBytes)+
+			". op.NewClientSecret returns a secret to put in Secret and a hash to put in SecretHash "+
+			"(or run go run github.com/libraz/go-oidc-provider/cmd/op-client-secret)", nil)
 	}
 	hash, err := HashClientSecret(c.Secret)
 	if err != nil {
@@ -443,26 +447,25 @@ func (c ConfidentialClient) seed() (store.Client, error) {
 	}
 	grants, responses := seedGrantAndResponseTypes(c.GrantTypes, c.ResponseTypes)
 	return store.Client{
-		ID:                               c.ID,
-		RedirectURIs:                     slices.Clone(c.RedirectURIs),
-		Scopes:                           slices.Clone(c.Scopes),
-		Resources:                        slices.Clone(c.Resources),
-		GrantTypes:                       grants,
-		ResponseTypes:                    responses,
-		TokenEndpointAuthMethod:          method.String(),
-		TokenEndpointAuthSigningAlg:      c.TokenEndpointAuthSigningAlg,
-		SecretHash:                       hash,
-		PreviousSecretHash:               previousHash,
-		PreviousSecretExpiresAt:          previousExpiry,
-		Source:                           store.ClientSourceStatic,
-		PostLogoutRedirectURIs:           slices.Clone(c.PostLogoutRedirectURIs),
-		BackchannelLogoutURI:             c.BackchannelLogoutURI,
-		BackchannelLogoutSessionRequired: c.BackchannelLogoutSessionRequired,
-		ApplicationType:                  c.ApplicationType,
-		SubjectType:                      c.SubjectType,
-		DefaultMaxAge:                    clone.Int64Ptr(c.DefaultMaxAge),
-		RequireAuthTime:                  c.RequireAuthTime,
-		DefaultACRValues:                 slices.Clone(c.DefaultACRValues),
+		ID:                          c.ID,
+		RedirectURIs:                slices.Clone(c.RedirectURIs),
+		Scopes:                      slices.Clone(c.Scopes),
+		Resources:                   slices.Clone(c.Resources),
+		GrantTypes:                  grants,
+		ResponseTypes:               responses,
+		TokenEndpointAuthMethod:     method.String(),
+		TokenEndpointAuthSigningAlg: c.TokenEndpointAuthSigningAlg,
+		SecretHash:                  hash,
+		PreviousSecretHash:          previousHash,
+		PreviousSecretExpiresAt:     previousExpiry,
+		Source:                      store.ClientSourceStatic,
+		PostLogoutRedirectURIs:      slices.Clone(c.PostLogoutRedirectURIs),
+		BackchannelLogoutURI:        c.BackchannelLogoutURI,
+		ApplicationType:             c.ApplicationType,
+		SubjectType:                 c.SubjectType,
+		DefaultMaxAge:               clone.Int64Ptr(c.DefaultMaxAge),
+		RequireAuthTime:             c.RequireAuthTime,
+		DefaultACRValues:            slices.Clone(c.DefaultACRValues),
 	}, nil
 }
 
@@ -520,11 +523,6 @@ type PrivateKeyJWTClient struct {
 	// BackchannelLogoutURI mirrors [PublicClient.BackchannelLogoutURI].
 	BackchannelLogoutURI string
 
-	// BackchannelLogoutSessionRequired mirrors
-	// [PublicClient.BackchannelLogoutSessionRequired]. The provider
-	// currently rejects true.
-	BackchannelLogoutSessionRequired bool
-
 	// ApplicationType mirrors [PublicClient.ApplicationType].
 	ApplicationType string
 
@@ -562,23 +560,22 @@ func (c PrivateKeyJWTClient) seed() (store.Client, error) {
 	}
 	grants, responses := seedGrantAndResponseTypes(c.GrantTypes, c.ResponseTypes)
 	return store.Client{
-		ID:                               c.ID,
-		RedirectURIs:                     slices.Clone(c.RedirectURIs),
-		Scopes:                           slices.Clone(c.Scopes),
-		Resources:                        slices.Clone(c.Resources),
-		GrantTypes:                       grants,
-		ResponseTypes:                    responses,
-		TokenEndpointAuthMethod:          AuthPrivateKeyJWT.String(),
-		TokenEndpointAuthSigningAlg:      c.TokenEndpointAuthSigningAlg,
-		JWKs:                             slices.Clone(c.JWKS),
-		Source:                           store.ClientSourceStatic,
-		PostLogoutRedirectURIs:           slices.Clone(c.PostLogoutRedirectURIs),
-		BackchannelLogoutURI:             c.BackchannelLogoutURI,
-		BackchannelLogoutSessionRequired: c.BackchannelLogoutSessionRequired,
-		ApplicationType:                  c.ApplicationType,
-		SubjectType:                      c.SubjectType,
-		DefaultMaxAge:                    clone.Int64Ptr(c.DefaultMaxAge),
-		RequireAuthTime:                  c.RequireAuthTime,
-		DefaultACRValues:                 slices.Clone(c.DefaultACRValues),
+		ID:                          c.ID,
+		RedirectURIs:                slices.Clone(c.RedirectURIs),
+		Scopes:                      slices.Clone(c.Scopes),
+		Resources:                   slices.Clone(c.Resources),
+		GrantTypes:                  grants,
+		ResponseTypes:               responses,
+		TokenEndpointAuthMethod:     AuthPrivateKeyJWT.String(),
+		TokenEndpointAuthSigningAlg: c.TokenEndpointAuthSigningAlg,
+		JWKs:                        slices.Clone(c.JWKS),
+		Source:                      store.ClientSourceStatic,
+		PostLogoutRedirectURIs:      slices.Clone(c.PostLogoutRedirectURIs),
+		BackchannelLogoutURI:        c.BackchannelLogoutURI,
+		ApplicationType:             c.ApplicationType,
+		SubjectType:                 c.SubjectType,
+		DefaultMaxAge:               clone.Int64Ptr(c.DefaultMaxAge),
+		RequireAuthTime:             c.RequireAuthTime,
+		DefaultACRValues:            slices.Clone(c.DefaultACRValues),
 	}, nil
 }

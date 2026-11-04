@@ -108,7 +108,7 @@ const (
 	// embedders generate this through their secret manager and rotate
 	// out-of-band. The demo value is fixed so the operator-facing curl
 	// snippets in the README reproduce.
-	clientSecret = "service-secret"
+	clientSecret = "service-secret-30-custom-grant-demo"
 
 	// grantURN is the embedder-defined grant_type the custom handler
 	// answers to. RFC 6749 §4.5 strongly recommends URN form for

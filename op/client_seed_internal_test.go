@@ -89,7 +89,7 @@ func TestPublicClient_SeedRespectsExplicitGrants(t *testing.T) {
 func TestConfidentialClient_SeedHashesSecret(t *testing.T) {
 	t.Parallel()
 
-	const plaintext = "demo-confidential-secret"
+	const plaintext = "demo-confidential-secret-0123456789-abcdef"
 	c := ConfidentialClient{
 		ID:           "demo-confidential",
 		Secret:       plaintext,
@@ -135,7 +135,7 @@ func TestConfidentialClient_SeedHonoursAuthMethod(t *testing.T) {
 
 	c := ConfidentialClient{
 		ID:           "demo-confidential-post",
-		Secret:       "demo-confidential-secret",
+		Secret:       "demo-confidential-secret-0123456789-abcdef",
 		AuthMethod:   AuthClientSecretPost,
 		RedirectURIs: []string{"https://app.example.com/cb"},
 	}
@@ -162,7 +162,7 @@ func TestConfidentialClient_SeedCopiesAuthSigningAlg(t *testing.T) {
 
 	c := ConfidentialClient{
 		ID:                          "demo-conf-alg",
-		Secret:                      "s3cret-please-rotate",
+		Secret:                      "s3cret-please-rotate-0123456789-abcdef",
 		RedirectURIs:                []string{"https://app.example.com/cb"},
 		Scopes:                      []string{"openid"},
 		TokenEndpointAuthSigningAlg: "ES256",
@@ -252,14 +252,13 @@ func TestPublicClient_SeedCopiesMetadataFields(t *testing.T) {
 	t.Parallel()
 
 	c := PublicClient{
-		ID:                               "demo-spa",
-		RedirectURIs:                     []string{"https://app.example.com/cb"},
-		Scopes:                           []string{"openid"},
-		PostLogoutRedirectURIs:           []string{"https://app.example.com/post-logout"},
-		BackchannelLogoutURI:             "https://app.example.com/bcl",
-		BackchannelLogoutSessionRequired: true,
-		ApplicationType:                  "web",
-		SubjectType:                      "public",
+		ID:                     "demo-spa",
+		RedirectURIs:           []string{"https://app.example.com/cb"},
+		Scopes:                 []string{"openid"},
+		PostLogoutRedirectURIs: []string{"https://app.example.com/post-logout"},
+		BackchannelLogoutURI:   "https://app.example.com/bcl",
+		ApplicationType:        "web",
+		SubjectType:            "public",
 	}
 	got, err := c.seed()
 	if err != nil {
@@ -270,9 +269,6 @@ func TestPublicClient_SeedCopiesMetadataFields(t *testing.T) {
 	}
 	if got.BackchannelLogoutURI != "https://app.example.com/bcl" {
 		t.Errorf("BackchannelLogoutURI = %q", got.BackchannelLogoutURI)
-	}
-	if !got.BackchannelLogoutSessionRequired {
-		t.Errorf("BackchannelLogoutSessionRequired = false, want true")
 	}
 	if got.ApplicationType != "web" {
 		t.Errorf("ApplicationType = %q", got.ApplicationType)
@@ -296,15 +292,14 @@ func TestConfidentialClient_SeedCopiesMetadataFields(t *testing.T) {
 	t.Parallel()
 
 	c := ConfidentialClient{
-		ID:                               "demo-conf",
-		Secret:                           "s3cret-please-rotate",
-		RedirectURIs:                     []string{"https://app.example.com/cb"},
-		Scopes:                           []string{"openid"},
-		PostLogoutRedirectURIs:           []string{"https://app.example.com/post-logout"},
-		BackchannelLogoutURI:             "https://app.example.com/bcl",
-		BackchannelLogoutSessionRequired: true,
-		ApplicationType:                  "web",
-		SubjectType:                      "public",
+		ID:                     "demo-conf",
+		Secret:                 "s3cret-please-rotate-0123456789-abcdef",
+		RedirectURIs:           []string{"https://app.example.com/cb"},
+		Scopes:                 []string{"openid"},
+		PostLogoutRedirectURIs: []string{"https://app.example.com/post-logout"},
+		BackchannelLogoutURI:   "https://app.example.com/bcl",
+		ApplicationType:        "web",
+		SubjectType:            "public",
 	}
 	got, err := c.seed()
 	if err != nil {
@@ -315,9 +310,6 @@ func TestConfidentialClient_SeedCopiesMetadataFields(t *testing.T) {
 	}
 	if got.BackchannelLogoutURI != "https://app.example.com/bcl" {
 		t.Errorf("BackchannelLogoutURI = %q", got.BackchannelLogoutURI)
-	}
-	if !got.BackchannelLogoutSessionRequired {
-		t.Errorf("BackchannelLogoutSessionRequired = false, want true")
 	}
 	if got.ApplicationType != "web" {
 		t.Errorf("ApplicationType = %q", got.ApplicationType)
@@ -333,15 +325,14 @@ func TestPrivateKeyJWTClient_SeedCopiesMetadataFields(t *testing.T) {
 	t.Parallel()
 
 	c := PrivateKeyJWTClient{
-		ID:                               "demo-fapi",
-		JWKS:                             []byte(`{"keys":[]}`),
-		RedirectURIs:                     []string{"https://app.example.com/cb"},
-		Scopes:                           []string{"openid"},
-		PostLogoutRedirectURIs:           []string{"https://app.example.com/post-logout"},
-		BackchannelLogoutURI:             "https://app.example.com/bcl",
-		BackchannelLogoutSessionRequired: true,
-		ApplicationType:                  "web",
-		SubjectType:                      "public",
+		ID:                     "demo-fapi",
+		JWKS:                   []byte(`{"keys":[]}`),
+		RedirectURIs:           []string{"https://app.example.com/cb"},
+		Scopes:                 []string{"openid"},
+		PostLogoutRedirectURIs: []string{"https://app.example.com/post-logout"},
+		BackchannelLogoutURI:   "https://app.example.com/bcl",
+		ApplicationType:        "web",
+		SubjectType:            "public",
 	}
 	got, err := c.seed()
 	if err != nil {
@@ -352,9 +343,6 @@ func TestPrivateKeyJWTClient_SeedCopiesMetadataFields(t *testing.T) {
 	}
 	if got.BackchannelLogoutURI != "https://app.example.com/bcl" {
 		t.Errorf("BackchannelLogoutURI = %q", got.BackchannelLogoutURI)
-	}
-	if !got.BackchannelLogoutSessionRequired {
-		t.Errorf("BackchannelLogoutSessionRequired = false, want true")
 	}
 	if got.ApplicationType != "web" {
 		t.Errorf("ApplicationType = %q", got.ApplicationType)
