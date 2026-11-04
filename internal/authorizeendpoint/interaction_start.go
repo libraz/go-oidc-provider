@@ -109,7 +109,9 @@ func initialAuthnState(
 		subject = ""
 	}
 	interactionsRun := initialInteractionsRun(req, existing, willRunChooser || addAccount || registration)
-	autoGranted := hint.autoGrant != nil
+	// The first-party auto-grant is not derived from any subject's cached
+	// grant, so the bindsOtherSubject refusal above does not apply to it.
+	autoGranted := hint.autoGrant != nil || hint.consentAutoGranted
 	if autoGranted {
 		interactionsRun[consent.Name] = true
 	}

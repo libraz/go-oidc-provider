@@ -13,30 +13,11 @@ import (
 )
 
 // firstPartyShouldSkipConsent reports whether the dispatcher's pending
-// outcome (a consent prompt or a prompt=none consent_required error)
-// should instead be auto-resolved through the first-party skip path
-// configured by [op.WithFirstPartyClients]. The four preconditions:
-//
-//  1. The client_id appears in [Deps.FirstPartyClients] and the record
-//     resolved for this request is static, admin or legacy-empty
-//     sourced ([firstPartySource]); a dynamic or metadata-document
-//     client under a listed id never qualifies.
-//  2. The pending decision would otherwise prompt the user for
-//     consent — either an interactive consent prompt or the
-//     prompt=none consent_required error. Login / chooser / silent-
-//     mint outcomes pass through unchanged.
-//  3. An active session exists. With no session there is no subject
-//     to bind the grant to; the first-party skip never invents one.
-//  4. The request did NOT carry prompt=consent. An RP that explicitly
-//     asks for re-consent always gets the prompt; the first-party
-//     flag is the OP's posture, not the RP's override.
-//
-// What the skip actually elides is the scope screen: the ceremony
-// presents scopes and nothing else. RFC 9396 authorization_details are
-// carried by the request and land on the grant on either path, so
-// enabling the skip does not remove an element-level display that the
-// prompting path would otherwise have shown (see
-// [authorizationDetailsCovered]).
+// consent outcome on an established session (an interactive consent
+// prompt or the prompt=none consent_required error) should instead be
+// auto-resolved into a silent mint for the session's subject. Login /
+// chooser / silent-mint outcomes pass through unchanged; the login
+// branch is [firstPartyAutoConsentOnLogin]'s.
 func firstPartyShouldSkipConsent(
 	r *http.Request,
 	hint authorizeHint,
@@ -45,7 +26,72 @@ func firstPartyShouldSkipConsent(
 	active *sessions.Active,
 	deps resolved,
 ) bool {
-	if active == nil || client == nil {
+	if active == nil || !firstPartyAutoConsentEligible(r, req, client, deps) {
+		return false
+	}
+	switch hint.decision {
+	case decisionInteract:
+		return hint.prompt == interaction.PromptConsent
+	case decisionConsentRequired:
+		return true
+	default:
+		return false
+	}
+}
+
+// firstPartyAutoConsentOnLogin reports whether an interaction that must
+// sign the user in first (no session, prompt=login / max_age, or an RFC
+// 9470 step-up) starts with consent already auto-granted. The grant is
+// written at completion for the subject the credential chain binds,
+// not one taken from the entry session. Registration (prompt=create) and the
+// account chooser (prompt=select_account, the chooser's add-account
+// login) are excluded: they bind another subject by design, and keeping
+// the consent screen there is the fail-closed side.
+func firstPartyAutoConsentOnLogin(
+	r *http.Request,
+	hint authorizeHint,
+	req *authorize.Request,
+	client *store.Client,
+	deps resolved,
+) bool {
+	if hint.decision != decisionInteract || hint.prompt != interaction.PromptLogin {
+		return false
+	}
+	if req.InternalAddAccount || slices.Contains(req.Prompt, interaction.PromptSelectAccount) {
+		return false
+	}
+	return firstPartyAutoConsentEligible(r, req, client, deps)
+}
+
+// firstPartyAutoConsentEligible holds the session-independent
+// preconditions of the first-party auto-grant configured by
+// [op.WithFirstPartyClients]; [firstPartyShouldSkipConsent] and
+// [firstPartyAutoConsentOnLogin] add only the subject-binding branch on
+// top of it.
+//
+//  1. The client_id appears in [Deps.FirstPartyClients] and the record
+//     resolved for this request is static, admin or legacy-empty
+//     sourced ([firstPartySource]); a dynamic or metadata-document
+//     client under a listed id never qualifies.
+//  2. The navigation is trusted ([firstPartyAutoGrantRequestTrusted]).
+//  3. The request did NOT carry prompt=consent. An RP that explicitly
+//     asks for re-consent always gets the prompt; the first-party flag
+//     is the OP's posture, not the RP's override.
+//  4. No offline_access scope, grant_management_action or
+//     authorization_details: each always gets an explicit ceremony.
+//
+// The subject is then either the established session's (only consent
+// left) or the one this interaction's sign-in binds; the skip never
+// invents one. What it elides is the scope screen: RFC 9396
+// authorization_details land on the grant on either path (see
+// [authorizationDetailsCovered]).
+func firstPartyAutoConsentEligible(
+	r *http.Request,
+	req *authorize.Request,
+	client *store.Client,
+	deps resolved,
+) bool {
+	if client == nil {
 		return false
 	}
 	if !deps.isFirstPartyClient(client.ID) || !firstPartySource(client.Source) {
@@ -73,14 +119,7 @@ func firstPartyShouldSkipConsent(
 		// always sees an explicit consent ceremony.
 		return false
 	}
-	switch hint.decision {
-	case decisionInteract:
-		return hint.prompt == interaction.PromptConsent
-	case decisionConsentRequired:
-		return true
-	default:
-		return false
-	}
+	return true
 }
 
 // firstPartySource reports whether a client of source may receive the

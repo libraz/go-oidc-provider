@@ -5,10 +5,12 @@
 // third-party clients so the end-user authorises the release of their
 // claims; that prompt is typically disabled for the embedder's own
 // apps (the "first-party" relationship). Listing client_ids in
-// [op.WithFirstPartyClients] flags the embedder's intent: when an
-// authenticated user reaches /authorize with one of the listed
-// clients, the OP creates the grant on the user's behalf and mints
-// the authorization code without rendering a consent screen.
+// [op.WithFirstPartyClients] flags the embedder's intent: when a user
+// reaches /authorize with one of the listed clients, the OP creates the
+// grant on the user's behalf and mints the authorization code without
+// rendering a consent screen. A user without a session signs in first
+// and the grant goes to the subject that sign-in binds; a user already
+// signed in gets the code straight away.
 // [op.AuditConsentGrantedFirstParty] fires on every skip so the
 // audit trail captures the auto-grant.
 //
@@ -121,8 +123,7 @@ func main() {
 }
 
 // seedUser materialises the single demo account both clients
-// authenticate as, so the consent skip can be observed against a real
-// authenticated session.
+// authenticate as, so the consent skip can be observed on a real sign-in.
 func seedUser(st *inmem.Store) error {
 	hash, err := op.HashPassword(demoPassword)
 	if err != nil {

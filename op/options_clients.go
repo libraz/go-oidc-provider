@@ -192,7 +192,9 @@ func staticClientPlaintext(seed ClientSeed) (string, bool) {
 // [store.ClientSourceStatic] or [store.ClientSourceAdmin] —
 // [store.ClientSourceDynamic] (RFC 7591 self-registered) is excluded
 // because dynamically-registered clients cannot be vetted as
-// first-party.
+// first-party. The skip also applies when the request has to sign the
+// user in first (no session, prompt=login, or step-up): the grant is
+// bound to the subject that sign-in establishes.
 // Validation:
 //   - The id list MUST be non-empty.
 //   - Duplicate ids within a single call are rejected; repeated calls

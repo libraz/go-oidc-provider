@@ -30,9 +30,10 @@ const (
 
 // applyExitOverrides adjusts the decision-matrix outcome for the
 // deployment's configuration: the first-party skip may turn a consent
-// prompt into a mint, a LoginFlow rule that demands a factor for this
-// request turns a mint served from the session into an interaction,
-// and so does a registered [authn.TriggerBeforeToken] interaction.
+// prompt into a mint or pre-grant consent on a login interaction, a
+// LoginFlow rule that demands a factor for this request turns a mint
+// served from the session into an interaction, and so does a registered
+// [authn.TriggerBeforeToken] interaction.
 func applyExitOverrides(
 	r *http.Request,
 	deps resolved,
@@ -44,6 +45,7 @@ func applyExitOverrides(
 	if firstPartyShouldSkipConsent(r, hint, req, client, active, deps) {
 		hint = applyFirstPartySkip(deps, req, client, active)
 	}
+	hint.consentAutoGranted = firstPartyAutoConsentOnLogin(r, hint, req, client, deps)
 	if hint.decision == decisionMint && deps.Authn != nil && active != nil {
 		st := initialAuthnState(r, deps, req, client, active, hint, "", deps.now().UTC())
 		if deps.Authn.LoginFlowRequiresStep(r.Context(), st) {
@@ -64,6 +66,12 @@ type authorizeHint struct {
 	prompt    string
 	grant     *store.Grant
 	autoGrant *grantUpsert
+
+	// consentAutoGranted marks a login interaction whose consent the
+	// first-party auto-grant answers ([firstPartyAutoConsentOnLogin]).
+	// Unlike autoGrant it names no subject: the grant is written at
+	// completion for the subject the sign-in binds.
+	consentAutoGranted bool
 
 	// reauth mirrors hintState.forceLogin || hintState.acrUnsatisfied:
 	// the request may not be served from the authentication the entry

@@ -3,23 +3,29 @@ package authorizeendpoint_test
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/libraz/go-oidc-provider/internal/audit"
+	"github.com/libraz/go-oidc-provider/internal/authn"
 	"github.com/libraz/go-oidc-provider/internal/authorizationdetails"
 	"github.com/libraz/go-oidc-provider/internal/authorizeendpoint"
 	"github.com/libraz/go-oidc-provider/internal/cookie"
 	"github.com/libraz/go-oidc-provider/internal/csrf"
 	"github.com/libraz/go-oidc-provider/internal/sessions"
+	"github.com/libraz/go-oidc-provider/op"
 	"github.com/libraz/go-oidc-provider/op/interaction"
 	"github.com/libraz/go-oidc-provider/op/store"
 	"github.com/libraz/go-oidc-provider/op/storeadapter/inmem"
+	"github.com/libraz/go-oidc-provider/op/testkit"
 )
 
 // recordingEmitter captures every audit.Event emitted during a test
@@ -459,7 +465,7 @@ func TestAuthorize_FirstParty_PromptConsentSuppressesSkip(t *testing.T) {
 // first-party, same-origin request carrying RFC 9396 authorization_details
 // does NOT silently auto-grant: rich, consent-bearing authorizations always
 // get an explicit consent ceremony. Without the len(req.AuthorizationDetails)
-// guard in firstPartyShouldSkipConsent the dispatcher would mint a code and
+// guard in firstPartyAutoConsentEligible the dispatcher would mint a code and
 // grant the payment authorization without the user ever seeing it.
 func TestAuthorize_FirstParty_AuthorizationDetailsSuppressesSkip(t *testing.T) {
 	t.Parallel()
@@ -559,7 +565,9 @@ func TestAuthorize_NewAuthorizationDetailsForcesConsent(t *testing.T) {
 // TestAuthorize_FirstParty_NoSessionFallsThroughToLogin pins that the
 // first-party flag does not invent a subject. With no session cookie
 // the dispatcher MUST still redirect to /interaction so the user
-// authenticates. Auto-consent requires a known subject.
+// authenticates, and nothing is granted at /authorize: the auto-grant
+// lands at completion, for the subject the sign-in binds (see
+// TestAuthorize_FirstParty_FreshLoginSkipsConsent).
 func TestAuthorize_FirstParty_NoSessionFallsThroughToLogin(t *testing.T) {
 	t.Parallel()
 
@@ -724,5 +732,307 @@ func TestAuthorize_FirstParty_OfflineAccessSuppressesSkip(t *testing.T) {
 		if ev.Name == "consent.granted.first_party" {
 			t.Fatalf("first-party audit fired for offline_access request: %+v", ev)
 		}
+	}
+}
+
+// TestAuthorize_FirstParty_FreshLoginSkipsConsent pins the first-login
+// path: with no session, the first-party client's interaction signs the
+// user in and goes straight to the RP with a code. The consent screen is
+// never shown, the grant belongs to the subject the sign-in bound, and
+// the auto-grant is audited exactly once.
+func TestAuthorize_FirstParty_FreshLoginSkipsConsent(t *testing.T) {
+	t.Parallel()
+
+	h := newFirstPartyHarness(t, withFirstPartyConsentScreen(t, false))
+	start := startFirstPartyInteraction(t, h, goodAuthorizeValues(), "same-origin", nil)
+	rr := signInFirstParty(t, h, start, nil, testkit.SubjectPromptType, testkit.SubjectFieldName, "user-fresh")
+	assertFirstPartyLoginSkippedConsent(t, h, rr, "user-fresh")
+}
+
+// TestAuthorize_FirstParty_PromptLoginWithSessionSkipsConsent pins the
+// re-authentication branch: prompt=login over a live session still runs
+// the sign-in, and the consent it would otherwise reach is auto-granted.
+func TestAuthorize_FirstParty_PromptLoginWithSessionSkipsConsent(t *testing.T) {
+	t.Parallel()
+
+	h := newFirstPartyHarness(t, withFirstPartyConsentScreen(t, false))
+	out := establishFresh(t, h.sessionMgr, sessions.Login{
+		Subject:  "user-fp",
+		AuthTime: h.clock.now.Add(-time.Minute),
+	}, h.clock.now)
+	sessionCk := &http.Cookie{Name: cookie.SessionProfile.Name, Value: out.Cookie}
+	v := goodAuthorizeValues()
+	v.Set("prompt", interaction.PromptLogin)
+	start := startFirstPartyInteraction(t, h, v, "same-origin", sessionCk)
+	rr := signInFirstParty(t, h, start, sessionCk, testkit.SubjectPromptType, testkit.SubjectFieldName, "user-fp")
+	assertFirstPartyLoginSkippedConsent(t, h, rr, "user-fp")
+}
+
+// TestAuthorize_FirstParty_FreshLoginOfflineAccessStillPrompts keeps
+// offline_access behind an explicit consent screen on the sign-in path too.
+func TestAuthorize_FirstParty_FreshLoginOfflineAccessStillPrompts(t *testing.T) {
+	t.Parallel()
+
+	h := newFirstPartyHarness(t, withFirstPartyConsentScreen(t, false))
+	v := goodAuthorizeValues()
+	v.Set("scope", "openid profile offline_access")
+	start := startFirstPartyInteraction(t, h, v, "same-origin", nil)
+	rr := signInFirstParty(t, h, start, nil, testkit.SubjectPromptType, testkit.SubjectFieldName, "user-fresh")
+	assertFirstPartyConsentPrompted(t, h, rr)
+}
+
+// TestAuthorize_FirstParty_FreshLoginCrossSiteStillPrompts pins the Fetch
+// Metadata gate on the sign-in path: a cross-site navigation signs the
+// user in and then shows the consent screen.
+func TestAuthorize_FirstParty_FreshLoginCrossSiteStillPrompts(t *testing.T) {
+	t.Parallel()
+
+	h := newFirstPartyHarness(t, withFirstPartyConsentScreen(t, false))
+	start := startFirstPartyInteraction(t, h, goodAuthorizeValues(), "cross-site", nil)
+	rr := signInFirstParty(t, h, start, nil, testkit.SubjectPromptType, testkit.SubjectFieldName, "user-fresh")
+	assertFirstPartyConsentPrompted(t, h, rr)
+}
+
+// TestAuthorize_FirstParty_PromptCreateStillPrompts pins that registration
+// is outside the auto-grant: the account it creates sees the consent
+// screen.
+func TestAuthorize_FirstParty_PromptCreateStillPrompts(t *testing.T) {
+	t.Parallel()
+
+	h := newFirstPartyHarness(t, withFirstPartyConsentScreen(t, true))
+	v := goodAuthorizeValues()
+	v.Set("prompt", interaction.PromptCreate)
+	start := startFirstPartyInteraction(t, h, v, "same-origin", nil)
+	rr := signInFirstParty(t, h, start, nil, registerPromptType, registerFieldName, promptCreateSubject)
+	assertFirstPartyConsentPrompted(t, h, rr)
+}
+
+// TestAuthorize_FirstParty_FreshLoginSelectAccountStillPrompts pins that a
+// request asking for the account chooser stays outside the auto-grant
+// even when, with no session to choose from, it runs a plain sign-in.
+func TestAuthorize_FirstParty_FreshLoginSelectAccountStillPrompts(t *testing.T) {
+	t.Parallel()
+
+	h := newFirstPartyHarness(t, withFirstPartyConsentScreen(t, false))
+	v := goodAuthorizeValues()
+	v.Set("prompt", interaction.PromptSelectAccount)
+	start := startFirstPartyInteraction(t, h, v, "same-origin", nil)
+	rr := signInFirstParty(t, h, start, nil, testkit.SubjectPromptType, testkit.SubjectFieldName, "user-fresh")
+	assertFirstPartyConsentPrompted(t, h, rr)
+}
+
+// TestAuthorize_FirstParty_AddAccountStillPrompts pins that the chooser's
+// add-account sign-in (prompt=login plus the OP-private add-account
+// markers) stays outside the auto-grant: it joins another account to the
+// group, and that account sees the consent screen.
+func TestAuthorize_FirstParty_AddAccountStillPrompts(t *testing.T) {
+	t.Parallel()
+
+	h := newFirstPartyHarness(t, withFirstPartyConsentScreen(t, false))
+	out := establishFresh(t, h.sessionMgr, sessions.Login{
+		Subject:  "user-fp",
+		AuthTime: h.clock.now.Add(-time.Minute),
+	}, h.clock.now)
+	sessionCk := &http.Cookie{Name: cookie.SessionProfile.Name, Value: out.Cookie}
+	v := goodAuthorizeValues()
+	v.Set("prompt", interaction.PromptLogin)
+	v.Set("_oidc_add_account", "1")
+	v.Set("_oidc_chooser_group", out.ChooserGroupID)
+	start := startFirstPartyInteraction(t, h, v, "same-origin", sessionCk)
+	rr := signInFirstParty(t, h, start, sessionCk, testkit.SubjectPromptType, testkit.SubjectFieldName, "user-second")
+	assertFirstPartyConsentPrompted(t, h, rr)
+}
+
+// withFirstPartyConsentScreen installs a chain whose consent step always
+// prompts, so a ceremony that reaches consent surfaces "consent.scope"
+// instead of completing. registration adds a Registration step and admits
+// prompt=create.
+func withFirstPartyConsentScreen(t *testing.T, registration bool) func(*authorizeendpoint.Deps) {
+	t.Helper()
+	signer, err := authn.NewStateRefSigner(bytes.Repeat([]byte{0xCD}, 32))
+	if err != nil {
+		t.Fatalf("authn.NewStateRefSigner: %v", err)
+	}
+	primary := testkit.SubjectAuthenticator{}
+	spec := authn.LoginFlowSpec{
+		Primary: authn.LoginFlowStep{Kind: string(primary.Type()), Authenticator: primary},
+	}
+	if registration {
+		spec.Registration = authn.LoginFlowStep{
+			Kind:          "test.register",
+			Authenticator: registrationEcho{clock: newMovableClock(fixedNow())},
+		}
+	}
+	flow, err := authn.CompileLoginFlow(spec)
+	if err != nil {
+		t.Fatalf("authn.CompileLoginFlow: %v", err)
+	}
+	orch, err := authn.New(authn.Config{
+		LoginFlow:      flow,
+		Interactions:   []op.Interaction{consentScreenInteraction{}},
+		StateRefSigner: signer,
+	})
+	if err != nil {
+		t.Fatalf("authn.New: %v", err)
+	}
+	return func(d *authorizeendpoint.Deps) {
+		d.Authn = orch
+		d.RequestPolicy.PromptCreate = registration
+	}
+}
+
+// startFirstPartyInteraction sends /authorize with values, the given
+// Sec-Fetch-Site and an optional session cookie, asserts it is redirected
+// to an interaction rather than answered with a code, and returns the
+// interaction handle.
+func startFirstPartyInteraction(
+	t *testing.T,
+	h *firstPartyHarness,
+	values url.Values,
+	secFetchSite string,
+	sessionCk *http.Cookie,
+) interactionStart {
+	t.Helper()
+	r := httptest.NewRequestWithContext(context.Background(), http.MethodGet,
+		h.authorizePath+"?"+values.Encode(), http.NoBody)
+	r.Header.Set("Sec-Fetch-Site", secFetchSite)
+	if sessionCk != nil {
+		r.AddCookie(sessionCk)
+	}
+	w := httptest.NewRecorder()
+	h.handler.ServeHTTP(w, r)
+	resp := w.Result()
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusFound {
+		t.Fatalf("authorize status=%d body=%s", resp.StatusCode, readBody(t, resp))
+	}
+	loc := mustParseLocation(t, resp)
+	if loc.Query().Get("code") != "" || !strings.HasPrefix(loc.Path, h.interactionPth+"/") {
+		t.Fatalf("Location=%s; want an interaction redirect", loc)
+	}
+	interactionCk := findCookie(resp.Cookies(), cookie.InteractionProfile.Name)
+	if interactionCk == nil {
+		t.Fatal("interaction cookie missing")
+	}
+	if findRecordedAuditEvent(h.emitter.snapshot(), string(op.AuditConsentGrantedFirstParty)) != nil {
+		t.Fatal("first-party auto-grant audited at /authorize, before any subject was bound")
+	}
+	return interactionStart{
+		uid:             strings.TrimPrefix(loc.Path, h.interactionPth+"/"),
+		interactionCk:   interactionCk,
+		requestRedirect: "https://rp.example.com/cb",
+		requestState:    "state-abc",
+	}
+}
+
+// signInFirstParty opens the interaction, expects the sign-in prompt
+// promptType, submits subject in field and returns the response to that
+// submission: the RP redirect when the chain is done, or the next prompt.
+func signInFirstParty(
+	t *testing.T,
+	h *firstPartyHarness,
+	start interactionStart,
+	sessionCk *http.Cookie,
+	promptType, field, subject string,
+) *httptest.ResponseRecorder {
+	t.Helper()
+	get := httptest.NewRequestWithContext(context.Background(), http.MethodGet, h.interactionPth+"/"+start.uid, nil)
+	get.AddCookie(start.interactionCk)
+	if sessionCk != nil {
+		get.AddCookie(sessionCk)
+	}
+	rr := httptest.NewRecorder()
+	h.handler.ServeHTTP(rr, get)
+	stateRef, csrfCk := expectPrompt(t, rr, promptType, nil)
+
+	raw, err := json.Marshal(interaction.FormSubmission{
+		StateRef: stateRef,
+		Values:   map[string]string{field: subject},
+	})
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	post := httptest.NewRequestWithContext(context.Background(), http.MethodPost,
+		h.interactionPth+"/"+start.uid, bytes.NewReader(raw))
+	post.Header.Set("Content-Type", "application/json")
+	post.Header.Set("Origin", "https://op.example.com")
+	post.Header.Set("X-CSRF-Token", csrfCk.Value)
+	post.AddCookie(start.interactionCk)
+	post.AddCookie(csrfCk)
+	if sessionCk != nil {
+		post.AddCookie(sessionCk)
+	}
+	rr = httptest.NewRecorder()
+	h.handler.ServeHTTP(rr, post)
+	return rr
+}
+
+// assertFirstPartyLoginSkippedConsent checks that the sign-in submission
+// went straight to the RP with a code for subject, that the code's grant
+// belongs to subject and covers the request, and that the auto-grant was
+// audited once and no ordinary consent grant was.
+func assertFirstPartyLoginSkippedConsent(t *testing.T, h *firstPartyHarness, rr *httptest.ResponseRecorder, subject string) {
+	t.Helper()
+	if rr.Code != http.StatusFound {
+		t.Fatalf("sign-in submission status=%d body=%s; want the RP redirect, not a consent prompt", rr.Code, rr.Body.String())
+	}
+	final := mustParseLocation(t, rr.Result())
+	codeID := final.Query().Get("code")
+	if codeID == "" || !strings.HasPrefix(final.String(), "https://rp.example.com/cb?") {
+		t.Fatalf("Location=%s; want the RP redirect with a code", final)
+	}
+	code, err := h.store.AuthorizationCodes().Find(context.Background(), codeID)
+	if err != nil {
+		t.Fatalf("Find code: %v", err)
+	}
+	if code.Subject != subject || code.GrantID == "" {
+		t.Fatalf("code subject=%q grant=%q; want %q on a persisted grant", code.Subject, code.GrantID, subject)
+	}
+	g, err := h.store.Grants().Find(context.Background(), code.GrantID)
+	if err != nil {
+		t.Fatalf("Find grant: %v", err)
+	}
+	if g.Subject != subject || g.ClientID != "client-1" {
+		t.Errorf("grant subject=%q client=%q; want %q / client-1", g.Subject, g.ClientID, subject)
+	}
+	if !slices.Contains(g.Scope, "openid") || !slices.Contains(g.Scope, "profile") {
+		t.Errorf("grant scope=%v; want openid profile", g.Scope)
+	}
+
+	var autoGrants []audit.Event
+	for _, ev := range h.emitter.snapshot() {
+		switch ev.Name {
+		case string(op.AuditConsentGrantedFirstParty):
+			autoGrants = append(autoGrants, ev)
+		case string(op.AuditConsentGranted):
+			t.Errorf("ordinary consent grant audited for an auto-granted chain: %+v", ev)
+		}
+	}
+	if len(autoGrants) != 1 {
+		t.Fatalf("first-party auto-grant audited %d times; want once", len(autoGrants))
+	}
+	if autoGrants[0].ActorID != subject || autoGrants[0].ClientID != "client-1" || autoGrants[0].Extras["grant_id"] != code.GrantID {
+		t.Errorf("auto-grant audit=%+v; want actor %q, client-1, grant %q", autoGrants[0], subject, code.GrantID)
+	}
+}
+
+// assertFirstPartyConsentPrompted checks that the sign-in submission was
+// answered with the consent screen and that nothing was auto-granted.
+func assertFirstPartyConsentPrompted(t *testing.T, h *firstPartyHarness, rr *httptest.ResponseRecorder) {
+	t.Helper()
+	if rr.Code != http.StatusOK {
+		t.Fatalf("sign-in submission status=%d body=%s; want the consent prompt", rr.Code, rr.Body.String())
+	}
+	var prompt struct {
+		Type string `json:"type"`
+	}
+	if err := json.Unmarshal(rr.Body.Bytes(), &prompt); err != nil {
+		t.Fatalf("decode prompt: %v body=%s", err, rr.Body.String())
+	}
+	if prompt.Type != "consent.scope" {
+		t.Fatalf("prompt type=%q; want consent.scope", prompt.Type)
+	}
+	if ev := findRecordedAuditEvent(h.emitter.snapshot(), string(op.AuditConsentGrantedFirstParty)); ev != nil {
+		t.Fatalf("first-party auto-grant audited: %+v", ev)
 	}
 }
