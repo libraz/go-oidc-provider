@@ -290,6 +290,16 @@ start.
   Fix it by listing `grant.AuthorizationCode` in `op.WithGrants` or by
   removing the options. The error wraps `op.ErrAuthorizationCodeGrantRequired`.
 
+- **BREAKING:** `op.RegisterTokenExchange` is renamed `op.WithTokenExchange`,
+  the one `op.Option` constructor that lacked the `With` prefix. The signature
+  and behaviour are unchanged; the call site changes its name only.
+
+- Two `op.New` errors read more plainly. A static client whose stored record
+  differs from its seed no longer ends with `store: concurrent modification`,
+  the text of `store.ErrConflict`; the error still matches it through
+  `errors.Is`. In the schema check, every line a store reports carries that
+  store's label, so a store that owns two tables names itself on both.
+
 - The SQL adapter's sessions table gets `idx_oidc_sessions_subject` on
   `subject`, so deleting a subject's sessions does not scan the table. It is
   in migration `000006_v1.5.0` and in `v1.sql`. `Store.Migrate` applies it;
@@ -503,7 +513,7 @@ a later release records the release it was created at with that `INSERT` once.
   `op.WithEndpoints` may be repeated, but each path is single-valued, and so
   is each key of an `op.WithLocale` locale. To layer overrides on a shared
   base list, wrap the base in `op.WithDefaults` (see `Added`).
-  `op.RegisterTokenExchange` still reports a repeat as
+  `op.WithTokenExchange` still reports a repeat as
   `op.ErrTokenExchangeDuplicate`.
 
 - `op.WithTrustedProxies` is additive: repeated calls accumulate CIDRs, as
