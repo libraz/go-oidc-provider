@@ -174,7 +174,7 @@ authorization-code request. Relying parties that cannot send PKCE need the
 OpenID Connect Core shape, which is declared rather than defaulted:
 
 ```go
-op.WithProfile(profile.FAPI2Baseline) // PAR + JAR + DPoP, ES256 signing, alg lock
+op.WithProfile(profile.FAPI2Baseline) // PAR required, DPoP (or mTLS) bound tokens, ES256 only
 op.WithProfile(profile.OIDCCore)      // PKCE optional for confidential clients
 ```
 
@@ -198,20 +198,10 @@ picks the pages and examples that match your goal.
 
 The defaults assume production: https only, public network only.
 `http://127.0.0.1` is exempt from the `redirect_uri` and issuer checks, so
-most examples run without any development option there. Three options cover
-what the IP literal does not: `op.WithAllowLocalhostRedirectURIs` admits the
-textual host `localhost` in redirect URIs, `op.WithAllowLocalhostIssuerForDev`
-admits it in the issuer, and `op.WithAllowInsecureOutboundForDev(op.OutboundBackchannel)`
-admits a plain-http `backchannel_logout_uri`. That carve-out does not extend
-to the OP's other SSRF gates: JWKS, the JAR `request_uri`,
-`sector_identifier_uri`, and back-channel delivery each reject a loopback or
-private-network target by default too. One option lifts them per target,
-`op.WithAllowPrivateNetwork(op.OutboundJWKS, op.OutboundJAR, op.OutboundSector, op.OutboundBackchannel)`
-for all four. A local setup where the relying party runs on another
-container's address usually needs the targets for the features it uses.
-Documented under
-[`redirect_uri`](https://go-oidc-provider.libraz.net/concepts/redirect-uri) and
-[Issuer](https://go-oidc-provider.libraz.net/concepts/issuer).
+most examples run without any development option. The options for
+`localhost`, plain-http back-channel receivers and private-network fetches
+are listed under
+[Running locally](https://go-oidc-provider.libraz.net/getting-started/required-options#running-locally).
 
 ## Scope
 
@@ -263,23 +253,13 @@ with results on the
 
 Two deliberate departures from the specifications:
 
-- **One signing algorithm per OP, ES256 by default.** ID tokens, JWT access
-  tokens, signed UserInfo and JARM responses are all signed with the same
-  algorithm. `op.WithSigningAlgorithm(op.AlgRS256)` switches it to RS256 for
-  relying parties that can only verify RS256 (OpenID Connect Core §15.1 makes
-  RS256 mandatory to implement); it is refused under every FAPI profile, and
-  there is no per-client choice. Verification is wider: RS256, PS256, ES256
-  and EdDSA are accepted on client assertions and request objects.
-- **A rejected DPoP proof answers in the OAuth error envelope.** Endpoints that
-  accept a proof on a form post return `400 invalid_request` instead of
-  RFC 9449 §7's `invalid_dpop_proof`, so a relying party that already handles
-  the OAuth error codes needs no additional case. Two responses keep their own
-  code: the §8 nonce challenge answers `use_dpop_nonce` with a `DPoP-Nonce`
-  header, and a proof rejected at a protected resource answers
-  `401 invalid_token`.
-
-Both, and the other decisions of this kind, are recorded in
-[Design judgments](https://go-oidc-provider.libraz.net/security/design-judgments).
+- **One signing algorithm per OP, ES256 by default.**
+  `op.WithSigningAlgorithm(op.AlgRS256)` switches the whole OP to RS256; there
+  is no per-client choice.
+  [Why](https://go-oidc-provider.libraz.net/security/design-judgments#dj-11)
+- **DPoP proof failures use the OAuth error envelope.** Form-post endpoints
+  return `400 invalid_request` rather than `invalid_dpop_proof`.
+  [Why](https://go-oidc-provider.libraz.net/security/design-judgments#dj-40)
 
 ## Storage
 

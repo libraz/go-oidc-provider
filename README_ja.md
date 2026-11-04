@@ -112,7 +112,7 @@ func (u users) ReadPasswordHash(ctx context.Context, sub string) ([]byte, error)
 セキュリティプロファイルはオプション 1 つで宣言できます。宣言したプロファイルと他の設定が食い違う場合、コンストラクタは起動を拒否します。宣言しなければ OP は `profile.OAuth21` で動き、認可コード要求のすべてに PKCE を求めます。PKCE を送れないリライングパーティには OpenID Connect Core の形が必要で、これは既定ではなく明示的に宣言します。
 
 ```go
-op.WithProfile(profile.FAPI2Baseline) // PAR + JAR + DPoP, ES256 署名, alg ロック
+op.WithProfile(profile.FAPI2Baseline) // PAR 必須, DPoP（または mTLS）でトークンを結び付け, ES256 のみ
 op.WithProfile(profile.OIDCCore)      // confidential client の PKCE を任意にする
 ```
 
@@ -124,7 +124,7 @@ op.WithProfile(profile.OIDCCore)      // confidential client の PKCE を任意�
 
 どのページから読むか迷う場合は、[Start here](https://go-oidc-provider.libraz.net/ja/getting-started/start-here) が目的に合うページと example を案内します。
 
-既定値は本番環境を前提にしており、https のみ・公開ネットワークのみを受け付けます。`http://127.0.0.1` は `redirect_uri` と issuer の検査から除外されているため、サンプルの大半はそこでは開発用オプションなしで動きます。IP リテラルでは足りないケースには 3 つのオプションが対応します。`op.WithAllowLocalhostRedirectURIs` は redirect URI の文字列ホスト `localhost` を、`op.WithAllowLocalhostIssuerForDev` は issuer の `localhost` を、`op.WithAllowInsecureOutboundForDev(op.OutboundBackchannel)` は平文 http の `backchannel_logout_uri` を許可します。この除外は OP が持つ他の SSRF ゲート — JWKS、JAR の `request_uri`、`sector_identifier_uri`、バックチャネル配送 — には及びません。いずれもループバックやプライベートネットワーク宛てを既定で拒否します。解除は 1 つのオプションで対象ごとに行い、4 つすべてなら `op.WithAllowPrivateNetwork(op.OutboundJWKS, op.OutboundJAR, op.OutboundSector, op.OutboundBackchannel)` です。リライングパーティを別コンテナのアドレスで動かすローカル環境では、使う機能に応じた対象を指定することになります。詳細は [`redirect_uri`](https://go-oidc-provider.libraz.net/ja/concepts/redirect-uri) と [Issuer](https://go-oidc-provider.libraz.net/ja/concepts/issuer) で説明しています。
+既定値は本番環境を前提にしており、https のみ・公開ネットワークのみを受け付けます。`http://127.0.0.1` は `redirect_uri` と issuer の検査から除外されているため、サンプルの大半は開発用オプションなしで動きます。`localhost`、平文 http のバックチャネル受信先、プライベートネットワークへの取得を許可するオプションは [ローカルで動かす](https://go-oidc-provider.libraz.net/ja/getting-started/required-options#running-locally) にまとめています。
 
 ## スコープ
 
@@ -149,10 +149,8 @@ op.WithProfile(profile.OIDCCore)      // confidential client の PKCE を任意�
 
 仕様からの意図的な逸脱が 2 つあります。
 
-- **署名アルゴリズムは OP ごとに 1 つで、既定は ES256 です**。ID トークン、JWT アクセストークン、署名付き UserInfo、JARM レスポンスはすべて同じアルゴリズムで署名します。RS256 でしか検証できないリライングパーティ向けに、`op.WithSigningAlgorithm(op.AlgRS256)` で RS256 へ切り替えられます（OpenID Connect Core §15.1 は RS256 の実装を必須としています）。FAPI プロファイルとの併用は拒否され、クライアントごとの選択はできません。検証側はこれより広く、クライアント認証アサーションとリクエストオブジェクトについては RS256 / PS256 / ES256 / EdDSA を受け付けます。
-- **DPoP プルーフの検証失敗は OAuth のエラー封筒で返します**。フォームポストでプルーフを受け取るエンドポイントは、RFC 9449 §7 の `invalid_dpop_proof` ではなく `400 invalid_request` を返します。すでに OAuth のエラーコードを処理しているリライングパーティが、DPoP のためだけに分岐を増やさずに済むためです。独自のコードを維持するのは 2 つで、§8 のナンスチャレンジは `DPoP-Nonce` ヘッダとともに `use_dpop_nonce` を返し、保護リソースで拒否されたプルーフは `401 invalid_token` を返します。
-
-どちらの判断理由も、同種の判断とあわせて [Design judgments](https://go-oidc-provider.libraz.net/ja/security/design-judgments) に記録しています。
+- **署名アルゴリズムは OP ごとに 1 つで、既定は ES256 です**。`op.WithSigningAlgorithm(op.AlgRS256)` で OP 全体を RS256 に切り替えられますが、クライアントごとには選べません。[理由](https://go-oidc-provider.libraz.net/ja/security/design-judgments#dj-11)
+- **DPoP プルーフの検証失敗は OAuth のエラー封筒で返します**。フォームポストのエンドポイントは `invalid_dpop_proof` ではなく `400 invalid_request` を返します。[理由](https://go-oidc-provider.libraz.net/ja/security/design-judgments#dj-40)
 
 ## ストレージ
 
