@@ -30,6 +30,19 @@
 // must survive every restart, so its hash carries no TTL. See the godoc on
 // [Store.Metadata] for the eviction-policy consequence.
 //
+// It also provides [Store.DPoPNonceSource], an op.DPoPNonceSource whose
+// nonces are shared by every replica of an OP (RFC 9449 §8 and §9). The
+// state is one small key under the store's prefix and lives for a few
+// rotation intervals; see [DPoPNonceSource] for the failure and eviction
+// behaviour. Wiring, with the same store the other substores use:
+//
+//	nonces, err := store.DPoPNonceSource(time.Minute,
+//		oidcredis.WithDPoPNonceLogger(logger))
+//	if err != nil {
+//		return err
+//	}
+//	provider, err := op.New( /* ... */ , op.WithDPoPNonceSource(nonces))
+//
 // The transactional cluster substores (composite.TxClusterKinds —
 // AuthorizationCodes, RefreshTokens, Grants, PushedAuthRequests,
 // AccessTokens, OpaqueAccessTokens, GrantRevocations) and the long-lived
