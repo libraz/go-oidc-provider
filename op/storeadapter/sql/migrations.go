@@ -25,8 +25,9 @@ import (
 //	}
 //	err = m.Up()
 //
-// A file holds several statements, so golang-migrate's MySQL driver needs
-// multiStatements=true in the DSN. Atlas reads the same files with
+// A file holds several statements: golang-migrate enables that itself for a
+// mysql:// URL, while a *sql.DB passed to mysql.WithInstance needs
+// multiStatements=true in its DSN. Atlas reads the same files with
 // format=golang-migrate once `atlas migrate hash` has written atlas.sum.
 // A database created before adopting these files must first be recorded
 // at the last release it applied — `migrate force 4` for one at v1.3.0 —

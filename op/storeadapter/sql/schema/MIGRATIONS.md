@@ -16,7 +16,7 @@ second without a reset.
 
 `Store.Migrate(ctx)` applies the files in order and records progress in a
 version table named `<prefix>schema_migrations` (`oidc_schema_migrations` by
-default). The table has golang-migrate's layout: one row, `version` (the number
+default; the `schema_migrations` `WithNaming` key names it outright). The table has golang-migrate's layout: one row, `version` (the number
 of the last file applied) and `dirty`. Run it once from a deploy job, not at
 every replica's start, with a context long enough for the DDL: on MySQL the
 v1.3.0 file rewrites the collation of every table that holds identifiers.
@@ -56,13 +56,14 @@ v1.3.0 file rewrites the collation of every table that holds identifiers.
   transaction pooling does not hold an advisory lock.
 - **Empty prefix.** `WithTablePrefix("")` makes `Migrate` refuse, because the
   version table would be `schema_migrations`, golang-migrate's default table
-  and the application's own history. Apply `Store.Migrations()` with a
-  migration tool instead.
+  and the application's own history. Name the table through
+  `WithNaming(map[string]string{"schema_migrations": "..."})`, or apply
+  `Store.Migrations()` with a migration tool instead.
 - **PostgreSQL schema.** The version table and the lock live in the first
   `search_path` schema (`current_schema()`), as golang-migrate's do. Keep the
   OP's tables in that schema.
-- MySQL does not need `multiStatements=true` for `Migrate`; golang-migrate's
-  driver does.
+- MySQL does not need `multiStatements=true` for `Migrate`, which runs one
+  statement at a time.
 
 `Store.Schema()` and `schema/<dialect>/v1.sql` are the reference for the
 complete current schema, for diff review; the `v1` names the schema
@@ -81,8 +82,9 @@ table of your tool's.
   version table (see [Coexisting with your application's
   migrations](#coexisting-with-your-applications-migrations)), never the
   application's.
-- golang-migrate's MySQL driver needs `multiStatements=true` in the DSN,
-  because each file holds several statements.
+- Each file holds several statements. golang-migrate enables multi-statement
+  execution by itself for a `mysql://` URL; a `*sql.DB` passed to
+  `mysql.WithInstance` needs `multiStatements=true` in its own DSN.
 - Atlas reads the directory with `format=golang-migrate` once
   `atlas migrate hash` has written its `atlas.sum`.
 
@@ -113,8 +115,8 @@ schema's current release, to be run against the OP's own version table.
 The files are plain SQL named `NNNNNN_vX.Y.Z.up.sql` in golang-migrate layout;
 there are no down files.
 
-- **goose**: copy each file and add `-- +goose Up` at the top.
-- **Flyway**: rename to `V<N>__vX_Y_Z.sql`.
+- **goose** and **Flyway**: `op-schema export --format goose|flyway` writes the
+  files with the tool's names and headers (see Coexisting with your application's migrations).
 - **Atlas and others**: apply the files in numeric order.
 
 On PostgreSQL in a schema other than `public`, the adapter resolves tables
@@ -156,22 +158,21 @@ and a separate version table for each tool:
 - **Atlas**: use a separate migration directory and a separate revisions table
   for the OP.
 
-goose and Flyway read files from disk, not from an `fs.FS`. Write
-`Store.Migrations()` out once, so the files carry the names `WithTablePrefix`
-and `WithNaming` configured, then convert them as described under Other migration tools:
+goose and Flyway read files from disk, not from an `fs.FS`. `op-schema` writes
+`Store.Migrations()` out with the tool's file names, after `WithTablePrefix`
+applied (it needs no database connection):
 
-```go
-err := fs.WalkDir(store.Migrations(), ".", func(p string, d fs.DirEntry, err error) error {
-	if err != nil || d.IsDir() {
-		return err
-	}
-	content, err := fs.ReadFile(store.Migrations(), p)
-	if err != nil {
-		return err
-	}
-	return os.WriteFile(filepath.Join("db/oidc", p), content, 0o644)
-})
+```sh
+go run github.com/libraz/go-oidc-provider/op/storeadapter/sql/cmd/op-schema \
+    export --dialect postgres --prefix oidc_ --format goose --out db/oidc
 ```
+
+`--format` is `golang-migrate` (`NNNNNN_vX.Y.Z.up.sql`, as `Store.Migrations()`
+names them), `goose` (`NNNNNN_vX.Y.Z.sql`, each file opening with `-- +goose
+Up` and ending with an empty `-- +goose Down`; no statement needs
+`-- +goose StatementBegin`) or `flyway` (`V<N>__vX_Y_Z.sql`). The directory is
+created when missing. The tool applies a prefix only; for `WithNaming` overrides, write the files
+from `Store.Migrations()` yourself.
 
 The sections below explain what each release changes.
 
