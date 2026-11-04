@@ -34,7 +34,7 @@ func recordVersion(t *testing.T, db *databasesql.DB, table string, version int64
 	execAll(t, db,
 		"CREATE TABLE "+table+" (version uint64, dirty bool)",
 		"CREATE UNIQUE INDEX "+table+"_version_unique ON "+table+" (version)")
-	if _, err := db.ExecContext(t.Context(), "INSERT INTO "+table+" (version, dirty) VALUES (?, ?)", version, dirty); err != nil {
+	if _, err := db.ExecContext(t.Context(), "INSERT INTO "+table+" (version, dirty) VALUES (?, ?)", version, dirty); err != nil { //nolint:gosec // table is a constant of this test file.
 		t.Fatalf("record version %d: %v", version, err)
 	}
 }
@@ -58,7 +58,7 @@ func versionRows(t *testing.T, db *databasesql.DB, table string) []string {
 	if !tableExists(t, db, table) {
 		return nil
 	}
-	rows, err := db.QueryContext(t.Context(), "SELECT version, dirty FROM "+table+" ORDER BY version")
+	rows, err := db.QueryContext(t.Context(), "SELECT version, dirty FROM "+table+" ORDER BY version") //nolint:gosec // table is a constant of this test file.
 	if err != nil {
 		t.Fatalf("read %s: %v", table, err)
 	}
@@ -312,7 +312,7 @@ func TestMigrate_ConcurrentCallsAgree(t *testing.T) {
 
 	dsn := "file:" + t.TempDir() + "/oidc.db?_pragma=busy_timeout(5000)"
 	stores := make([]*Store, 2)
-	var dbs []*databasesql.DB
+	dbs := make([]*databasesql.DB, 0, len(stores))
 	for i := range stores {
 		db, err := databasesql.Open("sqlite", dsn)
 		if err != nil {

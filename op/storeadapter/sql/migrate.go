@@ -179,13 +179,7 @@ func (m *migrator) checkTables(ctx context.Context, version int64) (bool, error)
 			continue
 		}
 		found = true
-		var missing []string
-		for _, col := range required[key] {
-			if !cols[col] && columnAddedIn(key, col) == "" {
-				missing = append(missing, col)
-			}
-		}
-		if len(missing) > 0 {
+		if missing := missingBaselineColumns(key, cols, required[key]); len(missing) > 0 {
 			var gap releaseGap
 			return false, fmt.Errorf("oidcsql: Migrate changed nothing: table %s exists but is not the adapter's table "+
 				"(missing baseline columns: %s): %w", table, strings.Join(missing, ", "),
@@ -193,6 +187,17 @@ func (m *migrator) checkTables(ctx context.Context, version int64) (bool, error)
 		}
 	}
 	return found, nil
+}
+
+// missingBaselineColumns lists the columns of the first release that cols lacks.
+func missingBaselineColumns(key string, cols map[string]bool, required []string) []string {
+	var missing []string
+	for _, col := range required {
+		if !cols[col] && columnAddedIn(key, col) == "" {
+			missing = append(missing, col)
+		}
+	}
+	return missing
 }
 
 // baseline records latest for a database that has the adapter's tables but
