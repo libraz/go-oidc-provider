@@ -86,15 +86,43 @@ func TestWithTablePrefix_MigrationsUsePrefixedNames(t *testing.T) {
 func TestWithTablePrefix_EmptyPrefixDropsIt(t *testing.T) {
 	t.Parallel()
 
-	s, err := New(openMigrationSQLite(t), SQLite(), WithTablePrefix(""))
+	db := openMigrationSQLite(t)
+	s, err := New(db, SQLite(), WithTablePrefix(""))
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
 	if s.names.clients != "clients" || s.names.authCodes != "authorization_codes" {
 		t.Errorf("empty prefix resolved to %q, %q", s.names.clients, s.names.authCodes)
 	}
-	if err := s.Migrate(t.Context()); err != nil {
-		t.Fatalf("Migrate: %v", err)
+	applyMigrationChain(t, db, s.Migrations(), false)
+	if err := s.ValidateSchema(t.Context()); err != nil {
+		t.Fatalf("ValidateSchema after the unprefixed chain: %v", err)
+	}
+}
+
+// Under the empty prefix the version table would be golang-migrate's default
+// table, so Migrate refuses before touching the database.
+func TestMigrate_RefusesEmptyPrefix(t *testing.T) {
+	t.Parallel()
+
+	db := openMigrationSQLite(t)
+	ctx := t.Context()
+	s, err := New(db, SQLite(), WithTablePrefix(""))
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	err = s.Migrate(ctx)
+	const want = `oidcsql: Migrate needs a table prefix: with WithTablePrefix("") the version table would be "schema_migrations", ` +
+		`golang-migrate's default table; apply Store.Migrations() with your migration tool instead`
+	if err == nil || err.Error() != want {
+		t.Fatalf("Migrate error = %v, want %q", err, want)
+	}
+	var n int
+	if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM sqlite_master`).Scan(&n); err != nil {
+		t.Fatalf("count schema objects: %v", err)
+	}
+	if n != 0 {
+		t.Errorf("Migrate created %d object(s) before refusing", n)
 	}
 }
 
@@ -116,23 +144,25 @@ func TestWithTablePrefix_RejectsInvalid(t *testing.T) {
 }
 
 // Migrate must refuse before executing any statement when a name the adapter
-// would use is an application table, leaving that table and its indexes alone.
+// would use is an application table, leaving that table and its indexes alone
+// and creating nothing, the version table included.
 func TestMigrate_RefusesForeignTableWithoutChangingIt(t *testing.T) {
 	t.Parallel()
 
 	db := openMigrationSQLite(t)
 	ctx := t.Context()
-	execAll(t, db, "CREATE TABLE users (id INTEGER PRIMARY KEY, email TEXT)")
-	s, err := New(db, SQLite(), WithTablePrefix(""))
+	execAll(t, db, "CREATE TABLE acme_users (id INTEGER PRIMARY KEY, email TEXT)")
+	s, err := New(db, SQLite(), WithTablePrefix("acme_"))
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
 	err = s.Migrate(ctx)
-	if err == nil || !strings.Contains(err.Error(), "users") || !strings.Contains(err.Error(), "not the adapter's table") {
-		t.Fatalf("Migrate error = %v, want it to name users and say it is not the adapter's table", err)
+	const want = "oidcsql: Migrate changed nothing: table acme_users exists but is not the adapter's table (missing baseline columns: "
+	if err == nil || !strings.Contains(err.Error(), want) {
+		t.Fatalf("Migrate error = %v, want it to contain %q", err, want)
 	}
 	var n int
-	if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM sqlite_master WHERE name <> 'users'`).Scan(&n); err != nil {
+	if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM sqlite_master WHERE name <> 'acme_users'`).Scan(&n); err != nil {
 		t.Fatalf("count schema objects: %v", err)
 	}
 	if n != 0 {

@@ -61,6 +61,12 @@ func WithClock(c Clock) Option {
 // table names. [WithNaming]
 // entries still override individual tables outright, prefix or not.
 //
+// The prefix also names the version table [Store.Migrate] records in,
+// "<prefix>schema_migrations". Migrate refuses the empty prefix, under which
+// that table would be "schema_migrations", golang-migrate's default and so
+// usually the application's own history; apply [Store.Migrations] with a
+// migration tool instead.
+//
 // The prefix is validated like a [WithNaming] value (ASCII letters, digits
 // and underscore, not starting with a digit, each resulting name within 63
 // bytes); [New] returns an error otherwise.
@@ -104,6 +110,7 @@ type Store struct {
 	db      *databasesql.DB
 	dialect Dialect
 	clock   Clock
+	prefix  string
 	names   nameMap
 	queries queries
 
@@ -181,6 +188,7 @@ func New(db *databasesql.DB, dialect Dialect, opts ...Option) (*Store, error) {
 		db:      db,
 		dialect: dialect,
 		clock:   cfg.clock,
+		prefix:  cfg.prefix,
 		names:   cfg.naming,
 		queries: q,
 	}
@@ -250,71 +258,55 @@ func (s *Store) EmailOTPs() store.EmailOTPStore { return s.emailOTPsImpl }
 // give the cross-factor brute-force counter a durable home.
 func (s *Store) AuthnLockouts() store.AuthnLockoutStore { return s.authnLockoutsImpl }
 
-// Schema returns the dialect-specific DDL the adapter expects, with
-// [WithTablePrefix] and [WithNaming] applied. Embedders typically copy the
-// returned string into their migration tooling rather than relying on
-// [Store.Migrate]; the schema is exposed verbatim so reviews can
-// diff the adapter's expectations against the production schema.
+// Schema returns the dialect-specific DDL of this release's complete schema,
+// with [WithTablePrefix] and [WithNaming] applied. It is a reference: diff it
+// against a production schema in review, or read from it the tables, columns
+// and indexes [Store.ValidateSchema] requires. Databases are created and
+// upgraded from the files of [Store.Migrations], through [Store.Migrate] or a
+// migration tool.
 func (s *Store) Schema() string {
 	return rewriteSchema(s.dialect.schema, s.names)
 }
 
-// Migrate applies the embedded v1 schema to the live connection. It
-// is a development convenience for examples and tests; production
-// deployments are expected to drive migrations through their existing
-// tooling. Migrate splits on ";" so the embedded SQL must use
-// statement-terminating semicolons exclusively (which the bundled DDL
-// does).
+// Migrate brings the database to this release's schema: it applies, in order,
+// the files of [Store.Migrations] the database has not applied yet and records
+// each in the version table "<prefix>schema_migrations" (by default
+// "oidc_schema_migrations"). The table has golang-migrate's layout and holds
+// the number of the last file applied, so golang-migrate pointed at it with
+// x-migrations-table continues from the same version, and so does Migrate
+// after golang-migrate. Migrate is meant for production: call it once from a
+// deploy job, before the new release serves, with a ctx sized for the DDL (a
+// MySQL release that rebuilds tables takes as long as the tables are large).
+// It never needs multiStatements=true in a MySQL DSN.
 //
-// After applying the DDL, Migrate runs [Store.ValidateSchema], which
-// fails when a table or a column of the reference DDL is absent. CREATE TABLE
-// IF NOT EXISTS deliberately does not alter an existing table; this check
-// therefore makes a forgotten explicit ALTER fail at startup rather than
-// surfacing as a less actionable query error later.
+// Concurrent calls wait for each other: on MySQL and PostgreSQL through the
+// advisory lock golang-migrate takes for the same version table, on SQLite
+// through BEGIN IMMEDIATE. On PostgreSQL the version table and the lock follow
+// current_schema(), so keep the adapter's tables in the first schema of the
+// search_path, and connect directly or through session pooling, since a
+// transaction pooler does not hold a session lock.
 //
-// Before executing any statement, Migrate checks every adapter table that
-// already exists for the columns the adapter requires and refuses, having
-// changed nothing, when one lacks them: the name is then another
-// application's table (an empty or generic [WithTablePrefix], a [WithNaming]
-// value), or a table from an older release, whose migrations must be applied
-// first because Migrate cannot add columns.
+// On PostgreSQL and SQLite a file commits together with its version record.
+// MySQL commits DDL implicitly, so Migrate marks the version dirty before a
+// file and clean after it; a file that fails part-way leaves it dirty, and
+// Migrate refuses a dirty version until it is corrected by hand, with the
+// statement its error shows.
+//
+// A database with the adapter's tables but no version table is recorded at
+// this release when [Store.ValidateSchema] passes on it; otherwise Migrate
+// refuses having changed nothing, and its error names the version to record
+// or the migrations to apply first. Before any DDL, Migrate also refuses when
+// a table on one of the adapter's names lacks a column of the first release,
+// so it never alters another application's table. A version newer than this
+// release applies nothing. Migrate ends with [Store.ValidateSchema] on the
+// result and returns its error.
+//
+// Migrate refuses an empty [WithTablePrefix]: the version table would then be
+// golang-migrate's default "schema_migrations".
+//
+// Signature stable since v0.9; the behaviour above since v1.5.
 func (s *Store) Migrate(ctx context.Context) error {
-	if err := s.checkExistingTablesBeforeDDL(ctx); err != nil {
-		return err
-	}
-	stmts := splitStatements(s.Schema())
-	for _, stmt := range stmts {
-		if stmt == "" {
-			continue
-		}
-		if _, err := s.db.ExecContext(ctx, stmt); err != nil {
-			return fmt.Errorf("oidcsql: applying schema statement %q: %w", trimForError(stmt), err)
-		}
-	}
-	return s.ValidateSchema(ctx)
-}
-
-// checkExistingTablesBeforeDDL fails when an existing adapter table lacks
-// required columns, so Migrate never runs its CREATE INDEX statements against
-// a table that is not the adapter's.
-func (s *Store) checkExistingTablesBeforeDDL(ctx context.Context) error {
-	required := ddlColumns(s.dialect)
-	var gap releaseGap
-	for _, key := range knownNamingKeys {
-		table := s.names.byKey(key)
-		cols, err := s.columnSet(ctx, table)
-		if err != nil {
-			return err
-		}
-		if len(cols) == 0 {
-			continue
-		}
-		if err := s.checkColumns(key, table, cols, required[key], &gap); err != nil {
-			return fmt.Errorf("oidcsql: Migrate changed nothing: table %s exists but is not the adapter's table, "+
-				"or is from an older release whose migrations must be applied first (Migrate cannot add columns): %w", table, err)
-		}
-	}
-	return nil
+	return s.migrate(ctx)
 }
 
 // ValidateSchema checks every table the adapter owns, whether or not the
@@ -342,7 +334,7 @@ func (s *Store) checkExistingTablesBeforeDDL(ctx context.Context) error {
 // has no index on <columns>". When every gap is something a later release
 // added, a closing line gives the "migrate force" number for a database
 // golang-migrate does not track yet. [Store.Migrate] runs this check after
-// applying the DDL.
+// applying the migrations.
 //
 // Stable since v1.5.
 func (s *Store) ValidateSchema(ctx context.Context) error {
@@ -369,66 +361,97 @@ func (s *Store) checkColumns(key, table string, cols map[string]bool, required [
 // validateKeys runs the [Store.ValidateSchema] checks on the tables with
 // the given WithNaming keys only.
 func (s *Store) validateKeys(ctx context.Context, keys ...string) error {
+	return s.validateKeysOn(ctx, dbRunner{db: s.db}, keys...)
+}
+
+// validateKeysOn is [Store.validateKeys] reading the catalog through r.
+func (s *Store) validateKeysOn(ctx context.Context, r runner, keys ...string) error {
+	report, err := s.inspectSchema(ctx, r, keys...)
+	if err != nil {
+		return err
+	}
+	return report.err()
+}
+
+// schemaReport is what the schema checks found on a set of tables.
+type schemaReport struct {
+	problems   []error
+	gap        releaseGap
+	tableFound bool
+	// indexOrCollation is set when an existing table lacks an index or has a
+	// non-binary collation, problems [releaseGap] does not date.
+	indexOrCollation bool
+}
+
+// err joins the problems into the error [Store.ValidateSchema] returns, nil
+// when there are none.
+func (r schemaReport) err() error {
+	return errors.Join(r.problems...)
+}
+
+// inspectSchema runs the [Store.ValidateSchema] checks on the tables with the
+// given WithNaming keys, reading the catalog through r.
+func (s *Store) inspectSchema(ctx context.Context, r runner, keys ...string) (schemaReport, error) {
 	required := ddlColumns(s.dialect)
-	var problems []error
-	var tableMissing, tableFound bool
+	var report schemaReport
+	var tableMissing bool
 	var scope string
-	var gap releaseGap
 	for _, key := range keys {
 		table := s.names.byKey(key)
-		cols, err := s.columnSet(ctx, table)
+		cols, err := s.columnSetOn(ctx, r, table)
 		if err != nil {
-			return err
+			return schemaReport{}, err
 		}
 		if len(cols) == 0 {
 			if !tableMissing {
-				scope = s.lookupScope(ctx)
+				scope = s.lookupScope(ctx, r)
 			}
 			tableMissing = true
-			gap.add(tableAddedIn(key))
-			problems = append(problems, missingTableError(table, scope, tableMigrationHint(s.dialect.name, key)))
+			report.gap.add(tableAddedIn(key))
+			report.problems = append(report.problems, missingTableError(table, scope, tableMigrationHint(s.dialect.name, key)))
 			continue
 		}
-		tableFound = true
-		found, err := s.checkExistingTable(ctx, key, table, cols, required[key], &gap)
-		if err != nil {
-			return err
+		report.tableFound = true
+		if err := s.checkExistingTable(ctx, r, key, table, cols, required[key], &report); err != nil {
+			return schemaReport{}, err
 		}
-		problems = append(problems, found...)
 	}
 	if tableMissing {
-		problems = append(problems, errors.New(s.missingTableRemedy()))
+		report.problems = append(report.problems, errors.New(s.missingTableRemedy()))
 	}
-	if hint := gap.hint(); tableFound && hint != nil {
-		problems = append(problems, hint)
+	if hint := report.gap.hint(); report.tableFound && hint != nil {
+		report.problems = append(report.problems, hint)
 	}
-	return errors.Join(problems...)
+	return report, nil
 }
 
 // checkExistingTable runs the column, collation and index checks on a table
-// that exists.
-func (s *Store) checkExistingTable(ctx context.Context, key, table string, cols map[string]bool, required []string, gap *releaseGap) ([]error, error) {
-	var problems []error
-	if err := s.checkColumns(key, table, cols, required, gap); err != nil {
-		problems = append(problems, err)
+// that exists and adds what they find to report.
+func (s *Store) checkExistingTable(ctx context.Context, r runner, key, table string, cols map[string]bool, required []string, report *schemaReport) error {
+	if err := s.checkColumns(key, table, cols, required, &report.gap); err != nil {
+		report.problems = append(report.problems, err)
 	}
-	collationProblems, err := s.checkBinaryCollations(ctx, key, table)
+	collationProblems, err := s.checkBinaryCollations(ctx, r, key, table)
 	if err != nil {
-		return nil, err
+		return err
 	}
-	indexProblems, err := s.checkIndexes(ctx, key, table)
+	indexProblems, err := s.checkIndexes(ctx, r, key, table)
 	if err != nil {
-		return nil, err
+		return err
 	}
-	return append(append(problems, collationProblems...), indexProblems...), nil
+	if len(collationProblems) > 0 || len(indexProblems) > 0 {
+		report.indexOrCollation = true
+	}
+	report.problems = append(append(report.problems, collationProblems...), indexProblems...)
+	return nil
 }
 
 // missingTableRemedy says how to create tables an empty database lacks. The
 // reference DDL file names the default table names, so it is pointed at only
 // when the store uses them.
 func (s *Store) missingTableRemedy() string {
-	return "oidcsql: create the missing tables by applying Store.Migrations() with your migration tool, " +
-		"or with Store.Migrate in development; the reference DDL is " + s.ddlReference()
+	return "oidcsql: create the missing tables with Store.Migrate, or by applying Store.Migrations() with your migration tool; " +
+		"the reference DDL is " + s.ddlReference()
 }
 
 // ddlReference names where the DDL for this store's table names lives:
@@ -443,11 +466,11 @@ func (s *Store) ddlReference() string {
 // checkBinaryCollations reports each [binaryCollationColumns] column of
 // table whose MySQL collation compares case- or accent-insensitively.
 // It checks nothing outside MySQL, where every comparison is byte-wise.
-func (s *Store) checkBinaryCollations(ctx context.Context, key, table string) ([]error, error) {
+func (s *Store) checkBinaryCollations(ctx context.Context, r runner, key, table string) ([]error, error) {
 	if s.dialect.name != "mysql" || len(binaryCollationColumns[key]) == 0 {
 		return nil, nil
 	}
-	rows, err := s.db.QueryContext(ctx, mysqlCollationQuery, s.catalogTableName(table))
+	rows, err := r.QueryContext(ctx, mysqlCollationQuery, s.catalogTableName(table))
 	if err != nil {
 		return nil, fmt.Errorf("oidcsql: inspect collations for %s: %w", table, err)
 	}
@@ -533,7 +556,13 @@ func migrationsHint(dialect string, stems []string) string {
 }
 
 func (s *Store) columnSet(ctx context.Context, table string) (map[string]bool, error) {
-	rows, err := s.db.QueryContext(ctx, s.columnListQuery(), s.catalogTableName(table))
+	return s.columnSetOn(ctx, dbRunner{db: s.db}, table)
+}
+
+// columnSetOn returns the columns of table read through r, empty when the
+// table does not exist.
+func (s *Store) columnSetOn(ctx context.Context, r runner, table string) (map[string]bool, error) {
+	rows, err := r.QueryContext(ctx, s.columnListQuery(), s.catalogTableName(table))
 	if err != nil {
 		return nil, fmt.Errorf("oidcsql: inspect columns for %s: %w", table, err)
 	}
@@ -574,7 +603,7 @@ const postgresResolvedSchema = "(SELECT n.nspname FROM pg_class c JOIN pg_namesp
 
 // lookupScope names where the schema checks look for a table: the
 // search_path schemas on PostgreSQL, the database on MySQL.
-func (s *Store) lookupScope(ctx context.Context) string {
+func (s *Store) lookupScope(ctx context.Context, r runner) string {
 	var query, format string
 	switch s.dialect.name {
 	case "postgres":
@@ -585,7 +614,7 @@ func (s *Store) lookupScope(ctx context.Context) string {
 		return ""
 	}
 	var scope databasesql.NullString
-	if err := s.db.QueryRowContext(ctx, query).Scan(&scope); err != nil || !scope.Valid {
+	if err := r.QueryRowContext(ctx, query).Scan(&scope); err != nil || !scope.Valid {
 		return ""
 	}
 	return fmt.Sprintf(format, scope.String)

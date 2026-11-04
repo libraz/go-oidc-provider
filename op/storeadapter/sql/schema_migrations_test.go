@@ -17,12 +17,11 @@ import (
 //go:embed testdata/schema_v1.0.0_indexes.txt
 var testdataFS embed.FS
 
-// Store.Migrate is CREATE TABLE IF NOT EXISTS, so it does nothing to a table
-// that already exists. On SQLite and PostgreSQL an index is its own
-// standalone CREATE INDEX IF NOT EXISTS statement, which a later Migrate run
-// does apply — those two dialects self-heal. MySQL has no such statement, so
-// v1.sql declares every index inline in the CREATE TABLE body, and a database
-// created by an earlier release never acquires an index added afterwards.
+// v1.sql creates tables with CREATE TABLE IF NOT EXISTS, which does nothing
+// to a table that already exists. On SQLite and PostgreSQL an index is its own
+// standalone CREATE INDEX IF NOT EXISTS statement; MySQL has no such
+// statement, so v1.sql declares every index inline in the CREATE TABLE body,
+// and an existing table acquires an index added later only from a migration.
 //
 // The only thing standing between that and a silently unindexed production
 // table is the migration files under schema/migrations: nothing fails when an

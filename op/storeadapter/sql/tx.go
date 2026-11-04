@@ -119,6 +119,33 @@ func (l *txLifecycle) rollback() error {
 	return nil
 }
 
+// migrationSession is Migrate's dedicated connection, held together with the
+// transaction gate for the whole run.
+type migrationSession struct {
+	conn    *databasesql.Conn
+	begin   func(ctx context.Context) (*databasesql.Tx, error)
+	release func()
+}
+
+// openMigrationSession takes the transaction gate, then a dedicated
+// connection; transactions opened through begin run under that slot.
+func (s *Store) openMigrationSession(ctx context.Context) (*migrationSession, error) {
+	release, err := s.acquireTxGate(ctx)
+	if err != nil {
+		return nil, err
+	}
+	conn, err := s.db.Conn(ctx)
+	if err != nil {
+		release()
+		return nil, err
+	}
+	return &migrationSession{
+		conn:    conn,
+		begin:   func(ctx context.Context) (*databasesql.Tx, error) { return conn.BeginTx(ctx, nil) },
+		release: func() { _ = conn.Close(); release() },
+	}, nil
+}
+
 // beginInternalTx takes the transaction gate and then opens the
 // transaction. Every exit returns the slot: the failure to open it, and
 // Commit and Rollback alike. label names the operation in the wrapped

@@ -374,9 +374,9 @@ func TestMySQL_IdentifierCollation(t *testing.T) {
 	})
 }
 
-// TestMySQL_ValidateSchema_MissingIndex drops a sweep index, which Migrate
-// cannot restore on an existing table, and expects the check to name it and
-// say so; an index of the same leading column under another name passes.
+// TestMySQL_ValidateSchema_MissingIndex drops a sweep index, which a database
+// already at the current version does not get back, and expects the check to
+// name it and say so; an index of the same leading column under another name passes.
 func TestMySQL_ValidateSchema_MissingIndex(t *testing.T) {
 	t.Parallel()
 	db := newMySQLDBFactory(t, false)(t)
@@ -392,7 +392,7 @@ func TestMySQL_ValidateSchema_MissingIndex(t *testing.T) {
 	}
 	for _, want := range []string{
 		"oidcsql: oidc_refresh_tokens has no index on expires_at; create it from schema/mysql/v1.sql",
-		"Store.Migrate cannot add indexes to an existing table",
+		"an existing table gets one only from the migration file that adds it",
 	} {
 		if err := s.ValidateSchema(t.Context()); err == nil || !strings.Contains(err.Error(), want) {
 			t.Fatalf("ValidateSchema error = %v, want it to contain %q", err, want)

@@ -137,6 +137,19 @@ func sqliteSchemaShape(t *testing.T, db *databasesql.DB) []string {
 	return out
 }
 
+// excludeTable drops the lines of a [sqliteSchemaShape] that describe table,
+// its columns and its indexes.
+func excludeTable(shape []string, table string) []string {
+	var out []string
+	for _, line := range shape {
+		if line == "table "+table || strings.HasPrefix(line, table+".") || strings.HasPrefix(line, "index "+table+".") {
+			continue
+		}
+		out = append(out, line)
+	}
+	return out
+}
+
 // applyMigrationChain runs every file of fsys in order, either split into
 // statements the way Migrate splits the schema or as one Exec per file the
 // way a migration tool sends it.
@@ -174,7 +187,7 @@ func TestMigrations_ChainEqualsMigrateSQLite(t *testing.T) {
 	if err := s.Migrate(ctx); err != nil {
 		t.Fatalf("Migrate: %v", err)
 	}
-	want := sqliteSchemaShape(t, fresh)
+	want := excludeTable(sqliteSchemaShape(t, fresh), s.versionTable())
 
 	tableNames := defaultNames().all()
 	catalog := make([]string, 0, len(tableNames))

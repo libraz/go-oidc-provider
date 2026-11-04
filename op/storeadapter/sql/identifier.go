@@ -329,8 +329,8 @@ var knownNamingKeys = []string{
 // rewriteSchema swaps every default table name in the embedded DDL
 // with the override resolved through nameMap. The adapter exposes the
 // rewritten schema via [Store.Schema] so embedders can copy-paste it
-// into their migration tooling; the in-process [Store.Migrate]
-// helper drives this same string.
+// for review, and [Store.Migrations] runs the same rewrite over the
+// migration files that [Store.Migrate] applies.
 //
 // The substitution runs as a SINGLE pass built from an alternation of
 // the exact default table names, ordered longest-first, applied with

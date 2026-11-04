@@ -102,12 +102,12 @@ var (
 // checkIndexes reports, as one problem, the columns of table that lead no
 // index although the reference DDL indexes them. Index names and extra
 // columns are not compared, so an embedder's own index passes.
-func (s *Store) checkIndexes(ctx context.Context, key, table string) ([]error, error) {
+func (s *Store) checkIndexes(ctx context.Context, r runner, key, table string) ([]error, error) {
 	want := ddlIndexLeads(s.dialect)[key]
 	if len(want) == 0 {
 		return nil, nil
 	}
-	have, err := s.indexLeadColumns(ctx, table)
+	have, err := s.indexLeadColumns(ctx, r, table)
 	if err != nil {
 		return nil, err
 	}
@@ -122,21 +122,21 @@ func (s *Store) checkIndexes(ctx context.Context, key, table string) ([]error, e
 	}
 	hint := ""
 	if s.dialect.name == "mysql" {
-		hint = "; Store.Migrate cannot add indexes to an existing table, see schema/MIGRATIONS.md"
+		hint = "; MySQL declares indexes inside CREATE TABLE, so an existing table gets one only from the migration file that adds it, see schema/MIGRATIONS.md"
 	}
 	return []error{fmt.Errorf("oidcsql: %s has no index on %s; create it from %s%s",
 		table, strings.Join(missing, ", "), s.ddlReference(), hint)}, nil
 }
 
 // indexLeadColumns returns the columns that lead an index on the physical
-// table, the primary key included.
-func (s *Store) indexLeadColumns(ctx context.Context, table string) (map[string]bool, error) {
+// table, the primary key included, read through r.
+func (s *Store) indexLeadColumns(ctx context.Context, r runner, table string) (map[string]bool, error) {
 	name := s.catalogTableName(table)
 	args := []any{name}
 	if s.dialect.name == "sqlite" {
 		args = append(args, name)
 	}
-	rows, err := s.db.QueryContext(ctx, s.indexLeadQuery(), args...)
+	rows, err := r.QueryContext(ctx, s.indexLeadQuery(), args...)
 	if err != nil {
 		return nil, fmt.Errorf("oidcsql: inspect indexes for %s: %w", table, err)
 	}
@@ -201,14 +201,33 @@ func (g *releaseGap) add(version string) {
 // when a table or column of the first release is missing, since no release
 // is then known to be applied.
 func (g releaseGap) hint() error {
-	if g.baseline || !g.found {
+	version, stem, number, ok := g.applied()
+	if !ok {
 		return nil
 	}
-	version, stem := "v1.0.0", baselineMigration
+	return fmt.Errorf("oidcsql: the schema matches release %s (migration %s); a database golang-migrate does not track yet "+
+		"records that with \"migrate force %d\" before \"migrate up\"", version, migrationNumber(stem), number)
+}
+
+// applied returns the last release the database is estimated to have applied:
+// its version, its migration file stem and that file's number, the value a
+// version table records. ok is false when a table or column of the first
+// release is missing, or nothing is, since no release is then known to be
+// applied.
+func (g releaseGap) applied() (version, stem string, number int, ok bool) {
+	if g.baseline || !g.found {
+		return "", "", 0, false
+	}
+	version, stem = "v1.0.0", baselineMigration
 	if g.earliest > 0 {
 		prev := schemaReleases[g.earliest-1]
 		version, stem = prev.version, prev.migration
 	}
-	return fmt.Errorf("oidcsql: the schema matches release %s (migration %s); a database golang-migrate does not track yet "+
-		"records that with \"migrate force %d\" before \"migrate up\"", version, stem[:strings.IndexByte(stem, '_')], g.earliest+1)
+	return version, stem, g.earliest + 1, true
+}
+
+// migrationNumber returns the number a migration file stem starts with,
+// "000004" for "000004_v1.3.0".
+func migrationNumber(stem string) string {
+	return stem[:strings.IndexByte(stem, '_')]
 }
