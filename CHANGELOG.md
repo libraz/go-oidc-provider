@@ -31,7 +31,13 @@ The main module and the storage-adapter sub-modules
 each sub-module independently:
 
 ```
-# v1.4.0 (latest)
+# v1.5.0 (latest)
+go get github.com/libraz/go-oidc-provider@v1.5.0
+go get github.com/libraz/go-oidc-provider/op/storeadapter/sql@v1.5.0
+go get github.com/libraz/go-oidc-provider/op/storeadapter/redis@v1.5.0
+go get github.com/libraz/go-oidc-provider/op/storeadapter/dynamodb@v1.5.0
+
+# v1.4.0
 go get github.com/libraz/go-oidc-provider@v1.4.0
 go get github.com/libraz/go-oidc-provider/op/storeadapter/sql@v1.4.0
 go get github.com/libraz/go-oidc-provider/op/storeadapter/redis@v1.4.0
@@ -92,7 +98,7 @@ go get github.com/libraz/go-oidc-provider/op/storeadapter/sql@v0.9.0
 go get github.com/libraz/go-oidc-provider/op/storeadapter/redis@v0.9.0
 ```
 
-## [Unreleased]
+## [v1.5.0] — 2026-11-04
 
 Configurations that started and looked correct but were not safe now either
 behave safely by default or fail at `op.New`. Authentication is composed
@@ -1203,6 +1209,12 @@ equivalent.
   `op.RuleAfterFailedAttempts(3, op.StepCaptcha{Verifier: v})` to
   `LoginFlow.Rules`.
 - **BREAKING:** `op.WithRiskAssessor`. Set `LoginFlow.Risk`.
+
+The SQL adapter no longer closes the database it was handed.
+
+- **BREAKING:** `(*oidcsql.Store).Close`. The adapter wraps the `*sql.DB`
+  the application opened and does not own it, so closing the application's
+  shared pool was the wrong thing for it to do. Close the `*sql.DB` itself.
 
 ## [v1.4.0] — 2026-10-23
 
@@ -5979,7 +5991,8 @@ from the access-token TTL (see Changed).
 
 ## [v0.9.0] — initial public release
 
-[Unreleased]: https://github.com/libraz/go-oidc-provider/compare/v1.4.0...HEAD
+[Unreleased]: https://github.com/libraz/go-oidc-provider/compare/v1.5.0...HEAD
+[v1.5.0]: https://github.com/libraz/go-oidc-provider/compare/v1.4.0...v1.5.0
 [v1.4.0]: https://github.com/libraz/go-oidc-provider/compare/v1.3.0...v1.4.0
 [v1.3.0]: https://github.com/libraz/go-oidc-provider/compare/v1.2.0...v1.3.0
 [v1.2.0]: https://github.com/libraz/go-oidc-provider/compare/v1.1.0...v1.2.0
