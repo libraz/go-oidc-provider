@@ -779,16 +779,15 @@ advisories:
     severity: P2
     source: https://github.com/advisories/GHSA-g7f3-828f-7h7m
     threat: T-06
-    status: out-of-scope
-    out_of_scope_reason: |
-      Authlib JWE "zip":"DEF" decompression bomb — a small ciphertext
-      inflated to an arbitrarily large plaintext during decryption. The
-      OP never decrypts JWE: it has no encryption keyset, publishes no
-      *_encryption_alg_values_supported, and refuses an encrypted
-      request object rather than unwrapping it (the one JWE-shaped input
-      it recognises is rejected at parse, pinned by
-      TestVerify_RejectsJWEWrappedUnsignedJWT). There is no
-      decompression path to bound.
+    status: covered
+    notes: |
+      A JWE "zip":"DEF" decompression bomb — a small ciphertext inflated
+      to an arbitrarily large plaintext during decryption. The OP decrypts
+      inbound request objects once op.WithEncryptionKeyset is configured,
+      and that path caps the decompressed plaintext at
+      jose.MaxJWEPlaintextSize. TestDecrypt_ZipBombResistance decrypts a
+      DEFLATE-compressed JWE whose plaintext is four times the cap and
+      requires a bounded-memory rejection.
   - id: CVE-2026-96760
     severity: P0
     source: https://github.com/authlib/authlib/security/advisories/GHSA-6v38-4h7w-rj9h

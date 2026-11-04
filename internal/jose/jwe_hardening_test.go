@@ -95,6 +95,9 @@ func TestDecrypt_PlaintextSizeCap_AtLimit(t *testing.T) {
 // cap (max(250000, 10*input)) or via our [jose.MaxJWEPlaintextSize]
 // gate. Either path keeps memory bounded; what we forbid is a
 // silent expansion past 1 MiB.
+//
+// Tracks: CVE-2025-62706 — a JWE "zip":"DEF" decompression bomb inflated
+// a small ciphertext to an unbounded plaintext during decryption.
 func TestDecrypt_ZipBombResistance(t *testing.T) {
 	t.Parallel()
 
