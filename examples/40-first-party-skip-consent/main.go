@@ -49,7 +49,7 @@
 //   - Store: in-memory; use op/storeadapter/sql or composite.
 //   - Listener: plain HTTP; front behind TLS-terminating ingress.
 //   - User seed: the demo username / password are hard-coded; production embedders enrol users through their own management plane.
-//   - First-party skip: a deliberate trust extension — production embedders MUST gate it on a registry of clients owned by the embedder's organisation (typically a column on the client table consulted at boot).
+//   - First-party skip: a deliberate trust extension — production embedders MUST list only clients the embedder's organisation owns. The list accepts WithStaticClients ids alone, so it is fixed at deploy time.
 package main
 
 import (

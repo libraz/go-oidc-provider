@@ -1,0 +1,109 @@
+# yaml-language-server: $schema=./schema.json
+feature: first_party
+prefix: FPC
+title: First-party client consent skip
+specs:
+  - OIDC Core 1.0 §3.1.2.4 (Authorization Server Obtains End-User Consent/Authorization)
+  - OIDC Core 1.0 §3.1.2.1 (`prompt`)
+  - W3C Fetch Metadata Request Headers (`Sec-Fetch-Site`)
+  - OP design (op.WithFirstPartyClients)
+
+description: |
+  A client listed in `op.WithFirstPartyClients` (static or admin sourced)
+  receives its grant without a consent screen. The skip covers a request
+  that must sign the user in first (no session, `prompt=login`) as well as
+  one over a live session; the grant belongs to the subject that sign-in
+  binds and the auto-grant is audited as `consent.granted.first_party`.
+  The consent screen stays for explicit ceremonies (`offline_access`,
+  `prompt=consent`, registration via `prompt=create`), for navigations the
+  browser does not label same-origin or same-site, and for clients that
+  are not listed. FAPI 2.0 profiles refuse the option at `op.New`.
+
+rows:
+  - id: FPC-001
+    severity: P0
+    spec: OP design (first-party auto-consent)
+    shape: identity
+    behaviour: |
+      With no session and a same-origin navigation, a first-party client's
+      `/authorize` runs the sign-in prompt and then redirects to the RP
+      with a code without ever showing the consent prompt. The grant is
+      stored for the (subject, client) pair the sign-in bound, covers the
+      requested scope, and exactly one `consent.granted.first_party`
+      audit event is emitted for that client and subject.
+    status: active
+
+  - id: FPC-002
+    severity: P0
+    spec: OP design (first-party auto-consent)
+    shape: identity
+    behaviour: |
+      With a live session, `prompt=login` still runs the sign-in prompt
+      and the consent that would follow is auto-granted: the RP receives
+      a code with no consent prompt, the grant stays bound to the
+      subject that signed in, and the re-authentication is audited as
+      one more `consent.granted.first_party` event.
+    status: active
+
+  - id: FPC-003
+    severity: P0
+    spec: OIDC Core 1.0 §11 (`offline_access`)
+    shape: presence
+    behaviour: |
+      A request for `offline_access` from a first-party client signs the
+      user in and then shows the consent prompt; no grant exists and no
+      `consent.granted.first_party` event is emitted until the user
+      approves.
+    status: active
+
+  - id: FPC-004
+    severity: P0
+    spec: W3C Fetch Metadata (`Sec-Fetch-Site`)
+    shape: value
+    behaviour: |
+      A navigation whose `Sec-Fetch-Site` is `cross-site`, `none`, or
+      absent is not trusted: the first-party client signs in and then
+      sees the consent prompt, and no `consent.granted.first_party`
+      event is emitted. Only `same-origin` skips.
+    status: active
+
+  - id: FPC-005
+    severity: P0
+    spec: OIDC Core 1.0 §3.1.2.1 (`prompt=consent`)
+    shape: presence
+    behaviour: |
+      A first-party request carrying `prompt=consent` signs the user in
+      and then shows the consent prompt: the RP's explicit re-consent
+      request is not overridden by the OP's first-party posture.
+    status: active
+
+  - id: FPC-006
+    severity: P0
+    spec: Prompt Create 1.0 §4.1 / OP design
+    shape: identity
+    behaviour: |
+      A first-party request carrying `prompt=create` runs the
+      registration step and then shows the consent prompt for the
+      account it created; the auto-grant never covers a subject bound
+      by registration.
+    status: active
+
+  - id: FPC-007
+    severity: P0
+    spec: OP design (first-party auto-consent)
+    shape: identity
+    behaviour: |
+      A client that is not in the first-party list signs in and then
+      sees the consent prompt on an otherwise identical same-origin
+      navigation, while the listed client on the same OP skips it.
+    status: active
+
+  - id: FPC-008
+    severity: P0
+    spec: FAPI 2.0 Security Profile / OP design
+    shape: value
+    behaviour: |
+      `op.New` with `op.WithFirstPartyClients` under a FAPI 2.0 profile
+      fails with a configuration error that names FAPI 2.0; the same
+      options without the first-party list construct successfully.
+    status: active
