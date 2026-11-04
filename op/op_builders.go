@@ -272,7 +272,7 @@ func issuerHost(issuer string) string {
 // an origin registered by one client can post to the consent ceremony of
 // another, which is the whole ceremony's trust boundary. The interaction
 // UI is served by the OP itself (the HTML driver, or the SPA shell mounted
-// under [WithSPAUI]); an embedder that hosts it on a separate origin says
+// for [SPAUI]); an embedder that hosts it on a separate origin says
 // so through [WithCORSOrigins], which is an explicit act rather than a
 // side effect of registering a client.
 func buildInteractionOriginAllowlist(cfg *config) (*csrf.Allowlist, error) {

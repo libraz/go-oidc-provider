@@ -204,7 +204,7 @@ func (f safeFS) Open(name string) (http.File, error) {
 		}
 	}
 	// abs is the join of the embedder-supplied SPAStaticDir (rooted
-	// at boot, validated for existence by op.WithSPAUI) and a name
+	// at boot, validated for existence by op.WithUI(op.SPAUI)) and a name
 	// that has already passed validAssetPath plus the directory and
 	// symlink-containment checks above. The remaining surface for
 	// G304 is "embedder pointed StaticDir at a sensitive location",

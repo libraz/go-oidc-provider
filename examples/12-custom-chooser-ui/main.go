@@ -1,6 +1,6 @@
 //go:build example
 
-// Example 12 demonstrates [op.WithChooserUI]: an HTML template the
+// Example 12 demonstrates [op.HTMLUI] with a Chooser [op.PageTemplate]: an HTML template the
 // library renders for prompt=select_account instead of letting the
 // JSON driver hand the chooser envelope to a SPA. The library
 // passes a canonical [interaction.ChooserTemplateData] context
@@ -52,7 +52,6 @@ import (
 	"github.com/libraz/go-oidc-provider/examples/internal/devkeys"
 	"github.com/libraz/go-oidc-provider/examples/internal/serve"
 	"github.com/libraz/go-oidc-provider/op"
-	"github.com/libraz/go-oidc-provider/op/interaction"
 	"github.com/libraz/go-oidc-provider/op/profile"
 	"github.com/libraz/go-oidc-provider/op/store"
 	"github.com/libraz/go-oidc-provider/op/storeadapter/inmem"
@@ -114,11 +113,10 @@ func main() {
 		// hand the user to.
 		op.WithProfile(profile.OAuth21),
 		op.WithLoginFlow(op.LoginFlow{Primary: op.PrimaryPassword{Store: memStore.UserPasswords()}}),
-		// HTMLDriver is the orchestrator default; setting it explicitly
-		// makes this example self-documenting (compare with example 13,
-		// which opts into JSONDriver for a SPA front-end).
-		op.WithInteractionDriver(interaction.HTMLDriver{}),
-		op.WithChooserUI(op.ChooserUI{Template: tmpl}),
+		// HTMLUI renders the built-in HTML pages and swaps only the
+		// chooser (compare with example 13, which opts into JSONDriver
+		// for a SPA front-end).
+		op.WithUI(op.HTMLUI{Chooser: op.PageTemplate{Template: tmpl}}),
 		op.WithStaticClients(
 			op.ConfidentialClient{
 				ID:           "demo-rp",
@@ -136,7 +134,7 @@ func main() {
 	mux := http.NewServeMux()
 	mux.Handle("/", provider)
 
-	log.Printf("custom-chooser-ui example listening on %s (issuer %s, HTML chooser via WithChooserUI)", opAddr, issuer)
+	log.Printf("custom-chooser-ui example listening on %s (issuer %s, HTML chooser via HTMLUI.Chooser)", opAddr, issuer)
 	log.Println("flow: sign in as alice → /authorize?prompt=select_account → follow the add-account link as bob → /authorize?prompt=select_account")
 	log.Println("demo users: alice/alice-password, bob/bob-password")
 	if err := serve.Listen(opAddr, mux, provider); err != nil {

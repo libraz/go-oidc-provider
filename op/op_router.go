@@ -934,14 +934,14 @@ func fromInternalMetadata(m registrationendpoint.ClientMetadata) ClientMetadata 
 	}
 }
 
-// spaWiringFor projects the [config.spaUI] state onto the
-// authorizeendpoint deps fields. An unset SPAUI returns empty values;
+// spaWiringFor projects the resolved [SPAUI] wiring onto the
+// authorizeendpoint deps fields. Any other mode returns empty values;
 // the consumer treats it as "legacy /interaction wiring".
 func spaWiringFor(cfg *config) (loginMount, staticDir, csp string) {
-	if !cfg.spaUISet {
+	if cfg.ui.spa == nil {
 		return "", "", ""
 	}
-	return cfg.spaUI.LoginMount, cfg.spaUI.StaticDir, cfg.spaUI.ContentSecurityPolicy
+	return cfg.ui.spa.loginMount, cfg.ui.spa.staticDir, cfg.ui.spa.csp
 }
 
 // customScopeClaims projects the public scope catalogue onto the

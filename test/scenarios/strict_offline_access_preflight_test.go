@@ -70,7 +70,7 @@ func TestStrictOfflineAccess_RefusesPreFlagTokenWithoutConsumingIt(t *testing.T)
 		op.WithUserStore(lax.Store.Users()),
 		op.WithKeyset(op.Keyset{lax.SigningKey}),
 		op.WithCookieKeys(cookieKey),
-		op.WithInteractionDriver(testkit.AutoConsentDriver{}),
+		op.WithUI(op.DriverUI{Driver: testkit.AutoConsentDriver{}}),
 		op.WithLoginFlow(op.LoginFlow{Primary: op.ExternalStep{
 			Authenticator: testkit.SubjectAuthenticator{},
 			KindLabel:     "testkit.subject",

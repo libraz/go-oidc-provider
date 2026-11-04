@@ -174,7 +174,7 @@ func run() error {
 		// OAuth 2.1 profile: PKCE on every authorization-code request.
 		// The RP below sends S256 PKCE on every login.
 		op.WithProfile(profile.OAuth21),
-		op.WithSPAUI(op.SPAUI{
+		op.WithUI(op.SPAUI{
 			LoginMount: "/login",
 			StaticDir:  staticDir,
 		}),

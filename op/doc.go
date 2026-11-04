@@ -85,8 +85,8 @@
 //     stream on its own).
 //   - [WithMountPrefix], [WithTrustedProxies]: where the OP mounts and which
 //     reverse proxies it trusts.
-//   - [WithSPAUI] or [WithConsentUI]: your own login and consent pages in
-//     place of the built-in ones.
+//   - [WithUI]: your own login and consent pages in place of the built-in
+//     ones — templates over them, a SPA, or your own driver.
 //   - When a user leaves: make the user store answer [store.ErrNotFound],
 //     then call [Provider.RevokeSubject] to disable or
 //     [Provider.ForgetSubject] (which revokes too) to erase.
@@ -107,8 +107,7 @@
 //     [WithLoginFlow] join them while the authorization_code grant is enabled.
 //   - Login and UI: [WithCookieKeys], [WithLoginFlow], [WithMFAEncryptionKeys],
 //     [WithAuthnLockoutStore], [WithLoginAttemptObserver], [WithUserStore],
-//     [WithInteractionDriver], [WithInteractions], [WithSPAUI], [WithConsentUI],
-//     [WithLoginUI], [WithChooserUI], [WithLogoutUI], [WithDefaultLocale], [WithLocale],
+//     [WithUI], [WithInteractions], [WithLogoutUI], [WithDefaultLocale], [WithLocale],
 //     [WithPreferredLocaleStore].
 //   - Clients: [WithStaticClients], [WithHighEntropyClientSecrets],
 //     [WithFirstPartyClients], [WithDynamicRegistration],

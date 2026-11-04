@@ -39,7 +39,7 @@ func TestEndToEnd_InteractionFailureNegotiatesHTMLAndJSON(t *testing.T) {
 	clock := fakeClock{now: time.Date(2026, 5, 7, 12, 0, 0, 0, time.UTC)}
 	tk := testkit.NewProvider(t,
 		testkit.WithClock(clock),
-		testkit.WithOptions(op.WithInteractionDriver(interaction.HTMLDriver{})),
+		testkit.WithOptions(op.WithUI(op.DriverUI{Driver: interaction.HTMLDriver{}})),
 	)
 
 	const secret = "rp-secret"

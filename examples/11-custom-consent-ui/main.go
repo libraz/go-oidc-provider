@@ -1,18 +1,18 @@
 //go:build example
 
-// Example 11 demonstrates [op.WithConsentUI]: an HTML template the
-// library renders at consent time instead of the built-in screen.
+// Example 11 demonstrates [op.HTMLUI] with a Consent [op.PageTemplate]: an
+// HTML template the library renders at consent time instead of the
+// built-in screen.
 // The library passes a canonical [interaction.ConsentTemplateData]
 // context (Client, Scopes, StateRef, CSRFToken, ApprovedScopesField,
 // SubmitMethod, SubmitAction) to the template; the embedder controls
 // branding, layout and copy.
 //
 // Localization is not one of them. ConsentTemplateData carries no
-// locale and no message bundle — [op.ConsentUI] records the Strings
-// field as reserved until the public i18n surface stabilises — so the
-// template renders one fixed language. The two paths that do see the
+// locale and no message bundle, so the template renders one fixed
+// language. The two paths that do see the
 // OP's chosen locale today are [op.WithLocale] over the built-in
-// consent screen, and a full [op.WithInteractionDriver] driver, which
+// consent screen, and a full [op.DriverUI] driver, which
 // receives it on Prompt.Locale. For surfaces outside the ceremony
 // (emails, out-of-band pages) the resolver is reachable through
 // [op.Provider.LocaleResolver].
@@ -136,10 +136,10 @@ func main() {
 		// page work. script-src stays absent: the form is a plain
 		// POST, and the page holds the CSRF token and the
 		// continuation reference.
-		op.WithConsentUI(op.ConsentUI{
+		op.WithUI(op.HTMLUI{Consent: op.PageTemplate{
 			Template:              tmpl,
 			ContentSecurityPolicy: "default-src 'none'; style-src 'self'; img-src 'self' data:",
-		}),
+		}}),
 		op.WithStaticClients(
 			op.ConfidentialClient{
 				ID:           "demo-rp",

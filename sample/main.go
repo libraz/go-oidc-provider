@@ -114,7 +114,7 @@ func run(logger *slog.Logger) error {
 		op.WithCookieKeys(cfg.CookieKey),
 		op.WithMFAEncryptionKeys(cfg.MFAKey),
 		op.WithLoginFlow(flow),
-		op.WithInteractionDriver(driver),
+		op.WithUI(op.DriverUI{Driver: driver}),
 		op.WithStaticClients(op.PublicClient{
 			ID:           cfg.ClientID,
 			RedirectURIs: []string{cfg.RedirectURI},

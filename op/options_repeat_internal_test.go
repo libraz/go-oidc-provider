@@ -21,11 +21,11 @@ func TestZeroArgPrivateNetworkOptions_AreIdempotent(t *testing.T) {
 	}
 }
 
-func TestWithDefaults_UIOptionsYieldToExplicitCounterpart(t *testing.T) {
+func TestWithDefaults_UIYieldsToExplicitCounterpart(t *testing.T) {
 	t.Parallel()
 
-	spa := WithSPAUI(SPAUI{LoginMount: "/login"})
-	consent := WithConsentUI(ConsentUI{Template: template.Must(template.New("c").Parse("ok"))})
+	spa := WithUI(SPAUI{LoginMount: "/login"})
+	html := WithUI(HTMLUI{Consent: PageTemplate{Template: template.Must(template.New("c").Parse("ok"))}})
 
 	for _, tc := range []struct {
 		name     string
@@ -33,27 +33,27 @@ func TestWithDefaults_UIOptionsYieldToExplicitCounterpart(t *testing.T) {
 		wantSPA  bool
 		wantFail bool
 	}{
-		{"explicit SPA, default consent", []Option{spa, WithDefaults(consent)}, true, false},
-		{"default consent, explicit SPA", []Option{WithDefaults(consent), spa}, true, false},
-		{"explicit consent, default SPA", []Option{consent, WithDefaults(spa)}, false, false},
-		{"default SPA, explicit consent", []Option{WithDefaults(spa), consent}, false, false},
-		{"both explicit", []Option{spa, consent}, false, true},
-		{"both default", []Option{WithDefaults(spa), WithDefaults(consent)}, false, true},
+		{"explicit SPA, default HTML", []Option{spa, WithDefaults(html)}, true, false},
+		{"default HTML, explicit SPA", []Option{WithDefaults(html), spa}, true, false},
+		{"explicit HTML, default SPA", []Option{html, WithDefaults(spa)}, false, false},
+		{"default SPA, explicit HTML", []Option{WithDefaults(spa), html}, false, false},
+		{"both explicit", []Option{spa, html}, false, true},
+		{"both default", []Option{WithDefaults(spa), WithDefaults(html)}, false, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			c, err := newConfig(tc.opts)
 			if tc.wantFail {
-				if err == nil || !strings.Contains(err.Error(), "mutually exclusive") {
-					t.Fatalf("err = %v, want a mutual-exclusion failure", err)
+				if err == nil || !strings.Contains(err.Error(), "WithUI may be called at most once") {
+					t.Fatalf("err = %v, want a repeated-WithUI failure", err)
 				}
 				return
 			}
 			if err != nil {
 				t.Fatalf("newConfig: %v", err)
 			}
-			if c.spaUISet != tc.wantSPA || c.consentUISet == tc.wantSPA {
-				t.Fatalf("spaUISet=%v consentUISet=%v, want SPA=%v", c.spaUISet, c.consentUISet, tc.wantSPA)
+			if !c.uiSet || (c.ui.spa != nil) != tc.wantSPA {
+				t.Fatalf("uiSet=%v spa=%v, want SPA=%v", c.uiSet, c.ui.spa, tc.wantSPA)
 			}
 		})
 	}

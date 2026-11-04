@@ -1,5 +1,5 @@
 // Module github.com/libraz/go-oidc-provider/examples/10-react-login
-// pairs the WithSPAUI demo with an in-process RP built on
+// pairs the SPAUI demo with an in-process RP built on
 // examples/internal/rpkit. It is its own sub-module so the RP-side
 // dependencies (golang.org/x/oauth2, github.com/coreos/go-oidc/v3)
 // stay out of the host module's go.sum.

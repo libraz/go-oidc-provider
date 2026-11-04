@@ -100,7 +100,7 @@ func newACRSSOFixture(t *testing.T) *acrSSOFixture {
 		op.WithStore(st),
 		op.WithKeyset(op.Keyset{testkit.NewSigningKey(t, "acr-sso")}),
 		op.WithCookieKeys(testkit.NewCookieKey(t)),
-		op.WithInteractionDriver(testkit.AutoConsentDriver{}),
+		op.WithUI(op.DriverUI{Driver: testkit.AutoConsentDriver{}}),
 		op.WithClock(clock),
 		op.WithACRPolicy(op.ACRLevels{acrSSOCustom: op.AAL2}),
 		op.WithLoginFlow(op.LoginFlow{

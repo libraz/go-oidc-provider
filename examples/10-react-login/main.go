@@ -1,6 +1,6 @@
 //go:build example
 
-// Example 10 demonstrates [op.WithSPAUI]: the OP delegates the
+// Example 10 demonstrates [op.SPAUI]: the OP delegates the
 // login screens to a SPA at the configured mount paths while still
 // driving the OAuth + OIDC protocol surface. Despite the directory
 // name, no React is involved: the SPA bundle comes from
@@ -109,7 +109,7 @@ func run() error {
 		op.WithCookieKeys(keys.CookieKey),
 		op.WithProfile(profile.OAuth21),
 		op.WithLoginFlow(flow),
-		op.WithSPAUI(op.SPAUI{
+		op.WithUI(op.SPAUI{
 			LoginMount: "/login",
 			StaticDir:  staticDir,
 		}),

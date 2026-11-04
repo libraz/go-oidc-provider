@@ -221,7 +221,7 @@ func run() error {
 		// IP. Production fronts the OP with TLS and this option comes
 		// back off.
 		op.WithAllowLocalhostLoopback(),
-		op.WithSPAUI(op.SPAUI{
+		op.WithUI(op.SPAUI{
 			LoginMount: "/login",
 			StaticDir:  staticDir,
 		}),

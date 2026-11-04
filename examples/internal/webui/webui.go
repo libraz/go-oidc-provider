@@ -1,6 +1,6 @@
 //go:build example
 
-// Package webui locates the SPA bundle that every [op.WithSPAUI]
+// Package webui locates the SPA bundle that every [op.SPAUI]
 // example serves.
 //
 // The bundle itself lives next to this file under static/ and is

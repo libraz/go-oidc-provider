@@ -44,7 +44,6 @@ func (c *config) validate() error {
 		c.validateStrictOfflineAccess,
 		c.validateLoginFlow,
 		c.validateACRAdvertisement,
-		c.validateSPAUIDriver,
 		c.validateInteractionUICapabilities,
 		c.validateAccessTokenFormat,
 		c.validateAccessTokenRevocation,

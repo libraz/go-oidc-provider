@@ -77,7 +77,7 @@ type exampleSpec struct {
 	// /me JSON beyond the common iss/sub — the feature the example exists
 	// to demonstrate. Empty means iss/sub fully characterise the round-trip.
 	wantClaims []string
-	// spa selects the SPA driver (op.WithSPAUI examples) instead of the
+	// spa selects the SPA driver (op.SPAUI examples) instead of the
 	// default HTML interaction driver. The SPA re-renders prompts in place
 	// over a JSON contract rather than navigating between server-rendered
 	// pages, so its login/consent selectors differ.
@@ -351,7 +351,7 @@ func driveLogin(chrome string, spec exampleSpec) (string, error) {
 	return body, nil
 }
 
-// driveSPALogin drives an op.WithSPAUI example through one authorization
+// driveSPALogin drives an op.SPAUI example through one authorization
 // leg. The vanilla SPA bundle renders each prompt into #prompt-form, POSTs
 // submissions as JSON, and re-renders the next prompt in place — the URL
 // stays on /login/{uid} until the terminal redirect. The prompt set and

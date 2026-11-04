@@ -154,9 +154,9 @@ func newUCFixture(t *testing.T, ui ucUI, flow func(f *ucFixture) op.LoginFlow, e
 		op.WithLoginFlow(flow(f)),
 	}
 	if ui == ucSPA {
-		opts = append(opts, op.WithSPAUI(op.SPAUI{LoginMount: ucSPAMount}))
+		opts = append(opts, op.WithUI(op.SPAUI{LoginMount: ucSPAMount}))
 	} else {
-		opts = append(opts, op.WithInteractionDriver(testkit.AutoConsentDriver{}))
+		opts = append(opts, op.WithUI(op.DriverUI{Driver: testkit.AutoConsentDriver{}}))
 	}
 	provider, err := op.New(append(opts, extra...)...)
 	if err != nil {

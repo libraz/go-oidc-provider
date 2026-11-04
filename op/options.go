@@ -335,56 +335,15 @@ type config struct {
 	// Primary, so readers need not re-inspect the zero value.
 	loginFlowSet bool
 
-	// spaUI stores the [SPAUI] supplied through [WithSPAUI].
-	// The zero value signals "no SPA shell"; a non-zero value
-	// causes the default-driver fallback in [config.applyDefaults]
-	// to short-circuit so the embedder's SPA owns rendering.
-	spaUI SPAUI
-
-	// spaUISet records whether [WithSPAUI] was invoked.
-	// Distinct from a populated spaUI value because future
-	// revisions may permit a partially-populated [SPAUI] zero
-	// value (e.g., LoginMount only).
-	spaUISet bool
-
-	// consentUI stores the [ConsentUI] supplied through
-	// [WithConsentUI]. Mutually exclusive with [config.spaUI];
-	// validation runs at the option site so the conflict surfaces
-	// at construction time.
-	consentUI ConsentUI
-
-	// consentUISet records whether [WithConsentUI] was invoked.
-	consentUISet bool
-
-	// loginUI stores the [LoginUI] supplied through [WithLoginUI].
-	// Mutually exclusive with [config.spaUI].
-	loginUI LoginUI
-
-	// loginUISet records whether [WithLoginUI] was invoked.
-	loginUISet bool
-
-	// chooserUI stores the [ChooserUI] supplied through
-	// [WithChooserUI]. Mutually exclusive with [config.spaUI];
-	// validation runs at the option site so the conflict surfaces
-	// at construction time.
-	chooserUI ChooserUI
-
-	// chooserUISet records whether [WithChooserUI] was invoked.
-	chooserUISet bool
-
-	// chooserUIShadowedBySPA records that both [WithSPAUI] and
-	// [WithChooserUI] are configured. The combination is permitted mode
-	// (SPA owns the chooser surface via the JSON state envelope); the
-	// chooser HTML template is silently ignored. The flag is set in
-	// either order — by [WithChooserUI] when SPA is already configured,
-	// or by [WithSPAUI] when the chooser is already configured — so
-	// [config.applyDefaults] can emit a single structured warning
-	// regardless of option invocation order.
-	chooserUIShadowedBySPA bool
+	// ui is the mode resolved from [WithUI], or from HTMLUI{} by
+	// [config.applyDefaults] when uiSet is false. applyDefaults copies
+	// ui.driver into interactionD.
+	ui    uiMode
+	uiSet bool
 
 	// logoutUI stores the [LogoutUI] supplied through [WithLogoutUI].
-	// Unlike consentUI it composes with [config.spaUI]: the logout pages
-	// are rendered server-side in every mode.
+	// It is independent of ui: the logout pages are rendered
+	// server-side in every mode.
 	logoutUI LogoutUI
 
 	// idTokenScopeClaims carries the deduplicated scope names supplied
@@ -932,20 +891,6 @@ func (c *config) claimFlag(slot, option string) error {
 		return nil
 	}
 	return c.claimSlot(slot, option)
-}
-
-// claimExclusive fails when other, a mutually exclusive option, was already
-// applied. A default yields to an explicit other with errShadowedDefault;
-// otherwise the two conflict.
-func (c *config) claimExclusive(option, other string) error {
-	prior, taken := c.claimed[other]
-	if !taken {
-		return nil
-	}
-	if c.applyingDefaults && !prior.fallback {
-		return errShadowedDefault
-	}
-	return newConfigurationError(option+" is mutually exclusive with "+other, nil)
 }
 
 // defaultsOption is the [Option] [WithDefaults] returns.

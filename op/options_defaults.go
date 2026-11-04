@@ -71,45 +71,12 @@ func (c *config) applyDefaults() {
 	}
 	defaults := defaultEndpoints()
 	c.endpoints = defaults.merge(c.endpoints)
-	if c.interactionD == nil {
-		// When neither a custom [interaction.Driver] nor a SPA shell
-		// is configured the OP boots into a working HTML login
-		// surface. With a SPA shell active the default falls away so
-		// the embedder's SPA owns rendering and the JSON state
-		// endpoints stay the only protocol surface.
-		if !c.spaUISet {
-			c.interactionD = interaction.HTMLDriver{}
-		}
+	if !c.uiSet {
+		// HTMLUI{} cannot fail validation; it carries no input.
+		c.ui, _ = HTMLUI{}.ui()
 	}
-	// Wrap the resolved driver with [interaction.TemplateOverlayDriver]
-	// when the embedder configured a consent or chooser template and SPA
-	// mode is not active. The overlay degrades to a passthrough for
-	// prompt types whose template field is nil, so wrapping is safe even
-	// when only some of the templates are provided. Under SPA mode the
-	// JSON state envelope owns every surface, so the overlay is not
-	// composed in that path.
-	if !c.spaUISet && (c.consentUISet || c.chooserUISet || c.loginUISet) {
-		c.interactionD = interaction.TemplateOverlayDriver{
-			Inner:           c.interactionD,
-			ConsentTemplate: c.consentUI.Template,
-			ChooserTemplate: c.chooserUI.Template,
-			LoginTemplate:   c.loginUI.Template,
-			// Already normalized by the option site; an unset option
-			// leaves the empty string, which the overlay reads as
-			// "keep the default policy".
-			ConsentCSP: c.consentUI.ContentSecurityPolicy,
-			ChooserCSP: c.chooserUI.ContentSecurityPolicy,
-			LoginCSP:   c.loginUI.ContentSecurityPolicy,
-		}
-	}
-	if c.chooserUIShadowedBySPA {
-		c.startupLog().Warn(
-			"WithChooserUI is configured but WithSPAUI is active; "+
-				"the chooser template will not be rendered "+
-				"(SPA owns the chooser UI)",
-			"option", "WithChooserUI",
-		)
-	}
+	// SPAUI leaves the driver nil; the authorize endpoint then serves JSON.
+	c.interactionD = c.ui.driver
 	c.resolveGrants()
 	c.fillStandardScopes()
 	c.applyRegistrationDefaults()
@@ -428,7 +395,7 @@ func (c *config) warnCaptchaOnScriptlessUI() {
 			"built-in HTML driver, which renders no client-side script; the "+
 			"token field is served as a plain text input, so a captcha whose "+
 			"token comes from a browser widget cannot be answered there. "+
-			"Configure WithSPAUI or WithInteractionDriver with a UI that "+
+			"Configure WithUI with SPAUI or a DriverUI whose driver "+
 			"mounts the provider's widget",
 		"step", string(StepKindCaptcha),
 	)

@@ -181,7 +181,7 @@ func TestSPAStateRoute_CORSHonoursCeremonyAllowlist(t *testing.T) {
 		t.Fatalf("WriteFile: %v", err)
 	}
 	srv := httptest.NewServer(ceremonyCORSProvider(t,
-		op.WithSPAUI(op.SPAUI{LoginMount: "/login", StaticDir: staticDir}),
+		op.WithUI(op.SPAUI{LoginMount: "/login", StaticDir: staticDir}),
 	))
 	t.Cleanup(srv.Close)
 

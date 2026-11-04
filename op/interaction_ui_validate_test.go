@@ -22,21 +22,21 @@ func TestValidateInteractionUICapabilities(t *testing.T) {
 		{name: "default HTML driver", wantErr: true},
 		{
 			name:    "overlay value over HTML driver",
-			extra:   []op.Option{op.WithInteractionDriver(overlay)},
+			extra:   []op.Option{op.WithUI(op.DriverUI{Driver: overlay})},
 			wantErr: true,
 		},
 		{
 			name:    "overlay pointer over HTML driver",
-			extra:   []op.Option{op.WithInteractionDriver(&overlay)},
+			extra:   []op.Option{op.WithUI(op.DriverUI{Driver: &overlay})},
 			wantErr: true,
 		},
 		{
 			name:  "embedder driver",
-			extra: []op.Option{op.WithInteractionDriver(scriptedDriver{})},
+			extra: []op.Option{op.WithUI(op.DriverUI{Driver: scriptedDriver{}})},
 		},
 		{
 			name:  "SPA UI",
-			extra: []op.Option{op.WithSPAUI(op.SPAUI{LoginMount: "/login"})},
+			extra: []op.Option{op.WithUI(op.SPAUI{LoginMount: "/login"})},
 		},
 	}
 	for _, tc := range tests {
@@ -53,7 +53,7 @@ func TestValidateInteractionUICapabilities(t *testing.T) {
 			if err == nil {
 				t.Fatal("op.New accepted a passkey step on the scriptless HTML driver")
 			}
-			if !strings.Contains(err.Error(), "WithSPAUI") {
+			if !strings.Contains(err.Error(), "WithUI") {
 				t.Fatalf("error does not name the remedy: %v", err)
 			}
 		})
@@ -82,7 +82,7 @@ func TestValidateInteractionUICapabilities_PasskeyInsideOneOf(t *testing.T) {
 	if err == nil {
 		t.Fatal("op.New accepted a passkey inside a StepOneOf on the scriptless HTML driver")
 	}
-	if !strings.Contains(err.Error(), "WithSPAUI") {
+	if !strings.Contains(err.Error(), "WithUI") {
 		t.Fatalf("error does not name the remedy: %v", err)
 	}
 }

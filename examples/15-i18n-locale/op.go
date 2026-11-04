@@ -70,7 +70,7 @@ func buildProvider() (*op.Provider, error) {
 		// server-rendered UI replace this with their own
 		// [interaction.Driver]; the locale field rides on the
 		// [interaction.Prompt] regardless of driver shape.
-		op.WithInteractionDriver(interaction.JSONDriver{}),
+		op.WithUI(op.DriverUI{Driver: interaction.JSONDriver{}}),
 		// Register the French bundle on top of the seed en / ja
 		// bundles, then make French the fallback when no signal in
 		// the priority chain matches a registered locale.

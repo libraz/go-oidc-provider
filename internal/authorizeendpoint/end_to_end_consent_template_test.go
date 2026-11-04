@@ -15,21 +15,20 @@ import (
 	"github.com/libraz/go-oidc-provider/internal/clientauth"
 	"github.com/libraz/go-oidc-provider/internal/cookie"
 	"github.com/libraz/go-oidc-provider/op"
-	"github.com/libraz/go-oidc-provider/op/interaction"
 	"github.com/libraz/go-oidc-provider/op/testkit"
 )
 
 // consentTemplateMarker is a unique element the embedder template
 // emits. Asserting its presence in the GET /interaction body proves
 // the [interaction.TemplateOverlayDriver] dispatched into the
-// embedder's [op.WithConsentUI] template; the marker also doubles as
+// embedder's [op.HTMLUI].Consent template; the marker also doubles as
 // a negative anchor against the HTMLDriver fallback (which never
 // emits anything matching this attribute set). HTML comments cannot
 // be used because Go's [html/template] strips them during parsing.
 const consentTemplateMarker = `<meta name="overlay-fixture" content="consent">`
 
 // consentEmbedderTemplate is the inline embedder consent template the
-// end-to-end harness installs through [op.WithConsentUI]. The body is
+// end-to-end harness installs through [op.HTMLUI].Consent. The body is
 // minimal but exercises every field the orchestrator surfaces in
 // [interaction.ConsentTemplateData] and round-trips a form submission
 // the built-in consent.Interaction.Continue accepts:
@@ -72,7 +71,7 @@ func extractStateRef(t *testing.T, body string) string {
 // TestEndToEnd_ConsentTemplate_RendersAndCompletes drives the
 // authorize → consent template render → POST approved_scopes → token
 // flow against an [op.New] provider configured with
-// [op.WithConsentUI]. The test pins the public seam landed in plan
+// [op.HTMLUI].Consent. The test pins the public seam landed in plan
 // 016 §3.2: the [interaction.TemplateOverlayDriver] intercepts the
 // "consent.scope" prompt and replaces the HTMLDriver default surface
 // with the embedder template, while the form-encoded POST round-trips
@@ -84,8 +83,7 @@ func TestEndToEnd_ConsentTemplate_RendersAndCompletes(t *testing.T) {
 	tk := testkit.NewProvider(t,
 		testkit.WithClock(clock),
 		testkit.WithOptions(
-			op.WithInteractionDriver(interaction.HTMLDriver{}),
-			op.WithConsentUI(op.ConsentUI{Template: tmpl}),
+			op.WithUI(op.HTMLUI{Consent: op.PageTemplate{Template: tmpl}}),
 		),
 	)
 

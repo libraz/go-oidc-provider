@@ -21,7 +21,7 @@ import (
 // for compatibility with the v1.0 stable surface.
 //
 // Tests that need a different shape (custom rendering, multi-step
-// flows) install their own driver via [op.WithInteractionDriver] passed
+// flows) install their own driver via [op.WithUI] with [op.DriverUI] passed
 // through [WithOptions].
 //
 // AutoConsentDriver is safe for concurrent use; it carries no state.

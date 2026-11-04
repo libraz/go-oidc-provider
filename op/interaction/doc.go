@@ -8,7 +8,7 @@
 // back as a [FormSubmission]. It learns nothing about the rendering
 // technology. Two layouts ship:
 //
-//   - SPA ([op.WithSPAUI]): the OP serves the front end's shell and the
+//   - SPA ([op.SPAUI]): the OP serves the front end's shell and the
 //     JSON endpoint LoginMount + "/state/{uid}". GET returns the current
 //     [Prompt] as JSON (snake_case members; [FieldKind] as text); POST
 //     submits a [FormSubmission] and returns the next prompt or a terminal

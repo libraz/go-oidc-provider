@@ -144,7 +144,7 @@ func TestScenario_ERR_003_BrowserAcceptProducesHTML(t *testing.T) {
 	t.Parallel()
 
 	tk := testkit.NewProvider(t, testkit.WithOptions(
-		op.WithInteractionDriver(interaction.HTMLDriver{}),
+		op.WithUI(op.DriverUI{Driver: interaction.HTMLDriver{}}),
 	))
 	httpClient := &http.Client{
 		CheckRedirect: func(*http.Request, []*http.Request) error {
@@ -432,7 +432,7 @@ func TestScenario_ERR_030_HTMLErrorPathReachableViaHook(t *testing.T) {
 
 	driver := &recordingErrorDriver{}
 	tk := testkit.NewProvider(t, testkit.WithOptions(
-		op.WithInteractionDriver(driver),
+		op.WithUI(op.DriverUI{Driver: driver}),
 	))
 	httpClient := &http.Client{
 		CheckRedirect: func(*http.Request, []*http.Request) error {

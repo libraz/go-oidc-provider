@@ -8,6 +8,7 @@ package op
 // the assembled handler to observe.
 
 import (
+	"html/template"
 	"testing"
 	"time"
 
@@ -19,11 +20,11 @@ import (
 )
 
 // TestApplyDefaults_HTMLDriverDefault confirms the default-driver
-// contract: with neither [WithInteractionDriver] nor [WithSPAUI] supplied
-// the OP boots with [interaction.HTMLDriver] as its default driver,
-// so an embedder using the default authorization-code grant set with
-// the required constructor options (WithIssuer / WithStore / WithKeyset
-// / WithCookieKeys) still gets a working HTML login surface.
+// contract: without [WithUI] the OP boots with [interaction.HTMLDriver]
+// as its default driver, so an embedder using the default
+// authorization-code grant set with the required constructor options
+// (WithIssuer / WithStore / WithKeyset / WithCookieKeys) still gets a
+// working HTML login surface.
 func TestApplyDefaults_HTMLDriverDefault(t *testing.T) {
 	t.Parallel()
 
@@ -34,87 +35,76 @@ func TestApplyDefaults_HTMLDriverDefault(t *testing.T) {
 	}
 }
 
-// TestApplyDefaults_HonoursWithInteractionDriver confirms the explicit
-// [WithInteractionDriver] driver wins over the HTMLDriver default. The
-// default substitution short-circuits when [config.interactionD] is
-// already set so an embedder's custom driver is preserved verbatim.
-func TestApplyDefaults_HonoursWithInteractionDriver(t *testing.T) {
+// TestApplyDefaults_HonoursWithUIDriver confirms an explicit
+// [DriverUI] driver wins over the HTMLDriver default and is preserved
+// verbatim.
+func TestApplyDefaults_HonoursWithUIDriver(t *testing.T) {
 	t.Parallel()
 
-	custom := interaction.JSONDriver{}
-	c := &config{interactionD: custom}
-	c.applyDefaults()
+	c, err := newConfig([]Option{WithUI(DriverUI{Driver: interaction.JSONDriver{}})})
+	if err != nil {
+		t.Fatalf("newConfig: %v", err)
+	}
 	if _, ok := c.interactionD.(interaction.JSONDriver); !ok {
 		t.Fatalf("explicit driver replaced by default: %T", c.interactionD)
 	}
 }
 
 // TestApplyDefaults_SPAUISuppressesDefaultDriver pins the §3.4
-// boundary: when [WithSPAUI] is configured the default-driver
-// fallback short-circuits because the embedder's SPA owns rendering
-// and the OP only needs to serve JSON state endpoints. The handler's
-// own nil-driver fallback (in internal/authorizeendpoint) takes over
-// at request time.
+// boundary: when [SPAUI] is configured the resolved driver stays nil
+// because the embedder's SPA owns rendering and the OP only needs to
+// serve JSON state endpoints. The handler's own nil-driver fallback (in
+// internal/authorizeendpoint) takes over at request time.
 func TestApplyDefaults_SPAUISuppressesDefaultDriver(t *testing.T) {
 	t.Parallel()
 
-	c := &config{spaUISet: true}
-	c.applyDefaults()
+	c, err := newConfig([]Option{WithUI(SPAUI{LoginMount: "/login"})})
+	if err != nil {
+		t.Fatalf("newConfig: %v", err)
+	}
 	if c.interactionD != nil {
-		t.Fatalf("with WithSPAUI active, default driver was set to %T; want nil", c.interactionD)
+		t.Fatalf("with SPAUI active, default driver was set to %T; want nil", c.interactionD)
 	}
 }
 
-// TestApplyDefaults_WrapsOverlayWhenConsentOrChooserSet pins the
-// overlay wiring contract: when WithConsentUI or
-// WithChooserUI is configured (and SPA is not), applyDefaults wraps
-// the resolved interaction.Driver with TemplateOverlayDriver composed
-// against the HTMLDriver default. With WithSPAUI the overlay is NOT
-// composed — SPA mode owns the consent / chooser surface via the JSON
-// envelope mode and
-func TestApplyDefaults_WrapsOverlayWhenConsentOrChooserSet(t *testing.T) {
+// TestApplyDefaults_WrapsOverlayWhenAPageTemplateIsSet pins the overlay
+// wiring contract: an [HTMLUI] with at least one templated page resolves
+// to a TemplateOverlayDriver composed over the HTMLDriver; an HTMLUI with
+// no template keeps the bare HTMLDriver.
+func TestApplyDefaults_WrapsOverlayWhenAPageTemplateIsSet(t *testing.T) {
 	t.Parallel()
 
+	tmpl := template.Must(template.New("p").Parse("ok"))
 	cases := []struct {
 		name     string
-		seed     func(*config)
+		ui       UI
 		wantWrap bool
 	}{
-		{
-			name:     "WithConsentUI only wraps overlay",
-			seed:     func(c *config) { c.consentUISet = true; c.consentUI = ConsentUI{} },
-			wantWrap: true,
-		},
-		{
-			name:     "WithChooserUI only wraps overlay",
-			seed:     func(c *config) { c.chooserUISet = true; c.chooserUI = ChooserUI{} },
-			wantWrap: true,
-		},
-		{
-			name:     "WithSPAUI suppresses overlay even when chooser is set",
-			seed:     func(c *config) { c.spaUISet = true; c.chooserUISet = true; c.chooserUI = ChooserUI{} },
-			wantWrap: false,
-		},
+		{"consent template wraps overlay", HTMLUI{Consent: PageTemplate{Template: tmpl}}, true},
+		{"chooser template wraps overlay", HTMLUI{Chooser: PageTemplate{Template: tmpl}}, true},
+		{"login template wraps overlay", HTMLUI{Login: PageTemplate{Template: tmpl}}, true},
+		{"no template keeps the bare driver", HTMLUI{}, false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			c := &config{}
-			tc.seed(c)
-			c.applyDefaults()
+			c, err := newConfig([]Option{WithUI(tc.ui)})
+			if err != nil {
+				t.Fatalf("newConfig: %v", err)
+			}
 			overlay, ok := c.interactionD.(interaction.TemplateOverlayDriver)
-			if tc.wantWrap {
-				if !ok {
-					t.Fatalf("interactionD = %T, want interaction.TemplateOverlayDriver", c.interactionD)
-				}
-				if _, isHTML := overlay.Inner.(interaction.HTMLDriver); !isHTML {
-					t.Errorf("overlay.Inner = %T, want interaction.HTMLDriver", overlay.Inner)
+			if !tc.wantWrap {
+				if ok {
+					t.Fatalf("unexpected overlay wrap: %T", c.interactionD)
 				}
 				return
 			}
-			if ok {
-				t.Fatalf("unexpected overlay wrap under SPA mode: %T", c.interactionD)
+			if !ok {
+				t.Fatalf("interactionD = %T, want interaction.TemplateOverlayDriver", c.interactionD)
+			}
+			if _, isHTML := overlay.Inner.(interaction.HTMLDriver); !isHTML {
+				t.Errorf("overlay.Inner = %T, want interaction.HTMLDriver", overlay.Inner)
 			}
 		})
 	}
@@ -131,20 +121,22 @@ func TestApplyDefaults_WrapsOverlayWhenConsentOrChooserSet(t *testing.T) {
 func TestApplyDefaults_ComposedDriverKeepsErrorRenderer(t *testing.T) {
 	t.Parallel()
 
+	tmpl := template.Must(template.New("p").Parse("ok"))
 	for _, tc := range []struct {
 		name string
-		seed func(*config)
+		opts []Option
 	}{
-		{"default driver", func(*config) {}},
-		{"with consent template", func(c *config) { c.consentUISet = true; c.consentUI = ConsentUI{} }},
-		{"with chooser template", func(c *config) { c.chooserUISet = true; c.chooserUI = ChooserUI{} }},
+		{"default driver", nil},
+		{"with consent template", []Option{WithUI(HTMLUI{Consent: PageTemplate{Template: tmpl}})}},
+		{"with chooser template", []Option{WithUI(HTMLUI{Chooser: PageTemplate{Template: tmpl}})}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			c := &config{}
-			tc.seed(c)
-			c.applyDefaults()
+			c, err := newConfig(tc.opts)
+			if err != nil {
+				t.Fatalf("newConfig: %v", err)
+			}
 			if _, ok := c.interactionD.(interaction.ErrorRenderer); !ok {
 				t.Fatalf("composed driver %T does not satisfy interaction.ErrorRenderer", c.interactionD)
 			}
@@ -153,29 +145,39 @@ func TestApplyDefaults_ComposedDriverKeepsErrorRenderer(t *testing.T) {
 }
 
 // The per-template Content-Security-Policy is validated at the option
-// site and consumed by the overlay driver, so applyDefaults is the only
-// place the two halves meet. A policy that stops here renders the
+// site and consumed by the overlay driver, so the resolved mode is the
+// only place the two halves meet. A policy that stops here renders the
 // option inert: the page still loads, the browser still drops the
 // assets, and nothing reports it.
 func TestApplyDefaults_CarriesTemplatePoliciesIntoTheOverlay(t *testing.T) {
 	t.Parallel()
 
-	c := &config{
-		consentUISet: true,
-		consentUI:    ConsentUI{ContentSecurityPolicy: "default-src 'none'; img-src https://consent.example"},
-		chooserUISet: true,
-		chooserUI:    ChooserUI{ContentSecurityPolicy: "default-src 'none'; img-src https://chooser.example"},
+	tmpl := template.Must(template.New("p").Parse("ok"))
+	const consentCSP = "default-src 'none'; img-src https://consent.example"
+	const chooserCSP = "default-src 'none'; img-src https://chooser.example"
+	c, err := newConfig([]Option{WithUI(HTMLUI{
+		Consent: PageTemplate{Template: tmpl, ContentSecurityPolicy: consentCSP},
+		Chooser: PageTemplate{Template: tmpl, ContentSecurityPolicy: chooserCSP},
+	})})
+	if err != nil {
+		t.Fatalf("newConfig: %v", err)
 	}
-	c.applyDefaults()
 	overlay, ok := c.interactionD.(interaction.TemplateOverlayDriver)
 	if !ok {
 		t.Fatalf("interactionD = %T, want interaction.TemplateOverlayDriver", c.interactionD)
 	}
-	if overlay.ConsentCSP != c.consentUI.ContentSecurityPolicy {
-		t.Errorf("overlay.ConsentCSP = %q, want %q", overlay.ConsentCSP, c.consentUI.ContentSecurityPolicy)
-	}
-	if overlay.ChooserCSP != c.chooserUI.ContentSecurityPolicy {
-		t.Errorf("overlay.ChooserCSP = %q, want %q", overlay.ChooserCSP, c.chooserUI.ContentSecurityPolicy)
+	// WithUI stores the normalized policy, as the per-page options did.
+	for _, tc := range []struct{ name, got, declared string }{
+		{"ConsentCSP", overlay.ConsentCSP, consentCSP},
+		{"ChooserCSP", overlay.ChooserCSP, chooserCSP},
+	} {
+		want, err := interaction.NormalizeCSP(tc.declared)
+		if err != nil {
+			t.Fatalf("NormalizeCSP(%q): %v", tc.declared, err)
+		}
+		if tc.got != want {
+			t.Errorf("overlay.%s = %q, want %q", tc.name, tc.got, want)
+		}
 	}
 }
 

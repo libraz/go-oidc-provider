@@ -1,6 +1,6 @@
 //go:build example
 
-// Example 37 demonstrates [op.WithLoginUI]: one HTML template the
+// Example 37 demonstrates [op.HTMLUI] with a Login [op.PageTemplate]: one HTML template the
 // library renders for every sign-in prompt (password, TOTP, email OTP,
 // recovery code, factor choice, captcha, custom steps) instead of the
 // built-in screens. The library passes a canonical
@@ -10,7 +10,7 @@
 //
 // Consent, the account chooser and passkey prompts are not part of
 // this template; consent keeps the built-in screen here, and
-// [op.WithConsentUI] customises it (example 11).
+// [op.HTMLUI]'s Consent page customises it (example 11).
 //
 // Run with the example build tag:
 //
@@ -135,10 +135,10 @@ func main() {
 		// below would be fetched, blocked by the browser, and dropped
 		// with no server-side signal. The policy covers every login
 		// prompt, so keep it to the origins the template loads from.
-		op.WithLoginUI(op.LoginUI{
+		op.WithUI(op.HTMLUI{Login: op.PageTemplate{
 			Template:              tmpl,
 			ContentSecurityPolicy: "default-src 'none'; style-src 'self'; img-src 'self' data:",
-		}),
+		}}),
 		op.WithStaticClients(
 			op.PublicClient{
 				ID:           "demo-rp",

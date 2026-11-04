@@ -48,8 +48,8 @@ func (c *config) validateConfiguredRoutePaths() error {
 			return err
 		}
 	}
-	if c.spaUISet {
-		if err := validateConfiguredRoutePath("WithSPAUI.LoginMount", c.spaUI.LoginMount, false); err != nil {
+	if c.ui.spa != nil {
+		if err := validateConfiguredRoutePath("WithUI: SPAUI.LoginMount", c.ui.spa.loginMount, false); err != nil {
 			return err
 		}
 	}
@@ -127,9 +127,9 @@ func (c *config) activeRouteReservations() []routeReservation {
 			routeReservation{name: "WithEndpoints.Authorize", path: protocolEndpointPath(c, c.endpoints.Authorize)},
 			routeReservation{name: "WithEndpoints.EndSession", path: protocolEndpointPath(c, c.endpoints.EndSession)},
 		)
-		if c.spaUISet {
+		if c.ui.spa != nil {
 			routes = append(routes, routeReservation{
-				name: "WithSPAUI.LoginMount", path: c.spaUI.LoginMount, prefix: true,
+				name: "WithUI: SPAUI.LoginMount", path: c.ui.spa.loginMount, prefix: true,
 			})
 		} else {
 			routes = append(routes, routeReservation{

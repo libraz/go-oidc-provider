@@ -82,7 +82,7 @@ func TestNew_WarnsWhenCaptchaRunsOnTheScriptlessHTMLSurface(t *testing.T) {
 func TestNew_DoesNotWarnAboutCaptchaOnAnEmbedderDriver(t *testing.T) {
 	t.Parallel()
 
-	logged := warnings(t, append(captchaFlowOpts(t), op.WithInteractionDriver(scriptedDriver{}))...)
+	logged := warnings(t, append(captchaFlowOpts(t), op.WithUI(op.DriverUI{Driver: scriptedDriver{}}))...)
 	if strings.Contains(logged, "built-in HTML driver") {
 		t.Fatalf("warned about a captcha behind an embedder driver; got:\n%s", logged)
 	}
@@ -121,7 +121,7 @@ func passkeyFlowOpts(tb testing.TB) []op.Option {
 func TestNew_DoesNotWarnAboutPasskeyOnAnEmbedderDriver(t *testing.T) {
 	t.Parallel()
 
-	if _, err := op.New(append(passkeyFlowOpts(t), op.WithInteractionDriver(scriptedDriver{}))...); err != nil {
+	if _, err := op.New(append(passkeyFlowOpts(t), op.WithUI(op.DriverUI{Driver: scriptedDriver{}}))...); err != nil {
 		t.Fatalf("op.New rejected a passkey behind an embedder driver: %v", err)
 	}
 }

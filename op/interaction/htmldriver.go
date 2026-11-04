@@ -55,9 +55,9 @@ import (
 // never able to fill in.
 //
 // Embedders that want branding or CSS either override the two
-// templated screens via [op.WithConsentUI] / [op.WithChooserUI] — which
-// carry a per-page [NormalizeCSP] policy so the assets are not blocked
-// — or replace the driver outright via [op.WithInteractionDriver]; the
+// templated screens via [op.HTMLUI] — whose pages carry a per-page
+// [NormalizeCSP] policy so the assets are not blocked — or replace the
+// driver outright via [op.DriverUI]; the
 // canonical examples for the latter path live under
 // examples/16-custom-interaction/ and 10-react-login/.
 //
@@ -502,7 +502,7 @@ const (
 // separated list of every requested scope name, in the order the
 // orchestrator surfaced them. Deselection requires JS, which the
 // driver intentionally omits; embedders who need partial consent ship
-// a custom Driver or a SPA via [op.WithSPAUI].
+// a custom Driver or a SPA via [op.SPAUI].
 func writeConsentApprovedField(b *strings.Builder, data ConsentScopePromptData) {
 	names := make([]string, 0, len(data.Scopes))
 	for _, s := range data.Scopes {

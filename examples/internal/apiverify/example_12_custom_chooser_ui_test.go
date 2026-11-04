@@ -4,7 +4,7 @@ package apiverify
 
 import "testing"
 
-// 12's deliverable is the WithChooserUI template: a page listing every
+// 12's deliverable is the HTMLUI.Chooser template: a page listing every
 // account in the browser's chooser group, each pickable, with a link
 // that adds another. None of that exists until a session does, and the
 // second account joins only by following the chooser's own link — so

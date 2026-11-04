@@ -16,7 +16,6 @@ import (
 	"github.com/libraz/go-oidc-provider/internal/cookie"
 	"github.com/libraz/go-oidc-provider/internal/sessions"
 	"github.com/libraz/go-oidc-provider/op"
-	"github.com/libraz/go-oidc-provider/op/interaction"
 	"github.com/libraz/go-oidc-provider/op/store"
 	"github.com/libraz/go-oidc-provider/op/testkit"
 )
@@ -24,7 +23,7 @@ import (
 // chooserTemplateMarker is a unique element the embedder chooser
 // template emits. Asserting its presence in the GET /interaction
 // body proves the [interaction.TemplateOverlayDriver] dispatched into
-// the embedder's [op.WithChooserUI] template instead of falling back
+// the embedder's [op.HTMLUI].Chooser template instead of falling back
 // to the HTMLDriver default surface. HTML comments cannot be used
 // because Go's [html/template] strips them during parsing.
 const chooserTemplateMarker = `<meta name="overlay-fixture" content="chooser">`
@@ -58,7 +57,7 @@ var sessionIDHiddenInput = regexp.MustCompile(`name="session_id" value="([^"]+)"
 // TestEndToEnd_ChooserTemplate_RendersAndCompletes drives the
 // authorize → chooser template render → POST session_id → consent →
 // token flow against an [op.New] provider configured with
-// [op.WithChooserUI]. Two seeded sessions share a chooser group so the
+// [op.HTMLUI].Chooser. Two seeded sessions share a chooser group so the
 // chooser interaction has rows to render; the test picks the second
 // account, walks the consent screen, and exchanges the resulting code
 // to confirm the chooser-template-driven path emits a working grant.
@@ -75,8 +74,7 @@ func TestEndToEnd_ChooserTemplate_RendersAndCompletes(t *testing.T) {
 		testkit.WithClock(clock),
 		testkit.WithOptions(
 			op.WithCookieKeys(cookieKey),
-			op.WithInteractionDriver(interaction.HTMLDriver{}),
-			op.WithChooserUI(op.ChooserUI{Template: tmpl}),
+			op.WithUI(op.HTMLUI{Chooser: op.PageTemplate{Template: tmpl}}),
 		),
 	)
 	const secret = "rp-secret"
@@ -214,7 +212,7 @@ func TestEndToEnd_ChooserTemplate_RendersAndCompletes(t *testing.T) {
 	// for this client, so the next prompt is consent. Walk it inline
 	// with form-encoded approval (HTMLDriver's default consent surface
 	// renders the approved_scopes hidden field for us, since
-	// WithConsentUI is intentionally NOT configured here — this test
+	// HTMLUI.Consent is intentionally NOT configured here — this test
 	// pins the chooser overlay path; consent default falls through
 	// the overlay's nil-template passthrough branch).
 	if postResp.StatusCode != http.StatusOK {

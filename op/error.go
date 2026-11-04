@@ -257,9 +257,8 @@ var ErrLoginFlowRequired = &Error{
 }
 
 // ErrAuthorizationCodeGrantRequired is returned by [New] when a browser
-// sign-in option ([WithLoginFlow], [WithSPAUI], [WithConsentUI],
-// [WithLoginUI], [WithChooserUI], [WithInteractions], [WithFirstPartyClients]) is set
-// explicitly but the grant set from [WithGrants] lacks authorization_code.
+// sign-in option ([WithLoginFlow], [WithUI], [WithInteractions],
+// [WithFirstPartyClients]) is set explicitly but the grant set from [WithGrants] lacks authorization_code.
 // [WithGrants] replaces the default set, so the browser flow would be
 // silently unreachable. The error message names the options that matched;
 // match it with [errors.Is].

@@ -119,7 +119,7 @@ it boots with
 
 ## The shared SPA bundle
 
-Every [`op.WithSPAUI`](../op/options_authn.go) example serves the same
+Every [`op.SPAUI`](../op/options_ui.go) example serves the same
 directory, [`internal/webui/static`](internal/webui/static) — one hand-written
 vanilla HTML/CSS/JS bundle with no build step, pointed at through
 `webui.StaticDir`. There is no per-example copy, so a fix to the prompt

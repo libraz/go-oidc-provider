@@ -55,7 +55,7 @@ func buildProvider(issuer string) (*op.Provider, error) {
 			Authenticator: testkit.SubjectAuthenticator{},
 			KindLabel:     "testkit.subject",
 		}}),
-		op.WithInteractionDriver(testkit.AutoConsentDriver{}),
+		op.WithUI(op.DriverUI{Driver: testkit.AutoConsentDriver{}}),
 		op.WithStaticClients(
 			op.ConfidentialClient{
 				// frontend uses authorization_code + PKCE to obtain

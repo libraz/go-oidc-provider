@@ -141,7 +141,7 @@ func TestWithLogoutUI_ComposesWithSPAUI(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			spa := op.WithSPAUI(op.SPAUI{LoginMount: "/login"})
+			spa := op.WithUI(op.SPAUI{LoginMount: "/login"})
 			logout := op.WithLogoutUI(op.LogoutUI{
 				ConfirmTemplate:   logoutUITemplate(t, "c", logoutUIConfirmSrc),
 				SignedOutTemplate: logoutUITemplate(t, "s", "signed out"),

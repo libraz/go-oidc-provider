@@ -82,14 +82,14 @@ func ExampleNew_fapi2() {
 // [interaction.JSONDriver] so a SPA can drive the login / consent /
 // chooser ceremonies through JSON envelopes. Embedders that ship a
 // server-rendered UI keep the default driver and supply consent /
-// chooser templates through [op.WithConsentUI] / [op.WithChooserUI].
+// chooser templates through [op.WithUI] with [op.HTMLUI].
 func ExampleNew_jsonDriver() {
 	provider, err := op.New(
 		op.WithIssuer("https://idp.example.com"),
 		op.WithStore(inmem.New()),
 		op.WithKeyset(exampleKeyset()),
 		op.WithCookieKeys(exampleCookieKey()),
-		op.WithInteractionDriver(interaction.JSONDriver{}),
+		op.WithUI(op.DriverUI{Driver: interaction.JSONDriver{}}),
 	)
 	if err != nil {
 		log.Fatal(err)

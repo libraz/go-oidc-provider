@@ -205,7 +205,7 @@ func run() error {
 		op.WithCookieKeys(keys.CookieKey),
 		op.WithProfile(profile.OAuth21),
 		op.WithLoginFlow(flow),
-		op.WithSPAUI(op.SPAUI{
+		op.WithUI(op.SPAUI{
 			LoginMount: "/login",
 			StaticDir:  staticDir,
 		}),

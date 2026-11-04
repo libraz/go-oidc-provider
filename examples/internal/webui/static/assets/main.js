@@ -1,4 +1,4 @@
-// Vanilla SPA driver for go-oidc-provider's WithSPAUI seam.
+// Vanilla SPA driver for go-oidc-provider's SPAUI mode.
 //
 // The bundle reads the interaction UID from the URL, fetches the
 // orchestrator's prompt JSON, renders the input fields, and POSTs

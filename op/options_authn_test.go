@@ -1,10 +1,8 @@
 package op_test
 
 import (
-	"bytes"
 	"context"
 	"html/template"
-	"log/slog"
 	"net/http"
 	"strings"
 	"testing"
@@ -12,7 +10,6 @@ import (
 	"github.com/libraz/go-oidc-provider/op"
 	"github.com/libraz/go-oidc-provider/op/grant"
 	"github.com/libraz/go-oidc-provider/op/interaction"
-	"github.com/libraz/go-oidc-provider/op/storeadapter/inmem"
 )
 
 type recordingDriver struct{ called bool }
@@ -26,20 +23,20 @@ func (d *recordingDriver) ParseSubmission(*http.Request) (interaction.FormSubmis
 	return interaction.FormSubmission{}, nil
 }
 
-func TestWithInteractionDriver_RejectsNil(t *testing.T) {
+func TestWithUI_DriverUIRejectsNil(t *testing.T) {
 	t.Parallel()
 
-	_, err := op.New(append(validBaseOpts(t), op.WithInteractionDriver(nil))...)
+	_, err := op.New(append(validBaseOpts(t), op.WithUI(op.DriverUI{Driver: nil}))...)
 	if err == nil {
 		t.Fatal("expected error for nil Driver, got nil")
 	}
 }
 
-func TestWithInteractionDriver_AcceptsCustomDriver(t *testing.T) {
+func TestWithUI_DriverUIAcceptsCustomDriver(t *testing.T) {
 	t.Parallel()
 
 	d := &recordingDriver{}
-	provider, err := op.New(append(validBaseOpts(t), op.WithInteractionDriver(d))...)
+	provider, err := op.New(append(validBaseOpts(t), op.WithUI(op.DriverUI{Driver: d}))...)
 	if err != nil {
 		t.Fatalf("unexpected err: %v", err)
 	}
@@ -322,25 +319,25 @@ func TestNew_NonInteractiveGrantsNeedNoLoginConfiguration(t *testing.T) {
 	})
 }
 
-func TestWithSPAUI_AcceptsValid(t *testing.T) {
+func TestWithUI_SPAUIAcceptsValid(t *testing.T) {
 	t.Parallel()
 
 	provider, err := op.New(append(validBaseOpts(t),
-		op.WithSPAUI(op.SPAUI{LoginMount: "/login"}),
+		op.WithUI(op.SPAUI{LoginMount: "/login"}),
 	)...)
 	if err != nil {
-		t.Fatalf("op.New with WithSPAUI: %v", err)
+		t.Fatalf("op.New with SPAUI: %v", err)
 	}
 	if provider == nil {
 		t.Fatal("expected non-nil Provider")
 	}
 }
 
-func TestWithSPAUI_RejectsEmptyLoginMount(t *testing.T) {
+func TestWithUI_SPAUIRejectsEmptyLoginMount(t *testing.T) {
 	t.Parallel()
 
 	_, err := op.New(append(validBaseOpts(t),
-		op.WithSPAUI(op.SPAUI{}),
+		op.WithUI(op.SPAUI{}),
 	)...)
 	if err == nil {
 		t.Fatal("expected error for empty LoginMount, got nil")
@@ -350,11 +347,11 @@ func TestWithSPAUI_RejectsEmptyLoginMount(t *testing.T) {
 	}
 }
 
-func TestWithSPAUI_RejectsNonSlashLoginMount(t *testing.T) {
+func TestWithUI_SPAUIRejectsNonSlashLoginMount(t *testing.T) {
 	t.Parallel()
 
 	_, err := op.New(append(validBaseOpts(t),
-		op.WithSPAUI(op.SPAUI{LoginMount: "login"}),
+		op.WithUI(op.SPAUI{LoginMount: "login"}),
 	)...)
 	if err == nil {
 		t.Fatal("expected error for LoginMount missing leading slash, got nil")
@@ -364,11 +361,11 @@ func TestWithSPAUI_RejectsNonSlashLoginMount(t *testing.T) {
 	}
 }
 
-func TestWithSPAUI_RejectsMissingStaticDir(t *testing.T) {
+func TestWithUI_SPAUIRejectsMissingStaticDir(t *testing.T) {
 	t.Parallel()
 
 	_, err := op.New(append(validBaseOpts(t),
-		op.WithSPAUI(op.SPAUI{
+		op.WithUI(op.SPAUI{
 			LoginMount: "/login",
 			StaticDir:  "/this/path/does/not/exist/h1e-test",
 		}),
@@ -381,60 +378,50 @@ func TestWithSPAUI_RejectsMissingStaticDir(t *testing.T) {
 	}
 }
 
-func TestWithSPAUI_AcceptsExistingStaticDir(t *testing.T) {
+func TestWithUI_SPAUIAcceptsExistingStaticDir(t *testing.T) {
 	t.Parallel()
 
 	dir := t.TempDir()
 	provider, err := op.New(append(validBaseOpts(t),
-		op.WithSPAUI(op.SPAUI{LoginMount: "/login", StaticDir: dir}),
+		op.WithUI(op.SPAUI{LoginMount: "/login", StaticDir: dir}),
 	)...)
 	if err != nil {
-		t.Fatalf("op.New with WithSPAUI(StaticDir=%q): %v", dir, err)
+		t.Fatalf("op.New with SPAUI(StaticDir=%q): %v", dir, err)
 	}
 	if provider == nil {
 		t.Fatal("expected non-nil Provider")
 	}
 }
 
-func TestWithSPAUI_RejectsConsentUICombination(t *testing.T) {
+func TestWithUI_HTMLUIRejectsPolicyWithoutTemplate(t *testing.T) {
 	t.Parallel()
 
-	tmpl := template.Must(template.New("c").Parse("ok"))
-	_, err := op.New(append(validBaseOpts(t),
-		op.WithSPAUI(op.SPAUI{LoginMount: "/login"}),
-		op.WithConsentUI(op.ConsentUI{Template: tmpl}),
-	)...)
-	if err == nil {
-		t.Fatal("expected error for WithSPAUI + WithConsentUI, got nil")
-	}
-	if !strings.Contains(err.Error(), "mutually exclusive") {
-		t.Errorf("err = %v, want mutually-exclusive diagnostic", err)
+	for page, ui := range map[string]op.HTMLUI{
+		"Login":   {Login: op.PageTemplate{ContentSecurityPolicy: "default-src 'none'"}},
+		"Consent": {Consent: op.PageTemplate{ContentSecurityPolicy: "default-src 'none'"}},
+		"Chooser": {Chooser: op.PageTemplate{ContentSecurityPolicy: "default-src 'none'"}},
+	} {
+		_, err := op.New(append(validBaseOpts(t), op.WithUI(ui))...)
+		if err == nil {
+			t.Errorf("%s: expected error for a policy without a Template, got nil", page)
+			continue
+		}
+		want := "WithUI: HTMLUI." + page + " sets ContentSecurityPolicy without a Template"
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("%s: err = %v, want it to contain %q", page, err, want)
+		}
 	}
 }
 
-func TestWithConsentUI_RejectsNilTemplate(t *testing.T) {
-	t.Parallel()
-
-	_, err := op.New(append(validBaseOpts(t),
-		op.WithConsentUI(op.ConsentUI{Template: nil}),
-	)...)
-	if err == nil {
-		t.Fatal("expected error for nil Template, got nil")
-	}
-	if !strings.Contains(err.Error(), "Template must not be nil") {
-		t.Errorf("err = %v, want it to mention Template", err)
-	}
-}
-
-func TestWithConsentUI_AcceptsValid(t *testing.T) {
+func TestWithUI_HTMLUIConsentAcceptsValid(t *testing.T) {
 	t.Parallel()
 
 	tmpl := template.Must(template.New("consent").Parse("hi"))
 	provider, err := op.New(append(validBaseOpts(t),
-		op.WithConsentUI(op.ConsentUI{Template: tmpl}),
+		op.WithUI(op.HTMLUI{Consent: op.PageTemplate{Template: tmpl}}),
 	)...)
 	if err != nil {
-		t.Fatalf("op.New with WithConsentUI: %v", err)
+		t.Fatalf("op.New with HTMLUI.Consent: %v", err)
 	}
 	if provider == nil {
 		t.Fatal("expected non-nil Provider")
@@ -445,7 +432,7 @@ func TestWithConsentUI_AcceptsValid(t *testing.T) {
 // redirect has to fail at New. Accepting it and repairing it silently
 // would leave the embedder believing their template is framed-protected
 // on their own terms.
-func TestWithConsentUI_RejectsAContentSecurityPolicyThatDropsAProtection(t *testing.T) {
+func TestWithUI_HTMLUIConsentRejectsAContentSecurityPolicyThatDropsAProtection(t *testing.T) {
 	t.Parallel()
 
 	for name, policy := range map[string]string{
@@ -455,7 +442,7 @@ func TestWithConsentUI_RejectsAContentSecurityPolicyThatDropsAProtection(t *test
 	} {
 		tmpl := template.Must(template.New("c").Parse("ok"))
 		_, err := op.New(append(validBaseOpts(t),
-			op.WithConsentUI(op.ConsentUI{Template: tmpl, ContentSecurityPolicy: policy}),
+			op.WithUI(op.HTMLUI{Consent: op.PageTemplate{Template: tmpl, ContentSecurityPolicy: policy}}),
 		)...)
 		if err == nil {
 			t.Errorf("%s: expected error for %q, got nil", name, policy)
@@ -467,15 +454,15 @@ func TestWithConsentUI_RejectsAContentSecurityPolicyThatDropsAProtection(t *test
 	}
 }
 
-func TestWithConsentUI_AcceptsABrandingContentSecurityPolicy(t *testing.T) {
+func TestWithUI_HTMLUIConsentAcceptsABrandingContentSecurityPolicy(t *testing.T) {
 	t.Parallel()
 
 	tmpl := template.Must(template.New("c").Parse("ok"))
 	provider, err := op.New(append(validBaseOpts(t),
-		op.WithConsentUI(op.ConsentUI{
+		op.WithUI(op.HTMLUI{Consent: op.PageTemplate{
 			Template:              tmpl,
 			ContentSecurityPolicy: "default-src 'none'; style-src 'self'; img-src 'self' data:",
-		}),
+		}}),
 	)...)
 	if err != nil {
 		t.Fatalf("op.New with a branding policy: %v", err)
@@ -485,12 +472,12 @@ func TestWithConsentUI_AcceptsABrandingContentSecurityPolicy(t *testing.T) {
 	}
 }
 
-func TestWithChooserUI_RejectsAContentSecurityPolicyThatDropsAProtection(t *testing.T) {
+func TestWithUI_HTMLUIChooserRejectsAContentSecurityPolicyThatDropsAProtection(t *testing.T) {
 	t.Parallel()
 
 	tmpl := template.Must(template.New("c").Parse("ok"))
 	_, err := op.New(append(validBaseOpts(t),
-		op.WithChooserUI(op.ChooserUI{Template: tmpl, ContentSecurityPolicy: "default-src 'none'; form-action 'self'"}),
+		op.WithUI(op.HTMLUI{Chooser: op.PageTemplate{Template: tmpl, ContentSecurityPolicy: "default-src 'none'; form-action 'self'"}}),
 	)...)
 	if err == nil {
 		t.Fatal("expected error for a form-action policy, got nil")
@@ -500,58 +487,7 @@ func TestWithChooserUI_RejectsAContentSecurityPolicyThatDropsAProtection(t *test
 	}
 }
 
-func TestWithConsentUI_RejectsSPAUICombination(t *testing.T) {
-	t.Parallel()
-
-	tmpl := template.Must(template.New("c").Parse("ok"))
-	_, err := op.New(append(validBaseOpts(t),
-		op.WithConsentUI(op.ConsentUI{Template: tmpl}),
-		op.WithSPAUI(op.SPAUI{LoginMount: "/login"}),
-	)...)
-	if err == nil {
-		t.Fatal("expected error for WithConsentUI + WithSPAUI, got nil")
-	}
-	if !strings.Contains(err.Error(), "mutually exclusive") {
-		t.Errorf("err = %v, want mutually-exclusive diagnostic", err)
-	}
-}
-
-func TestWithLoginUI_RejectsNilTemplate(t *testing.T) {
-	t.Parallel()
-
-	_, err := op.New(append(validBaseOpts(t),
-		op.WithLoginUI(op.LoginUI{Template: nil}),
-	)...)
-	if err == nil {
-		t.Fatal("expected error for nil Template, got nil")
-	}
-	if !strings.Contains(err.Error(), "WithLoginUI: Template must not be nil") {
-		t.Errorf("err = %v, want it to mention Template", err)
-	}
-}
-
-func TestWithLoginUI_ExclusiveWithSPAUI(t *testing.T) {
-	t.Parallel()
-
-	tmpl := template.Must(template.New("l").Parse("ok"))
-	spa := op.WithSPAUI(op.SPAUI{LoginMount: "/login"})
-	login := op.WithLoginUI(op.LoginUI{Template: tmpl})
-	for name, opts := range map[string][]op.Option{
-		"login first": {login, spa},
-		"SPA first":   {spa, login},
-	} {
-		_, err := op.New(append(validBaseOpts(t), opts...)...)
-		if err == nil {
-			t.Errorf("%s: expected error for WithLoginUI + WithSPAUI, got nil", name)
-			continue
-		}
-		if !strings.Contains(err.Error(), "mutually exclusive") {
-			t.Errorf("%s: err = %v, want mutually-exclusive diagnostic", name, err)
-		}
-	}
-}
-
-func TestWithLoginUI_RejectsInvalidCSP(t *testing.T) {
+func TestWithUI_HTMLUILoginRejectsInvalidCSP(t *testing.T) {
 	t.Parallel()
 
 	for name, policy := range map[string]string{
@@ -561,13 +497,13 @@ func TestWithLoginUI_RejectsInvalidCSP(t *testing.T) {
 	} {
 		tmpl := template.Must(template.New("l").Parse("ok"))
 		_, err := op.New(append(validBaseOpts(t),
-			op.WithLoginUI(op.LoginUI{Template: tmpl, ContentSecurityPolicy: policy}),
+			op.WithUI(op.HTMLUI{Login: op.PageTemplate{Template: tmpl, ContentSecurityPolicy: policy}}),
 		)...)
 		if err == nil {
 			t.Errorf("%s: expected error for %q, got nil", name, policy)
 			continue
 		}
-		if !strings.Contains(err.Error(), "WithLoginUI: ContentSecurityPolicy") {
+		if !strings.Contains(err.Error(), "WithUI: HTMLUI.Login.ContentSecurityPolicy") {
 			t.Errorf("%s: err = %v, want it to name the option and field", name, err)
 		}
 	}
@@ -575,33 +511,33 @@ func TestWithLoginUI_RejectsInvalidCSP(t *testing.T) {
 
 // The translator is wired into the composed driver at New; a login overlay
 // must come through that rewrite intact and construct.
-func TestWithLoginUI_SurvivesLocaleInjection(t *testing.T) {
+func TestWithUI_HTMLUILoginSurvivesLocaleInjection(t *testing.T) {
 	t.Parallel()
 
 	tmpl := template.Must(template.New("login").Parse("hi"))
 	provider, err := op.New(append(validBaseOpts(t),
-		op.WithLoginUI(op.LoginUI{
+		op.WithUI(op.HTMLUI{Login: op.PageTemplate{
 			Template:              tmpl,
 			ContentSecurityPolicy: "default-src 'none'; style-src 'self'",
-		}),
+		}}),
 	)...)
 	if err != nil {
-		t.Fatalf("op.New with WithLoginUI: %v", err)
+		t.Fatalf("op.New with HTMLUI.Login: %v", err)
 	}
 	if provider == nil {
 		t.Fatal("expected non-nil Provider")
 	}
 }
 
-func TestWithChooserUI_AcceptsValid(t *testing.T) {
+func TestWithUI_HTMLUIChooserAcceptsValid(t *testing.T) {
 	t.Parallel()
 
 	tmpl := template.Must(template.New("chooser").Parse("hi"))
 	provider, err := op.New(append(validBaseOpts(t),
-		op.WithChooserUI(op.ChooserUI{Template: tmpl}),
+		op.WithUI(op.HTMLUI{Chooser: op.PageTemplate{Template: tmpl}}),
 	)...)
 	if err != nil {
-		t.Fatalf("op.New with WithChooserUI: %v", err)
+		t.Fatalf("op.New with HTMLUI.Chooser: %v", err)
 	}
 	if provider == nil {
 		t.Fatal("expected non-nil Provider")
@@ -611,7 +547,7 @@ func TestWithChooserUI_AcceptsValid(t *testing.T) {
 func TestNew_DefaultsToHTMLDriverWithoutInteraction(t *testing.T) {
 	t.Parallel()
 
-	// With neither WithInteractionDriver nor WithSPAUI the OP must
+	// Without WithUI the OP must
 	// boot into a working HTML login surface. The test reaches the
 	// driver via the authorize-flow handler indirectly: instead of
 	// asserting on the unexported config field, we verify
@@ -633,11 +569,11 @@ func TestNew_DefaultsToHTMLDriverWithoutInteraction(t *testing.T) {
 	_ = interaction.HTMLDriver{}
 }
 
-func TestNew_WithInteractionDriverWinsOverDefault(t *testing.T) {
+func TestNew_WithUIWinsOverDefault(t *testing.T) {
 	t.Parallel()
 
 	d := &recordingDriver{}
-	provider, err := op.New(append(validBaseOpts(t), op.WithInteractionDriver(d))...)
+	provider, err := op.New(append(validBaseOpts(t), op.WithUI(op.DriverUI{Driver: d}))...)
 	if err != nil {
 		t.Fatalf("op.New: %v", err)
 	}
@@ -645,147 +581,16 @@ func TestNew_WithInteractionDriverWinsOverDefault(t *testing.T) {
 		t.Fatal("provider is nil")
 	}
 	// recordingDriver carries a "called" flag that the construction
-	// path does not flip; the explicit WithInteractionDriver wins
+	// path does not flip; the explicit WithUI wins
 	// because the default substitution short-circuits when
-	// c.interactionD is already set. Reaching this point without an
+	// uiSet is already true. Reaching this point without an
 	// op.New error is the assertion.
 }
 
-// TestWithChooserUI_AcceptsAlongsideSPAUI pins the SPA-mode posture:
-// WithChooserUI composes with WithSPAUI without rejection;
-// applyDefaults emits a single structured slog.Warn that records the
-// shadowed-template intent. The order-independence assertion (chooser
-// first vs SPA first) defends against a regression where only one of
-// the option setters wires the shadow flag.
-func TestWithChooserUI_AcceptsAlongsideSPAUI(t *testing.T) {
+func TestNew_SPAUISuppressesDefaultDriver(t *testing.T) {
 	t.Parallel()
 
-	cases := []struct {
-		name string
-		opts func(tb testing.TB, logger *slog.Logger) []op.Option
-	}{
-		{
-			name: "SPA first, chooser second",
-			opts: func(tb testing.TB, logger *slog.Logger) []op.Option {
-				tb.Helper()
-				tmpl := template.Must(template.New("chooser").Parse("hi"))
-				return append(validBaseOpts(tb),
-					op.WithLogger(logger),
-					op.WithSPAUI(op.SPAUI{LoginMount: "/login"}),
-					op.WithChooserUI(op.ChooserUI{Template: tmpl}),
-				)
-			},
-		},
-		{
-			name: "chooser first, SPA second",
-			opts: func(tb testing.TB, logger *slog.Logger) []op.Option {
-				tb.Helper()
-				tmpl := template.Must(template.New("chooser").Parse("hi"))
-				return append(validBaseOpts(tb),
-					op.WithLogger(logger),
-					op.WithChooserUI(op.ChooserUI{Template: tmpl}),
-					op.WithSPAUI(op.SPAUI{LoginMount: "/login"}),
-				)
-			},
-		},
-	}
-
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
-
-			var buf bytes.Buffer
-			logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelWarn}))
-			provider, err := op.New(tc.opts(t, logger)...)
-			if err != nil {
-				t.Fatalf("op.New: %v", err)
-			}
-			if provider == nil {
-				t.Fatal("expected non-nil Provider")
-			}
-			out := buf.String()
-			if !strings.Contains(out, "chooser template will not be rendered") {
-				t.Errorf("logger output = %q, want a chooser-shadowed warning", out)
-			}
-		})
-	}
-}
-
-// TestNew_SPAUIWithInteractionDriver pins that WithSPAUI combined with a
-// bundled HTML driver fails New in either option order, and that any other
-// driver (or either option alone) is accepted without a driver warning.
-func TestNew_SPAUIWithInteractionDriver(t *testing.T) {
-	t.Parallel()
-
-	const wantErr = "drop WithInteractionDriver, or use a driver that emits the JSON prompt envelope"
-	spa := op.WithSPAUI(op.SPAUI{LoginMount: "/login"})
-	with := op.WithInteractionDriver
-	cases := []struct {
-		name    string
-		opts    []op.Option
-		wantErr bool
-	}{
-		{name: "HTMLDriver then SPA", opts: []op.Option{with(interaction.HTMLDriver{}), spa}, wantErr: true},
-		{name: "SPA then HTMLDriver", opts: []op.Option{spa, with(interaction.HTMLDriver{})}, wantErr: true},
-		{name: "HTMLDriver pointer", opts: []op.Option{spa, with(&interaction.HTMLDriver{})}, wantErr: true},
-		{
-			name:    "TemplateOverlayDriver",
-			opts:    []op.Option{spa, with(interaction.TemplateOverlayDriver{Inner: interaction.JSONDriver{}})},
-			wantErr: true,
-		},
-		{
-			name:    "TemplateOverlayDriver pointer",
-			opts:    []op.Option{spa, with(&interaction.TemplateOverlayDriver{Inner: interaction.JSONDriver{}})},
-			wantErr: true,
-		},
-		{name: "JSONDriver then SPA", opts: []op.Option{with(interaction.JSONDriver{}), spa}},
-		{name: "SPA then JSONDriver", opts: []op.Option{spa, with(interaction.JSONDriver{})}},
-		{name: "SPA only", opts: []op.Option{spa}},
-		{name: "HTMLDriver only", opts: []op.Option{with(interaction.HTMLDriver{})}},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
-
-			var buf bytes.Buffer
-			logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelWarn}))
-			opts := append(validBaseOpts(t), op.WithLogger(logger))
-			_, err := op.New(append(opts, tc.opts...)...)
-			if tc.wantErr {
-				wantConfigurationError(t, err, wantErr)
-				return
-			}
-			if err != nil {
-				t.Fatalf("op.New: %v", err)
-			}
-			if strings.Contains(buf.String(), "WithInteractionDriver is configured but WithSPAUI") {
-				t.Fatalf("unexpected driver warning; log:\n%s", buf.String())
-			}
-		})
-	}
-}
-
-// TestNew_SPAUIHTMLDriverErrorWinsOverPasskeyCapability pins that the SPA /
-// driver conflict is reported ahead of the passkey capability error, whose
-// advice (configure WithSPAUI) would be misleading when WithSPAUI is set.
-func TestNew_SPAUIHTMLDriverErrorWinsOverPasskeyCapability(t *testing.T) {
-	t.Parallel()
-
-	st := inmem.New()
-	flow := op.LoginFlow{Primary: compilePasskeyStep(st, true)}
-	opts := append(validBaseOptsWithStoreNoAuthn(t, st),
-		op.WithLoginFlow(flow),
-		op.WithSPAUI(op.SPAUI{LoginMount: "/login"}),
-		op.WithInteractionDriver(interaction.HTMLDriver{}),
-	)
-	_, err := op.New(opts...)
-	wantConfigurationError(t, err, "drop WithInteractionDriver, or use a driver that emits the JSON prompt envelope")
-}
-
-func TestNew_WithSPAUISuppressesDefaultDriver(t *testing.T) {
-	t.Parallel()
-
-	// With WithSPAUI active, the default-driver fall-back in
+	// With SPAUI active, the default-driver fall-back in
 	// applyDefaults short-circuits — the embedder's SPA owns
 	// rendering and the JSON state endpoints stay the only
 	// protocol surface. The black-box check that this delegation
@@ -794,10 +599,10 @@ func TestNew_WithSPAUISuppressesDefaultDriver(t *testing.T) {
 	// fail-fast rejection. Once the gate is gone we can simply
 	// assert successful construction.
 	provider, err := op.New(append(validBaseOpts(t),
-		op.WithSPAUI(op.SPAUI{LoginMount: "/login"}),
+		op.WithUI(op.SPAUI{LoginMount: "/login"}),
 	)...)
 	if err != nil {
-		t.Fatalf("op.New with WithSPAUI: %v", err)
+		t.Fatalf("op.New with SPAUI: %v", err)
 	}
 	if provider == nil {
 		t.Fatal("expected non-nil Provider")

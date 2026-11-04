@@ -4,7 +4,7 @@ package browserverify
 
 import "testing"
 
-// 10-react-login delegates login to a SPA (op.WithSPAUI): the vanilla JS
+// 10-react-login delegates login to a SPA (op.SPAUI): the vanilla JS
 // bundle renders the password and consent prompts over a JSON contract
 // instead of the default HTML forms. iss/sub fully characterise it — the
 // distinctive bit is the SPA seam itself, which the spa driver exercises.

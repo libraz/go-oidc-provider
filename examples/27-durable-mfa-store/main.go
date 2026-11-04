@@ -215,7 +215,7 @@ func run() error {
 		// as everything else, so the guess budget is one budget across
 		// restarts and across replicas.
 		op.WithAuthnLockoutStore(storage.AuthnLockouts()),
-		op.WithSPAUI(op.SPAUI{
+		op.WithUI(op.SPAUI{
 			LoginMount: "/login",
 			StaticDir:  staticDir,
 		}),

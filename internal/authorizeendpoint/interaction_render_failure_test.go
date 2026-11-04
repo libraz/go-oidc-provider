@@ -61,7 +61,7 @@ func TestEndToEnd_InteractionRenderFailureIsNotAnEmptyOK(t *testing.T) {
 	tk := testkit.NewProvider(t,
 		testkit.WithClock(clock),
 		testkit.WithOptions(
-			op.WithInteractionDriver(brokenConsentDriver{}),
+			op.WithUI(op.DriverUI{Driver: brokenConsentDriver{}}),
 			op.WithAuditLogger(slog.New(slog.NewJSONHandler(sink, nil))),
 		),
 	)

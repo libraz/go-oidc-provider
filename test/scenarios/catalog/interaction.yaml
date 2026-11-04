@@ -51,7 +51,7 @@ rows:
       `action="{issuer}{interaction_url}"`, a hidden input
       `prompt=login`, and a Sign-in label.
     status: out-of-scope
-    out_of_scope_reason: "Vendor-specific HTML form rendering with hidden 'prompt=login' input and Sign-in label. v1.0's default Driver (interaction.JSONDriver) returns a JSON Prompt envelope ({type, data, inputs[], state_ref, csrf_token}); embedders ship their own SSR/HTML driver via op.WithInteractionDriver. The 303-to-interaction-URL hop is observable and verified end-to-end by ITX-012 (RunCodeFlow); the upstream HTML form shape is not v1.0 wire."
+    out_of_scope_reason: "Vendor-specific HTML form rendering with hidden 'prompt=login' input and Sign-in label. v1.0's default Driver (interaction.JSONDriver) returns a JSON Prompt envelope ({type, data, inputs[], state_ref, csrf_token}); embedders ship their own SSR/HTML driver via op.WithUI(op.DriverUI{Driver: ...}). The 303-to-interaction-URL hop is observable and verified end-to-end by ITX-012 (RunCodeFlow); the upstream HTML form shape is not v1.0 wire."
 
   - id: ITX-011
     severity: P0

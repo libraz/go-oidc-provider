@@ -46,7 +46,7 @@ func TestEndToEnd_ChooserRendersUsablePageOnDefaultHTMLSurface(t *testing.T) {
 			// Replaces the testkit's auto-consent driver with the
 			// library's own zero-configuration surface. Nothing else
 			// about the Provider is customised.
-			op.WithInteractionDriver(interaction.HTMLDriver{}),
+			op.WithUI(op.DriverUI{Driver: interaction.HTMLDriver{}}),
 		),
 	)
 

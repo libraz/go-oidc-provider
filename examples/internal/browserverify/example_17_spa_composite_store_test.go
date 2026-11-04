@@ -10,7 +10,7 @@ import (
 
 // 17-spa-composite-store drives the same MySQL-durable + Redis-volatile
 // split as 09-redis-volatile, but through the SPA interaction driver
-// (op.WithSPAUI) instead of the default server-rendered forms. That
+// (op.SPAUI) instead of the default server-rendered forms. That
 // makes this the only case in the suite that exercises the SPA prompt
 // contract itself over that composite split: the interaction record the
 // bundle's JSON POSTs advance has to survive the same Redis round-trip

@@ -45,7 +45,7 @@ func TestProviderRoutes_MatchesRouter(t *testing.T) {
 				opts = append(opts, op.WithMountPrefix(tc.prefix))
 			}
 			if tc.spa {
-				opts = append(opts, op.WithSPAUI(op.SPAUI{LoginMount: "/login", StaticDir: t.TempDir()}))
+				opts = append(opts, op.WithUI(op.SPAUI{LoginMount: "/login", StaticDir: t.TempDir()}))
 			}
 			provider, err := op.New(opts...)
 			if err != nil {

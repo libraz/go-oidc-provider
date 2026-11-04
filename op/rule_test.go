@@ -224,7 +224,7 @@ func TestRuleNilWhenFiresInACompiledFlow(t *testing.T) {
 			// spelling of RuleAlways.
 			Rules: []op.Rule{{Then: op.StepCaptcha{Verifier: typedCaptchaVerifier{}}}},
 		}),
-		op.WithInteractionDriver(driver),
+		op.WithUI(op.DriverUI{Driver: driver}),
 		op.WithStaticClients(op.PublicClient{
 			ID:           clientID,
 			RedirectURIs: []string{redirectURI},

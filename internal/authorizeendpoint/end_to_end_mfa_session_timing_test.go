@@ -127,7 +127,7 @@ func TestEndToEnd_MFAWithholdsSessionUntilSecondFactorCompletes(t *testing.T) {
 		op.WithUserStore(inner.Users()),
 		op.WithKeyset(op.Keyset{newFlowSigningKey(t)}),
 		op.WithCookieKeys(newFlowCookieKey(t)),
-		op.WithInteractionDriver(testkit.AutoConsentDriver{}),
+		op.WithUI(op.DriverUI{Driver: testkit.AutoConsentDriver{}}),
 		op.WithClock(clock),
 		op.WithLoginFlow(op.LoginFlow{
 			Primary: op.PrimaryPassword{Store: inner.UserPasswords()},

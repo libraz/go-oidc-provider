@@ -113,7 +113,7 @@ func newErasureOP(t *testing.T, st *inmem.Store, backing store.Store, claims sto
 		op.WithUserStore(claims),
 		op.WithLoginFlow(flow),
 		// The passkey rows need a UI that can run the WebAuthn ceremony.
-		op.WithSPAUI(op.SPAUI{LoginMount: "/login"}),
+		op.WithUI(op.SPAUI{LoginMount: "/login"}),
 		op.WithClock(revokeSubjectClock{now: erasureNow}),
 	)
 	p, err := op.New(append(opts, extra...)...)

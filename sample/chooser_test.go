@@ -200,7 +200,7 @@ func buildSampleBrowser(t *testing.T, storeOpts ...op.Option) *sampleBrowser {
 		op.WithIssuer(srv.URL),
 		op.WithKeyset(keys.set),
 		op.WithCookieKeys(keys.cookie),
-		op.WithInteractionDriver(driver),
+		op.WithUI(op.DriverUI{Driver: driver}),
 		op.WithStaticClients(op.PublicClient{
 			ID:           chooserTestClientID,
 			RedirectURIs: []string{chooserTestRedirect},

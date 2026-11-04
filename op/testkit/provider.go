@@ -183,7 +183,7 @@ func defaultOptions(tb testing.TB, issuer string, st *inmem.Store, signKey op.Si
 		op.WithUserStore(st.Users()),
 		op.WithKeyset(op.Keyset{signKey}),
 		op.WithCookieKeys(generateCookieKey(tb)),
-		op.WithInteractionDriver(AutoConsentDriver{}),
+		op.WithUI(op.DriverUI{Driver: AutoConsentDriver{}}),
 		subjectLoginFlow(auth),
 	}
 }

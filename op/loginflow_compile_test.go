@@ -116,7 +116,7 @@ func TestProjectStepToFlow_BuiltinSteps_BuildSuccessfully(t *testing.T) {
 			st := inmem.New()
 			opts := append(validBaseOptsWithStoreNoAuthn(t, st), op.WithLoginFlow(tc.flow(st)),
 				// The passkey cases need a UI that can run the WebAuthn ceremony.
-				op.WithSPAUI(op.SPAUI{LoginMount: "/login"}))
+				op.WithUI(op.SPAUI{LoginMount: "/login"}))
 			if _, err := op.New(opts...); err != nil {
 				t.Fatalf("op.New for %s: unexpected error: %v", tc.name, err)
 			}
@@ -230,7 +230,7 @@ func TestProjectStepToFlow_BuiltinSteps_RejectMissingDeps(t *testing.T) {
 			st := inmem.New()
 			opts := append(validBaseOptsWithStoreNoAuthn(t, st), op.WithLoginFlow(tc.buildFlow(st)),
 				// The passkey cases need a UI that can run the WebAuthn ceremony.
-				op.WithSPAUI(op.SPAUI{LoginMount: "/login"}))
+				op.WithUI(op.SPAUI{LoginMount: "/login"}))
 			_, err := op.New(opts...)
 			if err == nil {
 				t.Fatalf("op.New: expected error, got nil")
@@ -341,7 +341,7 @@ func compilePasskeyStep(st *inmem.Store, uv bool) op.PrimaryPasskey {
 func compileNew(t *testing.T, st *inmem.Store, flow op.LoginFlow) error {
 	t.Helper()
 	opts := append(validBaseOptsWithStoreNoAuthn(t, st), op.WithLoginFlow(flow),
-		op.WithSPAUI(op.SPAUI{LoginMount: "/login"}))
+		op.WithUI(op.SPAUI{LoginMount: "/login"}))
 	_, err := op.New(opts...)
 	return err
 }

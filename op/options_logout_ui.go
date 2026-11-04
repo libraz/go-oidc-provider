@@ -13,7 +13,8 @@ import (
 // pages of RP-Initiated Logout: the confirmation page shown when a
 // request arrives without proof of the user's intent, and the signed-out
 // page shown when the request carried no post_logout_redirect_uri. Both
-// are rendered by the server in every mode, including under [WithSPAUI].
+// are rendered by the server whichever [UI] [WithUI] selects, [SPAUI]
+// included.
 //
 // The confirmation template is executed with
 // [interaction.LogoutConfirmTemplateData] and MUST render every entry of
@@ -51,7 +52,7 @@ type LogoutUI struct {
 }
 
 // WithLogoutUI registers the [LogoutUI] templates for the
-// RP-Initiated Logout pages. Composes with [WithSPAUI].
+// RP-Initiated Logout pages. Applies whichever [UI] [WithUI] selects.
 // Validation:
 //   - ConfirmTemplate and SignedOutTemplate MUST be non-nil.
 //   - ContentSecurityPolicy, when set, MUST pass

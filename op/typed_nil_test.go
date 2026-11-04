@@ -239,8 +239,8 @@ func TestPublicAuthnOptions_RejectTypedNilDependencies(t *testing.T) {
 	}{
 		{
 			name:   "interaction-driver",
-			field:  "WithInteractionDriver",
-			option: op.WithInteractionDriver(typedNilFrom[interaction.Driver](t, &recordingDriver{})),
+			field:  "WithUI: DriverUI.Driver",
+			option: op.WithUI(op.DriverUI{Driver: typedNilFrom[interaction.Driver](t, &recordingDriver{})}),
 		},
 		{
 			name:   "authn-lockout-store",

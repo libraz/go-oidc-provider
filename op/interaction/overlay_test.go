@@ -675,7 +675,7 @@ func TestTemplateOverlay_InnerNilRenderError(t *testing.T) {
 // overview comment is written against it. Wiring the locale through
 // later is a welcome change — it should fail here, and the failure is
 // the reminder to rewrite that comment and lift the reservation on
-// [op.ConsentUI]'s Strings field at the same time.
+// [op.PageTemplate] for the consent page at the same time.
 func TestTemplateOverlay_ConsentTemplateIsLocaleBlind(t *testing.T) {
 	t.Parallel()
 

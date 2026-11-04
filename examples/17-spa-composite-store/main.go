@@ -40,7 +40,7 @@
 //
 // # What the SPA owns, and what it does not
 //
-// op.WithSPAUI replaces the bundled server-rendered driver. The OP
+// op.SPAUI replaces the bundled server-rendered driver. The OP
 // stops emitting HTML for login and consent and serves the SPA bundle
 // at /login plus a JSON state envelope the bundle drives. What the OP
 // does NOT give up is the decision of which factor comes next, or the
@@ -204,7 +204,7 @@ func run() error {
 		// The SPA bundle replaces the bundled HTML driver. Login and
 		// consent are rendered from the JSON state envelope; the OP
 		// still decides the step order and validates every submission.
-		op.WithSPAUI(op.SPAUI{
+		op.WithUI(op.SPAUI{
 			LoginMount: "/login",
 			StaticDir:  staticDir,
 		}),

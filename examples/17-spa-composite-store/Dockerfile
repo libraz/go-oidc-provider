@@ -17,7 +17,7 @@ RUN CGO_ENABLED=0 go build -tags example -trimpath -ldflags="-s -w" -o /op-examp
 # Runtime image: distroless static carries only ca-certificates and
 # /etc/passwd, which is everything a statically linked Go binary needs.
 #
-# The SPA bundle has to come along. op.WithSPAUI serves StaticDir from
+# The SPA bundle has to come along. op.SPAUI serves StaticDir from
 # disk at request time rather than embedding it, so the binary alone
 # would start and then fail its own StaticDir check.
 #

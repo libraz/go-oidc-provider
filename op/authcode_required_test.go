@@ -3,7 +3,6 @@ package op_test
 import (
 	"errors"
 	"html/template"
-	"slices"
 	"strings"
 	"testing"
 
@@ -21,10 +20,7 @@ func browserSurfaceOptions() map[string]op.Option {
 			Authenticator: &stubAuth{typeID: op.FactorPassword, aal: op.AAL1, amr: "pwd"},
 			KindLabel:     op.StepKind("myorg.password"),
 		}}),
-		"WithSPAUI":             op.WithSPAUI(op.SPAUI{LoginMount: "/login"}),
-		"WithConsentUI":         op.WithConsentUI(op.ConsentUI{Template: tmpl}),
-		"WithLoginUI":           op.WithLoginUI(op.LoginUI{Template: tmpl}),
-		"WithChooserUI":         op.WithChooserUI(op.ChooserUI{Template: tmpl}),
+		"WithUI":                op.WithUI(op.HTMLUI{Consent: op.PageTemplate{Template: tmpl}}),
 		"WithInteractions":      op.WithInteractions(stubInteraction{name: "myorg.kyc.start", trigger: op.TriggerAfterAuthn}),
 		"WithFirstPartyClients": op.WithFirstPartyClients("first-party"),
 	}
@@ -99,37 +95,23 @@ func TestNew_LoginFlowAsClaimSourceNeedsNoAuthorizationCode(t *testing.T) {
 }
 
 // TestNew_BrowserSurfaceWithAuthorizationCodeIsAccepted pins that the
-// check is silent once authorization_code is listed. WithSPAUI is mutually
-// exclusive with WithConsentUI and WithLoginUI, hence two combinations
-// cover all seven options.
+// check is silent once authorization_code is listed, with every browser
+// sign-in option set at once.
 func TestNew_BrowserSurfaceWithAuthorizationCodeIsAccepted(t *testing.T) {
 	t.Parallel()
 
 	all := browserSurfaceOptions()
-	for _, tc := range []struct {
-		name string
-		drop []string
-	}{
-		{"with SPAUI", []string{"WithConsentUI", "WithLoginUI"}},
-		{"with ConsentUI and LoginUI", []string{"WithSPAUI"}},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
-			opts := validBaseOptsNoAuthn(t)
-			for name, opt := range browserSurfaceOptions() {
-				if !slices.Contains(tc.drop, name) {
-					opts = append(opts, opt)
-				}
-			}
-			opts = append(opts, op.WithGrants(grant.AuthorizationCode, grant.ClientCredentials))
-			_, err := op.New(opts...)
-			if errors.Is(err, op.ErrAuthorizationCodeGrantRequired) {
-				t.Fatalf("err = %v, want no ErrAuthorizationCodeGrantRequired", err)
-			}
-		})
+	if len(all) != 4 {
+		t.Fatalf("browserSurfaceOptions has %d entries, want 4", len(all))
 	}
-	if len(all) != 7 {
-		t.Fatalf("browserSurfaceOptions has %d entries, want 7", len(all))
+	opts := validBaseOptsNoAuthn(t)
+	for _, opt := range all {
+		opts = append(opts, opt)
+	}
+	opts = append(opts, op.WithGrants(grant.AuthorizationCode, grant.ClientCredentials))
+	_, err := op.New(opts...)
+	if errors.Is(err, op.ErrAuthorizationCodeGrantRequired) {
+		t.Fatalf("err = %v, want no ErrAuthorizationCodeGrantRequired", err)
 	}
 }
 

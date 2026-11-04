@@ -47,11 +47,11 @@ var ErrTemplateOverlayNoInnerErrorRenderer = errors.New(
 // submission shape is owned by the built-in interactions and is
 // unaffected by custom templating.
 //
-// Embedders do not construct TemplateOverlayDriver directly. op.New
-// wires it automatically when [op.WithConsentUI], [op.WithChooserUI] or
-// [op.WithLoginUI] is configured (and [op.WithSPAUI] is not). Custom Driver
-// implementations may compose TemplateOverlayDriver themselves to opt
-// into the same render seam.
+// op.New wires it automatically when an [op.HTMLUI] page carries a
+// template. To lay templates over a custom Driver, compose it with that
+// Driver as Inner and pass it to [op.DriverUI]. Custom Driver
+// implementations may also compose TemplateOverlayDriver themselves to
+// opt into the same render seam.
 //
 // The wrapper is stateless and safe for concurrent use as long as the
 // embedded *template.Template values are; html/template templates are
@@ -84,9 +84,10 @@ type TemplateOverlayDriver struct {
 	// The value is passed through [NormalizeCSP], which appends the
 	// framing and base-uri protections when absent and rejects
 	// anything that would disable them. A value that fails validation
-	// falls back to the default policy; [op.WithConsentUI] rejects it
-	// at [op.New] instead, so this path is reachable only for a
-	// hand-composed overlay.
+	// falls back to the default policy; [op.WithUI] rejects it at
+	// [op.New] instead, whether the overlay came from [op.HTMLUI] or was
+	// handed to [op.DriverUI], so this path is reachable only for an
+	// overlay used outside op.New.
 	ConsentCSP string
 
 	// ChooserCSP is the Content-Security-Policy sent with a page

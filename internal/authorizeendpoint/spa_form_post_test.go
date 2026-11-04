@@ -25,7 +25,7 @@ import (
 )
 
 // spaFormPostMount is the SPA login mount every row in this file wires
-// through [op.WithSPAUI]. It is deliberately distinct from the legacy
+// through [op.SPAUI]. It is deliberately distinct from the legacy
 // /oidc/interaction prefix so a response arriving on the wrong surface
 // is a routing failure rather than a silent pass.
 const spaFormPostMount = "/login"
@@ -85,7 +85,7 @@ func newSPAFormPostHarness(t *testing.T, extra ...op.Option) *spaFormPostHarness
 
 	// The bundle directory is populated so the shell and asset routes
 	// mount too: the mount tree under test is the whole one an embedder
-	// gets from op.WithSPAUI, not a state-routes-only subset.
+	// gets from op.WithUI(op.SPAUI), not a state-routes-only subset.
 	staticDir := t.TempDir()
 	mustWriteFile(t, filepath.Join(staticDir, "index.html"),
 		"<!doctype html><html><body>SHELL</body></html>")
@@ -93,7 +93,7 @@ func newSPAFormPostHarness(t *testing.T, extra ...op.Option) *spaFormPostHarness
 	options := []testkit.Option{
 		testkit.WithClock(fakeClock{now: time.Date(2026, 4, 26, 12, 0, 0, 0, time.UTC)}),
 		testkit.WithOptions(append([]op.Option{
-			op.WithSPAUI(op.SPAUI{LoginMount: spaFormPostMount, StaticDir: staticDir}),
+			op.WithUI(op.SPAUI{LoginMount: spaFormPostMount, StaticDir: staticDir}),
 		}, extra...)...),
 	}
 	tk := testkit.NewProvider(t, options...)

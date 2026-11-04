@@ -1,15 +1,15 @@
 //go:build example
 
-// Example 16 demonstrates the [op.WithInteractionDriver] seam. The library
+// Example 16 demonstrates the [op.DriverUI] seam. The library
 // ships two reference Drivers in [op/interaction]:
 //
-//   - [interaction.HTMLDriver] (default, used when WithInteractionDriver
-//     is not called): server-side renders the prompts as a tiny HTML
+//   - [interaction.HTMLDriver] (default, used when WithUI is not
+//     called): server-side renders the prompts as a tiny HTML
 //     form. The right choice for a server-rendered embedder.
 //   - [interaction.JSONDriver]: emits the prompt as JSON and reads
 //     submissions as JSON. The right choice for non-browser or
 //     server-driven UIs that call the OP's JSON state endpoints. A
-//     browser SPA should use [op.WithSPAUI] instead, which serves the
+//     browser SPA should use [op.SPAUI] instead, which serves the
 //     shell and handles the browser-side CSRF and CSP requirements.
 //
 // This example swaps to a thin custom driver that delegates to
@@ -129,7 +129,7 @@ func main() {
 		// the smallest flow that gives this Driver something to render.
 		op.WithProfile(profile.OAuth21),
 		op.WithLoginFlow(op.LoginFlow{Primary: op.PrimaryPassword{Store: memStore.UserPasswords()}}),
-		op.WithInteractionDriver(localeAwareDriver{}),
+		op.WithUI(op.DriverUI{Driver: localeAwareDriver{}}),
 		op.WithStaticClients(op.PublicClient{
 			ID:           demoClientID,
 			RedirectURIs: []string{demoRedirectURI},

@@ -1,10 +1,9 @@
 //go:build example
 
 // Example 19 is the OP with no UI configuration at all. It sets no
-// [op.WithInteractionDriver], no [op.WithChooserUI], no
-// [op.WithConsentUI] and no [op.WithSPAUI], so every screen a user
-// meets — the password prompt, the consent screen and the
-// prompt=select_account account chooser — is rendered by the built-in
+// [op.WithUI], so every screen a user meets — the password prompt, the
+// consent screen and the prompt=select_account account chooser — is
+// rendered by the built-in
 // [interaction.HTMLDriver] that [op.New] falls back to.
 //
 // That fallback is the library's headline claim: an OP that works from

@@ -24,7 +24,7 @@ func (r *routeMux) Handle(pattern string, h http.Handler) {
 
 // Routes returns the [http.ServeMux] patterns the Provider registered, in
 // registration order. The set depends on the configuration: optional
-// endpoints, [WithSPAUI], [WithMountPrefix] and [WithGrantManagement] add,
+// endpoints, [WithUI] with [SPAUI], [WithMountPrefix] and [WithGrantManagement] add,
 // move or drop entries. The returned slice is a copy.
 //
 // Mount the Provider on a router that dispatches by path, instead of

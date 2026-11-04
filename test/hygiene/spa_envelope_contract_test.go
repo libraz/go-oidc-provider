@@ -32,12 +32,12 @@ const (
 	spaEndpointDir = "../../internal/authorizeendpoint"
 
 	// spaContractDoc holds the public godoc that enumerates them.
-	spaContractDoc = "../../op/options_authn.go"
+	spaContractDoc = "../../op/options_ui.go"
 
 	// spaContractDocSymbols are the exported symbols whose doc comments
 	// carry the enumeration. Either may hold it; both must stay true.
 	spaContractType   = "SPAUI"
-	spaContractOption = "WithSPAUI"
+	spaContractOption = "WithUI"
 )
 
 // spaDocTypePattern matches the "type" member of an envelope written

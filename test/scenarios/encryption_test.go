@@ -1631,7 +1631,7 @@ func TestScenario_ENC_140_KidDisjointSigEncSeparation(t *testing.T) {
 			op.WithUserStore(st.Users()),
 			op.WithKeyset(op.Keyset{testkit.NewSigningKey(t, sigKID)}),
 			op.WithCookieKeys(testkit.NewCookieKey(t)),
-			op.WithInteractionDriver(testkit.AutoConsentDriver{}),
+			op.WithUI(op.DriverUI{Driver: testkit.AutoConsentDriver{}}),
 			op.WithLoginFlow(op.LoginFlow{Primary: op.ExternalStep{
 				Authenticator: testkit.SubjectAuthenticator{},
 				KindLabel:     "testkit.subject",

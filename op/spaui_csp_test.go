@@ -20,7 +20,7 @@ func TestSPAUICSP(t *testing.T) {
 		t.Run("rejects "+name, func(t *testing.T) {
 			t.Parallel()
 			_, err := op.New(append(validBaseOpts(t),
-				op.WithSPAUI(op.SPAUI{LoginMount: "/login", ContentSecurityPolicy: csp}),
+				op.WithUI(op.SPAUI{LoginMount: "/login", ContentSecurityPolicy: csp}),
 			)...)
 			if err == nil {
 				t.Fatalf("expected op.New to reject ContentSecurityPolicy %q", csp)
@@ -34,7 +34,7 @@ func TestSPAUICSP(t *testing.T) {
 	t.Run("empty uses the default", func(t *testing.T) {
 		t.Parallel()
 		if _, err := op.New(append(validBaseOpts(t),
-			op.WithSPAUI(op.SPAUI{LoginMount: "/login"}),
+			op.WithUI(op.SPAUI{LoginMount: "/login"}),
 		)...); err != nil {
 			t.Fatalf("op.New with empty ContentSecurityPolicy: %v", err)
 		}
@@ -43,7 +43,7 @@ func TestSPAUICSP(t *testing.T) {
 	t.Run("valid custom value", func(t *testing.T) {
 		t.Parallel()
 		if _, err := op.New(append(validBaseOpts(t),
-			op.WithSPAUI(op.SPAUI{
+			op.WithUI(op.SPAUI{
 				LoginMount:            "/login",
 				ContentSecurityPolicy: "default-src 'self'; frame-ancestors 'none'",
 			}),

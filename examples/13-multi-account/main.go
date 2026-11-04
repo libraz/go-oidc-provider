@@ -85,9 +85,9 @@ func main() {
 		// JSONDriver renders prompts (chooser, consent, factor) as JSON
 		// envelopes a SPA can consume directly. A server-rendered
 		// embedder swaps to interaction.HTMLDriver and supplies a
-		// chooser template via op.WithChooserUI; the orchestrator-side
+		// chooser template via op.HTMLUI; the orchestrator-side
 		// flow is identical.
-		op.WithInteractionDriver(interaction.JSONDriver{}),
+		op.WithUI(op.DriverUI{Driver: interaction.JSONDriver{}}),
 		op.WithStaticClients(
 			op.ConfidentialClient{
 				ID:           "demo-rp",

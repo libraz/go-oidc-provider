@@ -49,7 +49,7 @@ func TestPrimaryPasskey_AAGUIDAllowlistRequiresAttestationRoots(t *testing.T) {
 			st := inmem.New()
 			opts := append(validBaseOptsWithStoreNoAuthn(t, st), op.WithLoginFlow(flowWithRule(step(st, tc.roots))),
 				// A passkey step needs a UI that can run the WebAuthn ceremony.
-				op.WithSPAUI(op.SPAUI{LoginMount: "/login"}))
+				op.WithUI(op.SPAUI{LoginMount: "/login"}))
 			_, err := op.New(opts...)
 			if tc.wantSubstr == "" {
 				if err != nil {
