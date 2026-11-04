@@ -63,8 +63,8 @@ if err != nil {
     log.Fatal(err)
 }
 // Migrate creates or upgrades the OP's tables. Run it once from a deploy job
-// (or apply st.Migrations() with your migration tool); calling it here keeps
-// the example short.
+// (or write the files for your migration tool with `op-schema export`);
+// calling it here keeps the example short.
 if err := st.Migrate(context.Background()); err != nil {
     log.Fatal(err)
 }
@@ -84,7 +84,10 @@ handler, err := op.New(
     op.WithKeyset(keys),
     op.WithCookieKeys(cookieKeys...),
     op.WithLoginFlow(op.LoginFlow{
-        Primary: op.PrimaryPassword{Store: users{db}}, // your type with the three methods below
+        Primary: op.PrimaryPassword{
+            Store: users{db}, // your type with the three methods below
+            // LegacySchemes: []op.PasswordHashScheme{op.BcryptHashScheme()}, // uncomment for bcrypt hashes
+        },
     }),
     op.WithStaticClients(op.ConfidentialClient{ // the relying party that signs users in
         ID:           "my-app",
@@ -119,16 +122,19 @@ func (u users) ReadPasswordHash(ctx context.Context, sub string) ([]byte, error)
 The table gains no column when it already has an opaque identifier assigned
 once and never reused (not an auto-increment id or an email address). The
 same store supplies the ID Token and `/userinfo` claims; `op.WithUserStore`
-is for claims kept elsewhere. Legacy hashes such as bcrypt verify through
-`PrimaryPassword.LegacySchemes`. See
+is for claims kept elsewhere. A table of bcrypt hashes needs the
+`LegacySchemes` line above: without it every login against such a hash fails,
+and the OP logs one WARN that names the field. See
 [Bring your own user store](https://go-oidc-provider.libraz.net/use-cases/byo-userstore).
 
 `st` holds the OP's own records (clients, codes, tokens, sessions) in
 `oidc_*` tables next to yours. `op.New` checks the tables your configuration
 uses and names every missing one in one error;
 [`TABLES.md`](op/storeadapter/sql/schema/TABLES.md) lists them. The adapter
-never closes `db`; it stays yours. For an application that already has a
-users table and a migration tool, see
+never closes `db`; it stays yours. `go run
+github.com/libraz/go-oidc-provider/op/storeadapter/sql/cmd/op-schema export`
+writes the migrations as golang-migrate, goose or Flyway files. For an
+application that already has a users table and a migration tool, see
 [Integrate with an existing database](https://go-oidc-provider.libraz.net/getting-started/existing-db).
 
 Startup inserts a static client that the store lacks and refuses one whose
@@ -170,6 +176,11 @@ op.WithProfile(profile.FAPI2Baseline) // PAR + JAR + DPoP, ES256 signing, alg lo
 op.WithProfile(profile.OIDCCore)      // PKCE optional for confidential clients
 ```
 
+`FAPI2Baseline` also accepts a client assertion only when its `aud` is the
+issuer identifier as a single string, and does not rotate refresh tokens:
+refresh responses carry no `refresh_token`, and the one issued stays valid
+until it expires.
+
 `profile.OAuth21` is the OAuth 2.1 posture, not FAPI 2.0 Baseline; the FAPI
 profiles are `profile.FAPI2Baseline` and `profile.FAPI2MessageSigning`.
 
@@ -185,16 +196,18 @@ picks the pages and examples that match your goal.
 
 The defaults assume production: https only, public network only.
 `http://127.0.0.1` is exempt from the `redirect_uri` and issuer checks, so
-most examples run without any development option there. Two options cover
-what the IP literal does not: the textual host `localhost`, and a plain-http
-`backchannel_logout_uri`. That carve-out does not extend to the OP's other
-SSRF gates: JWKS, the JAR `request_uri`, `sector_identifier_uri`, and
-back-channel delivery each reject a loopback or private-network target by
-default too and need their own opt-in: `op.WithAllowPrivateNetworkJWKS`,
-`op.WithAllowPrivateNetworkJAR`, `op.WithAllowPrivateNetworkSector` and
-`op.WithAllowPrivateNetworkBackchannel`. A local setup where the relying
-party runs on another container's address usually needs the ones for the
-features it uses. Documented under
+most examples run without any development option there. Three options cover
+what the IP literal does not: `op.WithAllowLocalhostRedirectURIs` admits the
+textual host `localhost` in redirect URIs, `op.WithAllowLocalhostIssuerForDev`
+admits it in the issuer, and `op.WithAllowInsecureOutboundForDev(op.OutboundBackchannel)`
+admits a plain-http `backchannel_logout_uri`. That carve-out does not extend
+to the OP's other SSRF gates: JWKS, the JAR `request_uri`,
+`sector_identifier_uri`, and back-channel delivery each reject a loopback or
+private-network target by default too. One option lifts them per target,
+`op.WithAllowPrivateNetwork(op.OutboundJWKS, op.OutboundJAR, op.OutboundSector, op.OutboundBackchannel)`
+for all four. A local setup where the relying party runs on another
+container's address usually needs the targets for the features it uses.
+Documented under
 [`redirect_uri`](https://go-oidc-provider.libraz.net/concepts/redirect-uri) and
 [Issuer](https://go-oidc-provider.libraz.net/concepts/issuer).
 
@@ -223,9 +236,10 @@ and has no email delivery), a generic OAuth2 framework, and a UI kit. See
 - **Core.** OpenID Connect Core 1.0 and Discovery 1.0; OAuth 2.0 (RFC 6749),
   its Security BCP (RFC 9700) and Authorization Server Metadata (RFC 8414).
 - **Request and token hardening.** PKCE (RFC 7636), DPoP (RFC 9449), PAR
-  (RFC 9126), JAR (RFC 9101), JARM, mTLS (RFC 8705), issuer identification
-  (RFC 9207), Rich Authorization Requests (RFC 9396), step-up authentication
-  (RFC 9470).
+  (RFC 9126), JAR (RFC 9101), JARM, issuer identification (RFC 9207), Rich
+  Authorization Requests (RFC 9396), step-up authentication (RFC 9470).
+- **mTLS (RFC 8705).** Certificate-bound access tokens, and `tls_client_auth`
+  and `self_signed_tls_client_auth` client authentication.
 - **Grants.** Authorization code, refresh token, client credentials, device
   authorization (RFC 8628), CIBA Core 1.0, token exchange (RFC 8693), JWT bearer
   (RFC 7523), and embedder-defined grants through `op.WithCustomGrant`.
@@ -273,7 +287,7 @@ backend, or take one of the shipped adapters:
 | Adapter | Module | Purpose |
 |---|---|---|
 | `inmem` | main module | Reference store for development and tests. |
-| `sql` | sub-module | `database/sql` for SQLite, MySQL 8.0+, PostgreSQL 14+, with reference DDL embedded per engine and per-release migration files from `Store.Migrations()`. |
+| `sql` | sub-module | `database/sql` for SQLite, MySQL 8.0+, PostgreSQL 14+, with reference DDL embedded per engine and per-release migration files from `Store.Migrations()` or `op-schema export`. |
 | `redis` | sub-module | Volatile substores only; refuses to start without TLS and AUTH. |
 | `dynamodb` | sub-module | One table per substore, transactional. |
 | `composite` | main module | Hot/cold splitter: durable substores to one backend, volatile to another. |

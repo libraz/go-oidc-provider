@@ -42,8 +42,8 @@ if err != nil {
     log.Fatal(err)
 }
 // Migrate は OP のテーブルを作成または更新する。deploy job から一度だけ実行する
-// （または st.Migrations() を migration ツールで適用する）。ここで呼ぶのは
-// サンプルを短くするため。
+// （または `op-schema export` で migration ツール向けのファイルを書き出す）。
+// ここで呼ぶのはサンプルを短くするため。
 if err := st.Migrate(context.Background()); err != nil {
     log.Fatal(err)
 }
@@ -63,7 +63,10 @@ handler, err := op.New(
     op.WithKeyset(keys),
     op.WithCookieKeys(cookieKeys...),
     op.WithLoginFlow(op.LoginFlow{
-        Primary: op.PrimaryPassword{Store: users{db}}, // 下の 3 メソッドを持つあなたの型
+        Primary: op.PrimaryPassword{
+            Store: users{db}, // 下の 3 メソッドを持つあなたの型
+            // LegacySchemes: []op.PasswordHashScheme{op.BcryptHashScheme()}, // bcrypt ハッシュがある場合は有効にする
+        },
     }),
     op.WithStaticClients(op.ConfidentialClient{ // ユーザをサインインさせるリライングパーティ
         ID:           "my-app",
@@ -93,9 +96,9 @@ func (u users) FindByUsername(ctx context.Context, login string) (*store.User, e
 func (u users) ReadPasswordHash(ctx context.Context, sub string) ([]byte, error) // PHC 形式の argon2id。bcrypt は PrimaryPassword.LegacySchemes
 ```
 
-一度だけ割り当てられ再利用されない不透明な識別子（自動採番の id やメールアドレスは不可）の列がすでにあれば、テーブルに列を足す必要はありません。ID トークンと `/userinfo` のクレームも同じストアから読みます。クレームを別の場所に持つ場合だけ `op.WithUserStore` を使います。bcrypt などのレガシーハッシュは `PrimaryPassword.LegacySchemes` で検証できます。詳しくは [Bring your own user store](https://go-oidc-provider.libraz.net/ja/use-cases/byo-userstore) を参照してください。
+一度だけ割り当てられ再利用されない不透明な識別子（自動採番の id やメールアドレスは不可）の列がすでにあれば、テーブルに列を足す必要はありません。ID トークンと `/userinfo` のクレームも同じストアから読みます。クレームを別の場所に持つ場合だけ `op.WithUserStore` を使います。bcrypt ハッシュのテーブルには上の `LegacySchemes` の行が必要です。指定しないと、そのハッシュを持つユーザは全員ログインに失敗し、OP はこのフィールドを名指しした WARN ログを 1 回出力します。詳しくは [Bring your own user store](https://go-oidc-provider.libraz.net/ja/use-cases/byo-userstore) を参照してください。
 
-`st` は OP 自身のレコード（クライアント、コード、トークン、セッション）を、利用者のテーブルと並ぶ `oidc_*` テーブルに保存します。`op.New` は構成が使うテーブルを構築時に検査し、足りないものを 1 つのエラーですべて挙げます。対象のテーブルは [`TABLES.md`](op/storeadapter/sql/schema/TABLES.md) にまとめてあります。アダプタが `db` を閉じることはなく、閉じるのは利用者側です。users テーブルと migration ツールをすでに持つアプリケーションは [既存のデータベースに組み込む](https://go-oidc-provider.libraz.net/ja/getting-started/existing-db) を参照してください。
+`st` は OP 自身のレコード（クライアント、コード、トークン、セッション）を、利用者のテーブルと並ぶ `oidc_*` テーブルに保存します。`op.New` は構成が使うテーブルを構築時に検査し、足りないものを 1 つのエラーですべて挙げます。対象のテーブルは [`TABLES.md`](op/storeadapter/sql/schema/TABLES.md) にまとめてあります。アダプタが `db` を閉じることはなく、閉じるのは利用者側です。`go run github.com/libraz/go-oidc-provider/op/storeadapter/sql/cmd/op-schema export` を使うと、migration を golang-migrate、goose、Flyway のファイルとして書き出せます。users テーブルと migration ツールをすでに持つアプリケーションは [既存のデータベースに組み込む](https://go-oidc-provider.libraz.net/ja/getting-started/existing-db) を参照してください。
 
 起動時、ストアにない静的クライアントは追加されますが、保存済みの内容と異なるクライアントがあると起動を拒否します。そのため、クライアントを変更したとき（redirect URI の追加、シークレットのローテーションなど）は、新しいバージョンを起動する前にデプロイジョブから `op.SyncStaticClients` で書き込みます。本番では平文の `Secret` ではなく、`go run github.com/libraz/go-oidc-provider/cmd/op-client-secret` が出力するハッシュを `SecretHash` に設定します。詳しくは [クライアントの登録パターン](https://go-oidc-provider.libraz.net/ja/use-cases/client-onboarding) を参照してください。
 
@@ -112,13 +115,15 @@ op.WithProfile(profile.FAPI2Baseline) // PAR + JAR + DPoP, ES256 署名, alg ロ
 op.WithProfile(profile.OIDCCore)      // confidential client の PKCE を任意にする
 ```
 
+`FAPI2Baseline` は、クライアント認証アサーションの `aud` が issuer 識別子の単一の文字列である場合だけ受け付け、リフレッシュトークンもローテーションしません。リフレッシュ応答に `refresh_token` は含まれず、発行済みのトークンは有効期限まで使い続けられます。
+
 `profile.OAuth21` は OAuth 2.1 の構えであり、FAPI 2.0 Baseline ではありません。FAPI のプロファイルは `profile.FAPI2Baseline` と `profile.FAPI2MessageSigning` です。
 
 次に読むもの: [クイックスタート](https://go-oidc-provider.libraz.net/ja/getting-started/install)・[必須オプション](https://go-oidc-provider.libraz.net/ja/getting-started/required-options)・[ハンドラのマウント](https://go-oidc-provider.libraz.net/ja/getting-started/mount)・[セキュリティプロファイル](https://go-oidc-provider.libraz.net/ja/use-cases/security-profile)。[`examples/01-minimal`](examples/01-minimal/main.go) は同じ構成を、鍵生成・ストア接続・グレースフルシャットダウンまで含めた形で示しています。
 
 どのページから読むか迷う場合は、[Start here](https://go-oidc-provider.libraz.net/ja/getting-started/start-here) が目的に合うページと example を案内します。
 
-既定値は本番環境を前提にしており、https のみ・公開ネットワークのみを受け付けます。`http://127.0.0.1` は `redirect_uri` と issuer の検査から除外されているため、サンプルの大半はそこでは開発用オプションなしで動きます。IP リテラルでは足りないケースは 2 つあり、文字列ホストの `localhost` を使う場合と、平文 http の `backchannel_logout_uri` を登録する場合です。この除外は OP が持つ他の SSRF ゲート — JWKS、JAR の `request_uri`、`sector_identifier_uri`、バックチャネル配送 — には及びません。いずれもループバックやプライベートネットワーク宛てを既定で拒否し、それぞれ個別のオプトイン（`op.WithAllowPrivateNetworkJWKS`、`op.WithAllowPrivateNetworkJAR`、`op.WithAllowPrivateNetworkSector`、`op.WithAllowPrivateNetworkBackchannel`）が必要です。リライングパーティを別コンテナのアドレスで動かすローカル環境では、使う機能に応じたものを指定することになります。詳細は [`redirect_uri`](https://go-oidc-provider.libraz.net/ja/concepts/redirect-uri) と [Issuer](https://go-oidc-provider.libraz.net/ja/concepts/issuer) で説明しています。
+既定値は本番環境を前提にしており、https のみ・公開ネットワークのみを受け付けます。`http://127.0.0.1` は `redirect_uri` と issuer の検査から除外されているため、サンプルの大半はそこでは開発用オプションなしで動きます。IP リテラルでは足りないケースには 3 つのオプションが対応します。`op.WithAllowLocalhostRedirectURIs` は redirect URI の文字列ホスト `localhost` を、`op.WithAllowLocalhostIssuerForDev` は issuer の `localhost` を、`op.WithAllowInsecureOutboundForDev(op.OutboundBackchannel)` は平文 http の `backchannel_logout_uri` を許可します。この除外は OP が持つ他の SSRF ゲート — JWKS、JAR の `request_uri`、`sector_identifier_uri`、バックチャネル配送 — には及びません。いずれもループバックやプライベートネットワーク宛てを既定で拒否します。解除は 1 つのオプションで対象ごとに行い、4 つすべてなら `op.WithAllowPrivateNetwork(op.OutboundJWKS, op.OutboundJAR, op.OutboundSector, op.OutboundBackchannel)` です。リライングパーティを別コンテナのアドレスで動かすローカル環境では、使う機能に応じた対象を指定することになります。詳細は [`redirect_uri`](https://go-oidc-provider.libraz.net/ja/concepts/redirect-uri) と [Issuer](https://go-oidc-provider.libraz.net/ja/concepts/issuer) で説明しています。
 
 ## スコープ
 
@@ -132,7 +137,8 @@ op.WithProfile(profile.OIDCCore)      // confidential client の PKCE を任意�
 ## 準拠する仕様
 
 - **コア**。OpenID Connect Core 1.0、Discovery 1.0、OAuth 2.0 (RFC 6749)、Security BCP (RFC 9700)、Authorization Server Metadata (RFC 8414)。
-- **リクエストとトークンの堅牢化**。PKCE (RFC 7636)、DPoP (RFC 9449)、PAR (RFC 9126)、JAR (RFC 9101)、JARM、mTLS (RFC 8705)、認可レスポンスの issuer 識別 (RFC 9207)、Rich Authorization Requests (RFC 9396)、ステップアップ認証 (RFC 9470)。
+- **リクエストとトークンの堅牢化**。PKCE (RFC 7636)、DPoP (RFC 9449)、PAR (RFC 9126)、JAR (RFC 9101)、JARM、認可レスポンスの issuer 識別 (RFC 9207)、Rich Authorization Requests (RFC 9396)、ステップアップ認証 (RFC 9470)。
+- **mTLS (RFC 8705)**。証明書にバインドしたアクセストークンと、`tls_client_auth` / `self_signed_tls_client_auth` によるクライアント認証。
 - **grant**。認可コード、リフレッシュトークン、クライアントクレデンシャル、デバイス認可 (RFC 8628)、CIBA Core 1.0、Token Exchange (RFC 8693)、JWT Bearer (RFC 7523)。`op.WithCustomGrant` で組み込み側が定義した grant も追加できます。
 - **トークンとクライアントのライフサイクル**。JWT アクセストークン (RFC 9068)、トークン失効 (RFC 7009)、トークンイントロスペクション (RFC 7662)、Dynamic Client Registration とその管理 API (RFC 7591 / RFC 7592)。
 - **クライアント登録**。上記の Dynamic Client Registration に加え、HTTPS URL で自身を示すクライアント（MCP クライアントなど）向けに Client ID Metadata Document（experimental、明示的な opt-in）に対応しています。
@@ -154,7 +160,7 @@ op.WithProfile(profile.OIDCCore)      // confidential client の PKCE を任意�
 | アダプタ | モジュール | 用途 |
 |---|---|---|
 | `inmem` | main module | 開発・テスト向けのリファレンス実装。 |
-| `sql` | 別モジュール | SQLite / MySQL 8.0+ / PostgreSQL 14+ 向けの `database/sql` アダプタ。エンジンごとのリファレンス DDL と、リリースごとの migration ファイル（`Store.Migrations()`）を同梱。 |
+| `sql` | 別モジュール | SQLite / MySQL 8.0+ / PostgreSQL 14+ 向けの `database/sql` アダプタ。エンジンごとのリファレンス DDL と、リリースごとの migration ファイル（`Store.Migrations()` または `op-schema export`）を同梱。 |
 | `redis` | 別モジュール | 揮発性サブストア専用。TLS と AUTH が無いと起動を拒否する。 |
 | `dynamodb` | 別モジュール | サブストアごとに 1 テーブル、トランザクション対応。 |
 | `composite` | main module | ホット/コールドの振り分け役。永続サブストアと揮発性サブストアを別々のバックエンドへ。 |
