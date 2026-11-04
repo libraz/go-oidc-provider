@@ -144,7 +144,8 @@ type Store struct {
 // responsible for opening the database with the appropriate driver
 // (modernc.org/sqlite, github.com/go-sql-driver/mysql,
 // github.com/jackc/pgx/v5/stdlib) and for tuning the connection pool;
-// the adapter does not call SetMaxOpenConns or SetMaxIdleConns. New
+// the adapter does not call SetMaxOpenConns or SetMaxIdleConns, and it
+// never closes db, which stays the caller's to close. New
 // fails if db is nil or if any [WithNaming] override is invalid.
 func New(db *databasesql.DB, dialect Dialect, opts ...Option) (*Store, error) {
 	if db == nil {
@@ -675,11 +676,6 @@ func trimForError(stmt string) string {
 	}
 	return stmt[:maxLen] + "..."
 }
-
-// Close closes the underlying *sql.DB. Embedders that share the *sql.DB
-// across components should close it themselves and not call Close on
-// the adapter.
-func (s *Store) Close() error { return s.db.Close() }
 
 // --- store.Store -------------------------------------------------------------
 
