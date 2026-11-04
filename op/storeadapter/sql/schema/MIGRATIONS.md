@@ -9,6 +9,18 @@ so a migration tool can read them directly; take the files from it rather than
 from the repository when the names differ from the defaults. `TABLES.md` lists
 what each table holds and when the OP uses it.
 
+## Upgrading between releases
+
+Apply each release's file in order (`Store.Migrate`, or your tool from the
+version you are at); ordering rules are under [Deployment order and writer
+compatibility](#deployment-order-and-writer-compatibility).
+
+- [v1.1.0](#v110): apply `000002`; drain old MFA writers first, apply, validate the schema, then start only new writers.
+- [v1.2.0](#v120): apply `000003`; adds `client_id` indexes, and on MySQL moves `username` to a binary collation.
+- [v1.3.0](#v130): apply `000004` (MySQL only); apply the `MODIFY` statements before provisioning identifiers that differ only in case or accents.
+- [v1.4.0](#v140): apply `000005` before starting a binary that uses the new columns; old and new writers may then run side by side.
+- [v1.5.0](#v150): apply `000006`; adds the client previous-secret columns, the SSF tables and a sessions index.
+
 There are two ways to apply them, and a database can move from the first to the
 second without a reset.
 
@@ -160,19 +172,23 @@ and a separate version table for each tool:
 
 goose and Flyway read files from disk, not from an `fs.FS`. `op-schema` writes
 `Store.Migrations()` out with the tool's file names, after `WithTablePrefix`
-applied (it needs no database connection):
+and `WithNaming` applied (it needs no database connection):
 
 ```sh
 go run github.com/libraz/go-oidc-provider/op/storeadapter/sql/cmd/op-schema \
-    export --dialect postgres --prefix oidc_ --format goose --out db/oidc
+    export --dialect postgres --prefix oidc_ --format goose --out db/oidc \
+    --naming clients=acme_clients --naming sessions=acme_sessions
 ```
+
+`--naming key=name` repeats, one per renamed table, with the keys and
+validation of `WithNaming` (including `schema_migrations`); an unknown key, a
+malformed pair or a name collision exits non-zero.
 
 `--format` is `golang-migrate` (`NNNNNN_vX.Y.Z.up.sql`, as `Store.Migrations()`
 names them), `goose` (`NNNNNN_vX.Y.Z.sql`, each file opening with `-- +goose
 Up` and ending with an empty `-- +goose Down`; no statement needs
 `-- +goose StatementBegin`) or `flyway` (`V<N>__vX_Y_Z.sql`). The directory is
-created when missing. The tool applies a prefix only; for `WithNaming` overrides, write the files
-from `Store.Migrations()` yourself.
+created when missing.
 
 The sections below explain what each release changes.
 

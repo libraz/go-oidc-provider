@@ -4,10 +4,10 @@
 // Usage:
 //
 //	op-schema export --dialect mysql|postgres|sqlite --format golang-migrate|goose|flyway \
-//	    --out <dir> [--prefix <p>]
+//	    --out <dir> [--prefix <p>] [--naming key=name]...
 //
-// The files carry the content of oidcsql.Store.Migrations for the dialect
-// and prefix; only the file names and a tool header differ.
+// The files carry the content of oidcsql.Store.Migrations for the dialect,
+// prefix and naming overrides; only the file names and a tool header differ.
 package main
 
 import (
@@ -45,7 +45,7 @@ func main() {
 // run executes one command line and returns the process exit code.
 func run(args []string, stdout, stderr io.Writer) int {
 	if len(args) == 0 || args[0] != "export" {
-		_, _ = fmt.Fprintln(stderr, "usage: op-schema export --dialect mysql|postgres|sqlite --format golang-migrate|goose|flyway --out <dir> [--prefix <p>]")
+		_, _ = fmt.Fprintln(stderr, "usage: op-schema export --dialect mysql|postgres|sqlite --format golang-migrate|goose|flyway --out <dir> [--prefix <p>] [--naming key=name]...")
 		return 2
 	}
 	fl := flag.NewFlagSet("export", flag.ContinueOnError)
@@ -54,10 +54,12 @@ func run(args []string, stdout, stderr io.Writer) int {
 	prefix := fl.String("prefix", defaultPrefix, "table name prefix (oidcsql.WithTablePrefix)")
 	format := fl.String("format", formatGolangMigrate, "golang-migrate, goose or flyway")
 	out := fl.String("out", "", "directory to write the files to; created if missing")
+	var naming namingFlag
+	fl.Var(&naming, "naming", "table name override key=name (oidcsql.WithNaming); repeatable")
 	if err := fl.Parse(args[1:]); err != nil {
 		return 2
 	}
-	names, err := export(*dialect, *prefix, *format, *out)
+	names, err := export(*dialect, *prefix, *format, *out, naming.m)
 	if err != nil {
 		_, _ = fmt.Fprintf(stderr, "op-schema: %v\n", err)
 		return 1
@@ -68,8 +70,28 @@ func run(args []string, stdout, stderr io.Writer) int {
 	return 0
 }
 
+// namingFlag collects repeated --naming key=name pairs.
+type namingFlag struct{ m map[string]string }
+
+func (f *namingFlag) String() string { return fmt.Sprint(f.m) }
+
+func (f *namingFlag) Set(v string) error {
+	key, name, ok := strings.Cut(v, "=")
+	if !ok || key == "" || name == "" {
+		return fmt.Errorf("want key=name, got %q", v)
+	}
+	if _, dup := f.m[key]; dup {
+		return fmt.Errorf("key %q given more than once", key)
+	}
+	if f.m == nil {
+		f.m = map[string]string{}
+	}
+	f.m[key] = name
+	return nil
+}
+
 // export writes the migration files and returns their paths in order.
-func export(dialectName, prefix, format, out string) ([]string, error) {
+func export(dialectName, prefix, format, out string, naming map[string]string) ([]string, error) {
 	if out == "" {
 		return nil, errors.New("--out is required")
 	}
@@ -81,11 +103,19 @@ func export(dialectName, prefix, format, out string) ([]string, error) {
 		return nil, fmt.Errorf("--format must be golang-migrate, goose or flyway, got %q", format)
 	}
 	// The store only renders names here; the connector is never opened.
-	store, err := oidcsql.New(databasesql.OpenDB(offlineConnector{}), d, oidcsql.WithTablePrefix(prefix))
+	store, err := oidcsql.New(databasesql.OpenDB(offlineConnector{}), d, oidcsql.WithTablePrefix(prefix), oidcsql.WithNaming(naming))
 	if err != nil {
+		if len(naming) > 0 {
+			return nil, fmt.Errorf("--prefix or --naming: %w", err)
+		}
 		return nil, err
 	}
-	files := store.Migrations()
+	return writeMigrations(store.Migrations(), format, out)
+}
+
+// writeMigrations converts every file in files to format and writes it
+// under out, returning the paths written.
+func writeMigrations(files fs.FS, format, out string) ([]string, error) {
 	entries, err := fs.ReadDir(files, ".")
 	if err != nil {
 		return nil, err
@@ -93,7 +123,7 @@ func export(dialectName, prefix, format, out string) ([]string, error) {
 	if err := os.MkdirAll(out, dirPerm); err != nil {
 		return nil, err
 	}
-	var written []string
+	written := make([]string, 0, len(entries))
 	for _, e := range entries {
 		raw, err := fs.ReadFile(files, e.Name())
 		if err != nil {

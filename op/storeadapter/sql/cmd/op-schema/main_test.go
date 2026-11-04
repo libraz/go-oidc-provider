@@ -119,3 +119,67 @@ func TestExportRejectsBadArguments(t *testing.T) {
 		t.Errorf("rejected runs wrote %d files", len(entries))
 	}
 }
+
+func TestExportAppliesNaming(t *testing.T) {
+	t.Parallel()
+	out := t.TempDir()
+	var stderr bytes.Buffer
+	code := run([]string{
+		"export", "--dialect", "postgres", "--out", out,
+		"--naming", "clients=acme_clients", "--naming", "sessions=acme_sessions",
+	}, &bytes.Buffer{}, &stderr)
+	if code != 0 {
+		t.Fatalf("exit %d: %s", code, stderr.String())
+	}
+	store, err := oidcsql.New(databasesql.OpenDB(offlineConnector{}), oidcsql.Postgres(),
+		oidcsql.WithNaming(map[string]string{"clients": "acme_clients", "sessions": "acme_sessions"}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := readDir(t, out)
+	for name, content := range got {
+		want, err := fs.ReadFile(store.Migrations(), name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if content != string(want) {
+			t.Errorf("%s differs from Store.Migrations", name)
+		}
+	}
+	first := got["000001_v1.0.0.up.sql"]
+	if !strings.Contains(first, "acme_clients") || !strings.Contains(first, "acme_sessions") {
+		t.Errorf("renamed tables missing:\n%s", first)
+	}
+	if strings.Contains(first, "oidc_clients") {
+		t.Errorf("default clients name survived")
+	}
+}
+
+func TestExportRejectsBadNaming(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	for _, naming := range [][]string{
+		{"clients"},
+		{"=x"},
+		{"clients="},
+		{"nope=x"},
+		{"clients=1bad"},
+		{"clients=a", "clients=b"},
+		{"clients=same", "sessions=same"},
+	} {
+		args := make([]string, 0, 5+2*len(naming))
+		args = append(args, "export", "--dialect", "sqlite", "--out", dir)
+		for _, n := range naming {
+			args = append(args, "--naming", n)
+		}
+		var stderr bytes.Buffer
+		if code := run(args, &bytes.Buffer{}, &stderr); code == 0 {
+			t.Errorf("run(%v) succeeded", naming)
+		} else if !strings.Contains(stderr.String(), "naming") {
+			t.Errorf("run(%v) message does not name the flag: %q", naming, stderr.String())
+		}
+	}
+	if entries, _ := os.ReadDir(dir); len(entries) != 0 {
+		t.Errorf("rejected runs wrote %d files", len(entries))
+	}
+}
