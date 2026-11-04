@@ -83,6 +83,7 @@ handler, err := op.New(
     op.WithStore(st),
     op.WithKeyset(keys),
     op.WithCookieKeys(cookieKeys...),
+    op.WithLogger(slog.Default()), // without it, request-time warnings are discarded
     op.WithLoginFlow(op.LoginFlow{
         Primary: op.PrimaryPassword{
             Store: users{db}, // your type with the three methods below
@@ -124,7 +125,8 @@ once and never reused (not an auto-increment id or an email address). The
 same store supplies the ID Token and `/userinfo` claims; `op.WithUserStore`
 is for claims kept elsewhere. A table of bcrypt hashes needs the
 `LegacySchemes` line above: without it every login against such a hash fails,
-and the OP logs one WARN that names the field. See
+and the OP logs one WARN that names the field through the logger given to
+`op.WithLogger`. See
 [Bring your own user store](https://go-oidc-provider.libraz.net/use-cases/byo-userstore).
 
 `st` holds the OP's own records (clients, codes, tokens, sessions) in
