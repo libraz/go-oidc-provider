@@ -17,6 +17,9 @@
 //   - :9090 — the RP, built from examples/internal/rpkit. It exposes
 //     /, /login, /callback, /me.
 //
+// Graceful shutdown on SIGINT / SIGTERM is written out inline in run(),
+// with the server timeouts and drain order an embedder should copy.
+//
 // Manual verification:
 //
 //  1. Open http://127.0.0.1:9090/ — you see the RP landing page.
@@ -44,9 +47,13 @@ import (
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
+	"errors"
 	"log"
 	"log/slog"
 	"net/http"
+	"os"
+	"os/signal"
+	"syscall"
 	"time"
 
 	"github.com/libraz/go-oidc-provider/examples/internal/rpkit"
@@ -115,20 +122,32 @@ func run() error {
 		return err
 	}
 
+	// SIGINT or SIGTERM cancels ctx and starts the shutdown at the end of run.
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
 	opMux := http.NewServeMux()
 	opMux.Handle("/", provider)
+	opSrv := &http.Server{
+		Addr:              opAddr,
+		Handler:           opMux,
+		ReadHeaderTimeout: 10 * time.Second,
+		IdleTimeout:       60 * time.Second,
+	}
 
-	opErrCh := make(chan error, 1)
+	errCh := make(chan error, 2)
 	go func() {
 		log.Printf("OP listening on %s (issuer %s)", opAddr, issuer)
-		opErrCh <- serve.Listen(opAddr, opMux, provider)
+		if err := opSrv.ListenAndServe(); !errors.Is(err, http.ErrServerClosed) {
+			errCh <- err
+		}
 	}()
 
 	// rpkit runs OIDC discovery synchronously, so wait until the OP
 	// listener is up before constructing the RP.
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	waitCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	if err := serve.WaitForIssuer(ctx, issuer); err != nil {
+	if err := serve.WaitForIssuer(waitCtx, issuer); err != nil {
 		return err
 	}
 
@@ -144,19 +163,38 @@ func run() error {
 
 	rpMux := http.NewServeMux()
 	rpMux.Handle("/", rp.Handler())
+	rpSrv := &http.Server{
+		Addr:              rpAddr,
+		Handler:           rpMux,
+		ReadHeaderTimeout: 10 * time.Second,
+		IdleTimeout:       60 * time.Second,
+	}
 
 	log.Printf("RP listening on %s — open %s/", rpAddr, rpBase)
 	log.Printf("demo user: username=%q password=%q", demoUsername, demoPassword)
 
-	rpErrCh := make(chan error, 1)
-	go func() { rpErrCh <- serve.Listen(rpAddr, rpMux) }()
+	go func() {
+		if err := rpSrv.ListenAndServe(); !errors.Is(err, http.ErrServerClosed) {
+			errCh <- err
+		}
+	}()
 
+	// Block until a signal or a listener failure, then drain.
+	var runErr error
 	select {
-	case err := <-opErrCh:
-		return err
-	case err := <-rpErrCh:
-		return err
+	case <-ctx.Done():
+	case runErr = <-errCh:
 	}
+
+	// Stop accepting first, then let the provider finish queued back-channel work.
+	shutCtx, shutCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer shutCancel()
+	return errors.Join(
+		runErr,
+		opSrv.Shutdown(shutCtx),
+		rpSrv.Shutdown(shutCtx),
+		provider.Shutdown(shutCtx),
+	)
 }
 
 func seedUser(st *inmem.Store) error {
