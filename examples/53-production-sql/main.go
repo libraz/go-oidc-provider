@@ -34,12 +34,13 @@
 //	EXAMPLE53_ISSUER    issuer URL (default http://<EXAMPLE53_ADDR>; https behind the ingress in production)
 //	EXAMPLE53_KEYS_DIR  key directory (default <os temp dir>/example53-keys)
 //	EXAMPLE53_DSN       modernc.org/sqlite DSN (default a file in the os temp dir)
-//	EXAMPLE53_MIGRATE   1 applies the OP schema and creates the demo users table (development only)
+//	EXAMPLE53_MIGRATE   1 applies the OP schema and creates the demo users table (the users table is demo-only)
 //
 // Without EXAMPLE53_MIGRATE the process creates nothing, so the database
 // role needs no CREATE privilege; op.New checks that the tables the
-// configuration uses exist. Production applies the migration files from
-// Store.Migrations() (op/storeadapter/sql) through its own migration tool.
+// configuration uses exist. A deployment runs Store.Migrate from a deploy
+// job or applies Store.Migrations() (op/storeadapter/sql) with its own
+// migration tool.
 //
 // Manual verification:
 //
@@ -224,7 +225,7 @@ func prepareStore(ctx context.Context, cfg config, db *databasesql.DB) (*oidcsql
 	if err := createDemoUsers(ctx, db); err != nil {
 		return nil, fmt.Errorf("create demo users: %w", err)
 	}
-	log.Printf("development schema and demo users ready")
+	log.Printf("schema and demo users ready")
 	return storage, nil
 }
 

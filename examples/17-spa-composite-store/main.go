@@ -293,8 +293,8 @@ func openDurable() (*oidcsql.Store, func(), error) {
 		closeDB()
 		return nil, nil, fmt.Errorf("oidcsql.New: %w", err)
 	}
-	// Migrate is a development shortcut. Production deployments run
-	// durable.Schema() through their own migration tooling instead.
+	// Migrate creates or upgrades the tables and records the schema version;
+	// a migration tool applies durable.Migrations() instead.
 	if err := durable.Migrate(context.Background()); err != nil {
 		closeDB()
 		return nil, nil, fmt.Errorf("mysql migrate: %w", err)

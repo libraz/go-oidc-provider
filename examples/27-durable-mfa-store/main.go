@@ -80,9 +80,9 @@
 //     TOTP key is a plain file next to the database; load all three
 //     from a vault or KMS so the core tables and the sealed factor
 //     secrets survive process restart.
-//   - Migrations: Migrate is a development shortcut. Production runs
-//     storage.Schema() — which covers the factor tables as well as the
-//     core ones — through its own migration tooling.
+//   - Migrations: Migrate creates the core and factor tables and records
+//     the version; run it once from a deploy job, or apply
+//     storage.Migrations() with your own migration tool.
 //   - Store: sqlite here for a zero-dependency demo; production uses
 //     Postgres / MySQL via op/storeadapter/sql, or DynamoDB via
 //     op/storeadapter/dynamodb, which exposes the same factor

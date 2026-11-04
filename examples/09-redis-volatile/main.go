@@ -177,8 +177,8 @@ func run() error {
 	if err != nil {
 		return fmt.Errorf("oidcsql.New: %w", err)
 	}
-	// Migrate is a development shortcut. Production deployments run
-	// durable.Schema() through their own migration tooling instead.
+	// Migrate creates or upgrades the tables and records the schema version;
+	// a migration tool applies durable.Migrations() instead.
 	if err := durable.Migrate(context.Background()); err != nil {
 		return fmt.Errorf("mysql migrate: %w", err)
 	}

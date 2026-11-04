@@ -62,8 +62,8 @@ st, err := oidcsql.New(db, oidcsql.MySQL()) // op/storeadapter/sql
 if err != nil {
     log.Fatal(err)
 }
-// Development only: create the OP's tables in place.
-// Production applies st.Migrations() with your migration tool instead.
+// Migrate creates or upgrades the OP's tables and records the schema version.
+// A team with a migration tool applies st.Migrations() with it instead.
 if err := st.Migrate(context.Background()); err != nil {
     log.Fatal(err)
 }

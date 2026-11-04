@@ -41,8 +41,8 @@ st, err := oidcsql.New(db, oidcsql.MySQL()) // op/storeadapter/sql
 if err != nil {
     log.Fatal(err)
 }
-// 開発時のみ: OP のテーブルをその場で作成する。
-// 本番では代わりに st.Migrations() を migration ツールで適用する。
+// Migrate は OP のテーブルを作成または更新し、スキーマの版を記録する。
+// migration ツールを使うチームは、代わりに st.Migrations() をそのツールで適用する。
 if err := st.Migrate(context.Background()); err != nil {
     log.Fatal(err)
 }
