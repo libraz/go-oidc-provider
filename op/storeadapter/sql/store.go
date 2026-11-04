@@ -62,10 +62,12 @@ func WithClock(c Clock) Option {
 // entries still override individual tables outright, prefix or not.
 //
 // The prefix also names the version table [Store.Migrate] records in,
-// "<prefix>schema_migrations". Migrate refuses the empty prefix, under which
-// that table would be "schema_migrations", golang-migrate's default and so
-// usually the application's own history; apply [Store.Migrations] with a
-// migration tool instead.
+// "<prefix>schema_migrations"; the "schema_migrations" [WithNaming] key
+// renames it outright. Migrate refuses a version table that resolves to
+// "schema_migrations", golang-migrate's default and so usually the
+// application's own history, as the empty prefix does; name the table
+// through [WithNaming] or apply [Store.Migrations] with a migration tool
+// instead.
 //
 // The prefix is validated like a [WithNaming] value (ASCII letters, digits
 // and underscore, not starting with a digit, each resulting name within 63
@@ -84,7 +86,8 @@ func WithTablePrefix(prefix string) Option {
 // "consumed_jtis", "users", "initial_access_tokens",
 // "registration_access_tokens", "op_metadata", "device_codes",
 // "ciba_requests", "totp_secrets", "passkeys", "recovery_codes",
-// "email_otps", "authn_lockouts", "ssf_streams", "ssf_events"); values
+// "email_otps", "authn_lockouts", "ssf_streams", "ssf_events") and
+// "schema_migrations", the version table [Store.Migrate] records in; values
 // are the physical identifiers to use.
 // Unknown logical keys cause [New] to return an error so typos surface
 // at construction time. Each physical identifier is validated against

@@ -83,6 +83,12 @@ type nameMap struct {
 	authnLockouts      string
 	ssfStreams         string
 	ssfEvents          string
+
+	// versionTable is the table [Store.Migrate] records its progress in. It
+	// is named by the "schema_migrations" [WithNaming] key but is not a
+	// table of [knownNamingKeys]: the DDL does not create it and the schema
+	// checks do not look for it.
+	versionTable string
 }
 
 // defaultTablePrefix is the prefix the reference DDL carries on every
@@ -123,6 +129,7 @@ func namesWithPrefix(p string) nameMap {
 		authnLockouts:      p + "authn_lockouts",
 		ssfStreams:         p + "ssf_streams",
 		ssfEvents:          p + "ssf_events",
+		versionTable:       p + versionTableKey,
 	}
 }
 
@@ -199,9 +206,11 @@ func (n *nameMap) applyOverrides(overrides map[string]string) error {
 			n.ssfStreams = physical
 		case "ssf_events":
 			n.ssfEvents = physical
+		case versionTableKey:
+			n.versionTable = physical
 		default:
-			return fmt.Errorf("oidcsql: unknown WithNaming key %q (valid keys: %s)",
-				logical, strings.Join(knownNamingKeys, ", "))
+			return fmt.Errorf("oidcsql: unknown WithNaming key %q (valid keys: %s, %s)",
+				logical, strings.Join(knownNamingKeys, ", "), versionTableKey)
 		}
 	}
 	return n.checkCollisions()
@@ -222,10 +231,13 @@ func (n *nameMap) applyOverrides(overrides map[string]string) error {
 // key responsible for each resolved physical name in the error
 // message.
 func (n nameMap) checkCollisions() error {
-	names := n.all()
+	names := append(n.all(), n.versionTable)
 	seen := make(map[string]string, len(names))
 	for i, name := range names {
-		label := logicalKeyAt(i)
+		label := versionTableKey
+		if i < len(knownNamingKeys) {
+			label = logicalKeyAt(i)
+		}
 		// SQLite and unquoted PostgreSQL identifiers compare case-insensitively.
 		name = strings.ToLower(name)
 		if prior, ok := seen[name]; ok {
@@ -289,7 +301,7 @@ func (n nameMap) all() []string {
 // nameMap without going through [applyOverrides], the query builder
 // will refuse to operate on an unvalidated value.
 func (n nameMap) validateAll() error {
-	for _, name := range n.all() {
+	for _, name := range append(n.all(), n.versionTable) {
 		if err := validateIdentifier(name); err != nil {
 			return err
 		}

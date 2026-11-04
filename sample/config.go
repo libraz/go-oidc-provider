@@ -28,7 +28,7 @@ type config struct {
 	RedisDSN    string
 
 	// Insecure relaxes the checks that assume TLS: it admits the textual
-	// "localhost" host and lets the Redis adapter speak plaintext. It is
+	// "localhost" host in redirect URIs (and in an http issuer) and lets the Redis adapter speak plaintext. It is
 	// on for the loopback demo and off everywhere else.
 	Insecure bool
 

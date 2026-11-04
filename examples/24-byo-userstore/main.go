@@ -8,10 +8,15 @@
 // The pattern at a glance:
 //
 //   - A members table, owned by the embedder, holds member_id,
-//     email_address, password_phc, full_name, locale_pref,
+//     subject, email_address, password_phc, full_name, locale_pref,
 //     tenant_id, last_modified. None of those names match the OP's
 //     bundled oidc_users schema, and the embedder is free to add
 //     more columns the OP never observes.
+//   - The subject column is the OIDC "sub": an opaque, random,
+//     never-reused identifier kept apart from the member_id primary key,
+//     so a sequential key is never exposed to RPs and the "sub" survives
+//     a change of the application's own key. FindBySubject looks members
+//     up by it.
 //   - MemberUserStore projects rows from members onto store.User
 //     (Subject / Claims / UpdatedAt) and satisfies
 //     store.UserPasswordStore so the PrimaryPassword Step can verify
@@ -98,7 +103,7 @@ const (
 
 	demoUsername = "demo@example.test"
 	demoPassword = "demo"
-	demoSubject  = "mem-0001"
+	demoMemberID = "mem-0001"
 )
 
 func main() {
@@ -126,7 +131,8 @@ func run() error {
 		return fmt.Errorf("apply members DDL: %w", err)
 	}
 
-	if err := seedMember(ctx, db); err != nil {
+	subject, err := seedMember(ctx, db)
+	if err != nil {
 		return fmt.Errorf("seed demo member: %w", err)
 	}
 
@@ -165,7 +171,7 @@ func run() error {
 	rpMux.Handle("/", rp.Handler())
 
 	log.Printf("RP listening on %s — open %s/", rpAddr, rpBase)
-	log.Printf("demo member: username=%q password=%q", demoUsername, demoPassword)
+	log.Printf("demo member: username=%q password=%q (member_id %q, opaque sub %q)", demoUsername, demoPassword, demoMemberID, subject)
 
 	rpErrCh := make(chan error, 1)
 	go func() { rpErrCh <- serve.Listen(rpAddr, rpMux) }()

@@ -25,13 +25,19 @@ import (
 // resolve at /userinfo; disableUser sets it. The subject is the subject column, an opaque
 // value assigned once per row and never reused; the row id would leak
 // the user count to every RP and can be reissued after a delete.
-type userTable struct{ db *databasesql.DB }
+type userTable struct {
+	db  *databasesql.DB
+	eng engine
+}
 
 var (
 	_ store.UserPasswordStore       = (*userTable)(nil)
 	_ store.UserPasswordHashUpdater = (*userTable)(nil)
 	_ store.SchemaValidator         = (*userTable)(nil)
 )
+
+// q spells the "?" bind parameters of query the way the engine expects.
+func (u *userTable) q(query string) string { return u.eng.placeholders(query) }
 
 // ValidateSchema is called by op.New, so a missing app_users table or
 // column fails at startup instead of on the first login. It reads
@@ -59,7 +65,7 @@ func (u *userTable) FindByUsername(ctx context.Context, username string) (*store
 
 func (u *userTable) find(ctx context.Context, where string, arg any) (*store.User, error) {
 	var subject, email, name string
-	err := u.db.QueryRowContext(ctx, "SELECT subject, email, display_name FROM app_users WHERE disabled_at IS NULL AND "+where, arg).
+	err := u.db.QueryRowContext(ctx, u.q("SELECT subject, email, display_name FROM app_users WHERE disabled_at IS NULL AND "+where), arg).
 		Scan(&subject, &email, &name)
 	if errors.Is(err, databasesql.ErrNoRows) {
 		return nil, store.ErrNotFound
@@ -80,7 +86,7 @@ func (u *userTable) find(ctx context.Context, where string, arg any) (*store.Use
 // by the OP itself.
 func (u *userTable) ReadPasswordHash(ctx context.Context, subject string) ([]byte, error) {
 	var hash databasesql.NullString
-	err := u.db.QueryRowContext(ctx, "SELECT password_hash FROM app_users WHERE subject = ? AND disabled_at IS NULL", subject).Scan(&hash)
+	err := u.db.QueryRowContext(ctx, u.q("SELECT password_hash FROM app_users WHERE subject = ? AND disabled_at IS NULL"), subject).Scan(&hash)
 	if errors.Is(err, databasesql.ErrNoRows) || (err == nil && hash.String == "") {
 		return nil, store.ErrNotFound
 	}
@@ -94,7 +100,7 @@ func (u *userTable) ReadPasswordHash(ctx context.Context, subject string) ([]byt
 // password that matched a bcrypt hash. A failure here never fails the
 // login; the OP retries on the next one.
 func (u *userTable) UpdatePasswordHash(ctx context.Context, subject string, encoded []byte) error {
-	res, err := u.db.ExecContext(ctx, "UPDATE app_users SET password_hash = ? WHERE subject = ? AND disabled_at IS NULL", string(encoded), subject)
+	res, err := u.db.ExecContext(ctx, u.q("UPDATE app_users SET password_hash = ? WHERE subject = ? AND disabled_at IS NULL"), string(encoded), subject)
 	if err != nil {
 		return err
 	}
@@ -116,10 +122,10 @@ func (u *userTable) UpdatePasswordHash(ctx context.Context, subject string, enco
 // sessions are not revoked, but a session cannot mint tokens once its
 // grants are gone, and the next /authorize fails to resolve the subject.
 // Run it again after a failed revocation; both steps are idempotent.
-func disableUser(ctx context.Context, db *databasesql.DB, provider *op.Provider, subject string) error {
-	if _, err := db.ExecContext(ctx,
-		"UPDATE app_users SET disabled_at = ? WHERE subject = ? AND disabled_at IS NULL",
-		time.Now().UTC().Format(time.RFC3339), subject); err != nil { //nolint:forbidigo // example admin command; embedders pass their own clock.
+func (u *userTable) disableUser(ctx context.Context, provider *op.Provider, subject string) error {
+	if _, err := u.db.ExecContext(ctx,
+		u.q("UPDATE app_users SET disabled_at = ? WHERE subject = ? AND disabled_at IS NULL"),
+		u.eng.timeArg(time.Now()), subject); err != nil { //nolint:forbidigo // example admin command; embedders pass their own clock.
 		return fmt.Errorf("disable user: %w", err)
 	}
 	if err := provider.RevokeSubject(ctx, subject); err != nil {
@@ -130,9 +136,9 @@ func disableUser(ctx context.Context, db *databasesql.DB, provider *op.Provider,
 
 // disableUserByEmail resolves the subject of the (possibly already
 // disabled) account with the given email and disables it.
-func disableUserByEmail(ctx context.Context, db *databasesql.DB, provider *op.Provider, email string) error {
+func (u *userTable) disableUserByEmail(ctx context.Context, provider *op.Provider, email string) error {
 	var subject string
-	err := db.QueryRowContext(ctx, "SELECT subject FROM app_users WHERE email = ?",
+	err := u.db.QueryRowContext(ctx, u.q("SELECT subject FROM app_users WHERE email = ?"),
 		strings.ToLower(strings.TrimSpace(email))).Scan(&subject)
 	if errors.Is(err, databasesql.ErrNoRows) {
 		return fmt.Errorf("no user with email %q", email)
@@ -140,7 +146,7 @@ func disableUserByEmail(ctx context.Context, db *databasesql.DB, provider *op.Pr
 	if err != nil {
 		return err
 	}
-	return disableUser(ctx, db, provider, subject)
+	return u.disableUser(ctx, provider, subject)
 }
 
 // demoUsers stands in for the rows an existing application already has.
@@ -152,20 +158,13 @@ var demoUsers = []struct{ email, name, password string }{
 // createDemoUsers creates the application's users table with bcrypt
 // hashes, as a system migrating to this OP would already have it. It
 // runs with EXAMPLE53_MIGRATE=1 only; a real deployment owns this table
-// and its rows. INSERT OR IGNORE is SQLite (MySQL spells it INSERT
-// IGNORE), and it keeps a hash a previous login already rewrote.
+// and its rows. The insert skips an existing email in each engine's own
+// spelling, which keeps a hash a previous login already rewrote.
 // A table without an opaque immutable identifier adds the subject column
 // and backfills it once; the bring-your-own user store page gives the
-// ALTER for each engine. The random default here is SQLite's spelling.
-func createDemoUsers(ctx context.Context, db *databasesql.DB) error {
-	if _, err := db.ExecContext(ctx, `CREATE TABLE IF NOT EXISTS app_users (
-		id INTEGER PRIMARY KEY,
-		subject TEXT UNIQUE NOT NULL DEFAULT (lower(hex(randomblob(16)))),
-		email TEXT UNIQUE NOT NULL,
-		display_name TEXT NOT NULL,
-		password_hash TEXT,
-		disabled_at TEXT
-	)`); err != nil {
+// ALTER for each engine. The random default is per engine in dialect.go.
+func (u *userTable) createDemoUsers(ctx context.Context) error {
+	if _, err := u.db.ExecContext(ctx, u.eng.usersDDL); err != nil {
 		return err
 	}
 	for _, d := range demoUsers {
@@ -173,8 +172,7 @@ func createDemoUsers(ctx context.Context, db *databasesql.DB) error {
 		if err != nil {
 			return err
 		}
-		if _, err := db.ExecContext(ctx,
-			"INSERT OR IGNORE INTO app_users (email, display_name, password_hash) VALUES (?, ?, ?)",
+		if _, err := u.db.ExecContext(ctx, u.q(u.eng.insertUser),
 			d.email, d.name, string(hash)); err != nil {
 			return err
 		}

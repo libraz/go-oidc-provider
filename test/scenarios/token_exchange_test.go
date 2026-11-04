@@ -474,7 +474,7 @@ func TestScenario_TX_010_AudienceOutsideAllowedResourcesRejected(t *testing.T) {
 // error, so no impersonation-shaped exchange succeeds without explicit
 // per-client authorisation.
 //
-// Tracks: CVE-2026-109374 (ZITADEL — token exchange skipped its
+// Tracks: CVE-2026-109374 (another OP — token exchange skipped its
 // impersonation-permission check, letting an end-user impersonator sign
 // in as an administrator).
 func TestScenario_TX_011_PolicyErrorPreservedVerbatim(t *testing.T) {

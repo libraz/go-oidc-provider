@@ -23,7 +23,7 @@ import (
 // that splits the counter into per-factor instances (which would
 // defeat) breaks this test.
 //
-// Tracks: CVE-2026-9798 (Keycloak) — a CIBA authentication flow bypassed
+// Tracks: CVE-2026-9798 (another OP) — a CIBA authentication flow bypassed
 // the brute-force account lockout that interactive login enforces, i.e.
 // an alternate authentication flow received a separate brute-force
 // budget. The structural property this pins is that every OP-side

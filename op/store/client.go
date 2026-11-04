@@ -141,6 +141,28 @@ type Client struct {
 	// byte-for-byte against the protected header.
 	TokenEndpointAuthSigningAlg string
 
+	// TLSClientAuthSubjectDN is RFC 8705 §2.1.2 tls_client_auth_subject_dn:
+	// the RFC 4514 subject DN a tls_client_auth client's certificate
+	// carries. A tls_client_auth client sets exactly one of the five
+	// TLSClientAuth* matchers; other methods leave all five empty.
+	TLSClientAuthSubjectDN string
+
+	// TLSClientAuthSANDNS is RFC 8705 §2.1.2 tls_client_auth_san_dns: a
+	// dNSName SAN the certificate carries, compared case-insensitively.
+	TLSClientAuthSANDNS string
+
+	// TLSClientAuthSANURI is RFC 8705 §2.1.2 tls_client_auth_san_uri: a
+	// uniformResourceIdentifier SAN the certificate carries.
+	TLSClientAuthSANURI string
+
+	// TLSClientAuthSANIP is RFC 8705 §2.1.2 tls_client_auth_san_ip: an
+	// iPAddress SAN the certificate carries, as an IPv4 or IPv6 literal.
+	TLSClientAuthSANIP string
+
+	// TLSClientAuthSANEmail is RFC 8705 §2.1.2 tls_client_auth_san_email:
+	// an rfc822Name SAN the certificate carries.
+	TLSClientAuthSANEmail string
+
 	// SecretHash is the salted hash of the client_secret for clients that
 	// authenticate with a shared secret. Backends MUST NOT store the raw
 	// secret; the library never writes one back. The value is opaque to

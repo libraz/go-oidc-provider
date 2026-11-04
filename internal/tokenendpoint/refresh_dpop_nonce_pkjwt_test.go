@@ -196,7 +196,7 @@ func TestRefresh_DPoPNonce_PrivateKeyJWTRetryAdmitsSameJTI(t *testing.T) {
 
 	// First attempt: proof without nonce. Expect use_dpop_nonce
 	// challenge BEFORE the client_assertion jti is consumed.
-	proof1 := makeDPoPProofWithNonce(t, key, "POST", f.endpoint, f.clock.now, "dpop-jti-1", "")
+	proof1 := makeDPoPProofWithNonce(t, key, "POST", f.htu(), f.clock.now, "dpop-jti-1", "")
 	resp1 := postPKJWTWithDPoP(t, f, form, proof1)
 	defer resp1.Body.Close()
 	if resp1.StatusCode != http.StatusBadRequest {
@@ -213,7 +213,7 @@ func TestRefresh_DPoPNonce_PrivateKeyJWTRetryAdmitsSameJTI(t *testing.T) {
 
 	// Second attempt: same client_assertion (same jti), fresh DPoP
 	// proof with the issued nonce. Must complete the rotation.
-	proof2 := makeDPoPProofWithNonce(t, key, "POST", f.endpoint, f.clock.now, "dpop-jti-2", freshNonce)
+	proof2 := makeDPoPProofWithNonce(t, key, "POST", f.htu(), f.clock.now, "dpop-jti-2", freshNonce)
 	resp2 := postPKJWTWithDPoP(t, f, form, proof2)
 	defer resp2.Body.Close()
 	if resp2.StatusCode != http.StatusOK {
@@ -266,7 +266,7 @@ func TestRefresh_DPoPNonce_PrivateKeyJWTReplayStillRejected(t *testing.T) {
 	// First attempt — happy path. The current nonce is the value
 	// fakeNonceSource.IssueNonce() returned during fixture setup.
 	currentNonce := *source.current.Load()
-	proof1 := makeDPoPProofWithNonce(t, key, "POST", f.endpoint, f.clock.now, "dpop-jti-A", currentNonce)
+	proof1 := makeDPoPProofWithNonce(t, key, "POST", f.htu(), f.clock.now, "dpop-jti-A", currentNonce)
 	form1 := refreshForm(tokenID, "")
 	form1.Set("client_assertion", assertion)
 	form1.Set("client_assertion_type", "urn:ietf:params:oauth:client-assertion-type:jwt-bearer")
@@ -280,7 +280,7 @@ func TestRefresh_DPoPNonce_PrivateKeyJWTReplayStillRejected(t *testing.T) {
 	// proof itself is fresh (new jti, current nonce) so the reject
 	// MUST come from the assertion's replay gate, not the proof's.
 	currentNonce = *source.current.Load() // sliding nonce: re-read after rotation.
-	proof2 := makeDPoPProofWithNonce(t, key, "POST", f.endpoint, f.clock.now, "dpop-jti-B", currentNonce)
+	proof2 := makeDPoPProofWithNonce(t, key, "POST", f.htu(), f.clock.now, "dpop-jti-B", currentNonce)
 	form2 := refreshForm(tokenID2, "")
 	form2.Set("client_assertion", assertion)
 	form2.Set("client_assertion_type", "urn:ietf:params:oauth:client-assertion-type:jwt-bearer")

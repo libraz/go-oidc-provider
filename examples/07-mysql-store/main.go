@@ -8,6 +8,11 @@
 // the example complements 09-redis-volatile, which routes the
 // volatile substores to Redis through op/storeadapter/composite.
 //
+// Users are the adapter-owned oidc_users table, for a deployment with no
+// users table of its own. An application that already has one keeps it:
+// see 24-byo-userstore (projection onto an existing table) and
+// 53-production-sql (the same on MySQL or PostgreSQL, with bcrypt hashes).
+//
 // The example pairs the OP with an in-process RP (built on
 // examples/internal/rpkit) so an embedder can drive a full
 // Authorization Code + PKCE round-trip from a browser without any

@@ -9,74 +9,64 @@ import (
 	"github.com/libraz/go-oidc-provider/op/feature"
 )
 
-// mtlsWarningFragment is the phrase both partial-wiring warnings share.
-// Matching on it rather than on a whole sentence keeps the assertions
-// from re-pinning the wording, while still failing if the warning stops
-// naming the reason.
-const mtlsWarningFragment = "the mTLS feature is not enabled"
-
-// TestNew_WarnsWhenMTLSProxyIsConfiguredWithoutTheFeature covers the
-// combination that reads as certificate binding and behaves as none at
-// all. Without [feature.MTLS] the OP builds no verifier, so the recorded
-// proxy allow-list is never consulted: the forwarded certificate is
-// ignored and the access token is issued as a plain bearer with no
-// cnf.x5t#S256. Nothing fails, and [op.MTLSProxyConfig] reads the
-// configured value back unchanged, so the deployment has no way to
-// notice from its own configuration.
-func TestNew_WarnsWhenMTLSProxyIsConfiguredWithoutTheFeature(t *testing.T) {
+// TestNew_RejectsMTLSOptionsWithoutTheFeature covers the combination that
+// reads as certificate binding and behaves as none at all. Without
+// [feature.MTLS] the OP builds no verifier, so a configured proxy
+// allow-list or trust-anchor pool is never consulted: the forwarded
+// certificate is ignored and the access token is issued as a plain bearer
+// with no cnf.x5t#S256. Construction refuses it, naming the option.
+func TestNew_RejectsMTLSOptionsWithoutTheFeature(t *testing.T) {
 	t.Parallel()
 
-	logged := warnings(t, append(validBaseOpts(t),
-		op.WithMTLSProxy("X-Client-Cert", []string{"10.0.0.0/8"}),
-	)...)
-	if !strings.Contains(logged, mtlsWarningFragment) {
-		t.Fatalf("no warning about the missing mTLS feature; got:\n%s", logged)
-	}
-	if !strings.Contains(logged, "WithMTLSProxy") {
-		t.Errorf("warning does not name WithMTLSProxy; got:\n%s", logged)
+	for _, tc := range []struct {
+		name   string
+		opt    op.Option
+		option string
+	}{
+		{
+			"WithMTLSProxy",
+			op.WithMTLSProxy(op.MTLSProxy{HeaderName: "X-Client-Cert", TrustedProxies: []string{"10.0.0.0/8"}}),
+			"WithMTLSProxy",
+		},
+		{"WithMTLSRootCAs", op.WithMTLSRootCAs(x509.NewCertPool()), "WithMTLSRootCAs"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			_, err := op.New(append(validBaseOpts(t), tc.opt)...)
+			if err == nil {
+				t.Fatal("op.New accepted an mTLS option without feature.MTLS")
+			}
+			if !strings.Contains(err.Error(), "the mTLS feature is not enabled") {
+				t.Errorf("err = %v, want it to name the missing feature", err)
+			}
+			if !strings.Contains(err.Error(), tc.option) {
+				t.Errorf("err = %v, want it to name %s", err, tc.option)
+			}
+		})
 	}
 }
 
-// TestNew_WarnsWhenMTLSRootCAsAreConfiguredWithoutTheFeature is the
-// sibling condition: trust anchors installed for a chain check that
-// never runs.
-func TestNew_WarnsWhenMTLSRootCAsAreConfiguredWithoutTheFeature(t *testing.T) {
+// TestNew_AcceptsMTLSOptionsWithTheFeatureEnabled is the half that keeps
+// the refusal worth reading. With the feature on, both options are wired
+// into a real verifier.
+func TestNew_AcceptsMTLSOptionsWithTheFeatureEnabled(t *testing.T) {
 	t.Parallel()
 
-	logged := warnings(t, append(validBaseOpts(t),
-		op.WithMTLSRootCAs(x509.NewCertPool()),
-	)...)
-	if !strings.Contains(logged, mtlsWarningFragment) {
-		t.Fatalf("no warning about the missing mTLS feature; got:\n%s", logged)
-	}
-	if !strings.Contains(logged, "WithMTLSRootCAs") {
-		t.Errorf("warning does not name WithMTLSRootCAs; got:\n%s", logged)
-	}
-}
-
-// TestNew_DoesNotWarnAboutMTLSOptionsWithTheFeatureEnabled is the half
-// that keeps the warning worth reading. With the feature on, both
-// options are wired into a real verifier and there is nothing to say.
-func TestNew_DoesNotWarnAboutMTLSOptionsWithTheFeatureEnabled(t *testing.T) {
-	t.Parallel()
-
-	logged := warnings(t, append(validBaseOpts(t),
+	if _, err := op.New(append(validBaseOpts(t),
 		op.WithFeature(feature.MTLS),
-		op.WithMTLSProxy("X-Client-Cert", []string{"10.0.0.0/8"}),
+		op.WithMTLSProxy(op.MTLSProxy{HeaderName: "X-Client-Cert", TrustedProxies: []string{"10.0.0.0/8"}}),
 		op.WithMTLSRootCAs(x509.NewCertPool()),
-	)...)
-	if strings.Contains(logged, mtlsWarningFragment) {
-		t.Fatalf("warned about mTLS options on an mTLS-enabled OP; got:\n%s", logged)
+	)...); err != nil {
+		t.Fatalf("op.New: %v", err)
 	}
 }
 
-// TestNew_DoesNotWarnAboutMTLSWithoutTheOptions pins the other trigger
-// condition: an OP that never mentions mTLS says nothing about it.
-func TestNew_DoesNotWarnAboutMTLSWithoutTheOptions(t *testing.T) {
+// TestNew_AcceptsWithoutMTLSOptions pins the other trigger condition: an OP
+// that never mentions mTLS is not affected.
+func TestNew_AcceptsWithoutMTLSOptions(t *testing.T) {
 	t.Parallel()
 
-	logged := warnings(t, validBaseOpts(t)...)
-	if strings.Contains(logged, mtlsWarningFragment) {
-		t.Fatalf("warned with no mTLS option configured; got:\n%s", logged)
+	if _, err := op.New(validBaseOpts(t)...); err != nil {
+		t.Fatalf("op.New: %v", err)
 	}
 }

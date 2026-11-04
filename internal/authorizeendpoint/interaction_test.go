@@ -415,7 +415,7 @@ func TestInteractionDelete_DenyIgnoresRequestRedirectParams(t *testing.T) {
 // TestInteraction_ProofCookieNotDerivableFromClientKnownValues pins that the
 // interaction cookie and the CSRF token cannot be forged from the uid alone,
 // and that a genuine cookie is bound to its own interaction.
-// Tracks: GHSA-84fg-x5h4-w8xv (ZITADEL) — step-completion proof derived from client-known values was forgeable
+// Tracks: GHSA-84fg-x5h4-w8xv (another OP) — step-completion proof derived from client-known values was forgeable
 func TestInteraction_ProofCookieNotDerivableFromClientKnownValues(t *testing.T) {
 	t.Parallel()
 
@@ -1260,7 +1260,7 @@ func (s *findFaultSessionStore) Find(ctx context.Context, id string) (*store.Ses
 // pre-fixation cookie value (planted by an attacker who could read or
 // observe it before the user logged in) would remain valid.
 //
-// Tracks: CVE-2026-7507 (Keycloak OIDC-login session fixation → account
+// Tracks: CVE-2026-7507 (another OP OIDC-login session fixation → account
 // takeover) — the authenticated session was not rebound across the
 // privilege transition, so a pre-seeded session ID survived login. The
 // structural property pinned here is that a fresh authn factor at the

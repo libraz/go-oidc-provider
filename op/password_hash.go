@@ -6,7 +6,7 @@ import (
 
 	"golang.org/x/crypto/bcrypt"
 
-	"github.com/libraz/go-oidc-provider/internal/authn/password"
+	"github.com/libraz/go-oidc-provider/op/authn"
 )
 
 // bcryptMaxPasswordBytes is bcrypt's input limit; longer input is silently
@@ -24,7 +24,7 @@ const bcryptMaxCost = 15
 // returns an error only for a backend fault, never for a mismatch.
 //
 // Stable since v1.5.
-type PasswordHashScheme = password.LegacyScheme
+type PasswordHashScheme = authn.PasswordHashScheme
 
 // BcryptHashScheme returns the [PasswordHashScheme] for bcrypt hashes
 // ($2a$, $2b$ and $2y$ prefixes).

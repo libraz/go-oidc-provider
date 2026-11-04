@@ -33,7 +33,8 @@
 // schema/migrations/<dialect>, one per release in golang-migrate form.
 // [Store.Migrate] creates or upgrades the database by applying them in
 // order and recording the version in the table <prefix>schema_migrations
-// (oidc_schema_migrations by default), laid out as golang-migrate's own
+// (oidc_schema_migrations by default; the "schema_migrations" [WithNaming]
+// key renames it), laid out as golang-migrate's own
 // version table. Call it from a deploy job with a context long enough
 // for the DDL. A team that runs golang-migrate instead applies the files
 // [Store.Migrations] returns, with any [WithTablePrefix] and [WithNaming]

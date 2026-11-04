@@ -289,3 +289,24 @@ func isLetterOrUnderscore(r rune) bool {
 func isIdentChar(r rune) bool {
 	return isLetterOrUnderscore(r) || (r >= '0' && r <= '9')
 }
+
+func TestVersionTableNaming(t *testing.T) {
+	t.Parallel()
+	n := namesWithPrefix("acme_")
+	if n.versionTable != "acme_schema_migrations" {
+		t.Errorf("default version table = %q", n.versionTable)
+	}
+	if err := n.applyOverrides(map[string]string{"schema_migrations": "versions"}); err != nil {
+		t.Fatalf("applyOverrides: %v", err)
+	}
+	if n.versionTable != "versions" {
+		t.Errorf("version table = %q, want versions", n.versionTable)
+	}
+	err := n.applyOverrides(map[string]string{"schema_migrations": "acme_clients"})
+	if err == nil || !strings.Contains(err.Error(), "collision") {
+		t.Errorf("collision with a table: err = %v", err)
+	}
+	if err := n.applyOverrides(map[string]string{"schema_migrations": "1bad"}); err == nil {
+		t.Error("invalid identifier accepted")
+	}
+}

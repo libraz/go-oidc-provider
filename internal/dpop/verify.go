@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"slices"
 	"time"
 
 	"github.com/libraz/go-oidc-provider/internal/audit"
@@ -207,10 +208,10 @@ type VerifyInput struct {
 	// Method is the request's HTTP verb, used to validate "htm".
 	Method string
 
-	// URL is the request URL the verifier compares against "htu".
-	// Callers MUST pass the URL the RP would have addressed (i.e.
-	// taking any reverse-proxy rewrite into account); the verifier
-	// strips query / fragment internally.
+	// URL is the request URL the verifier compares against "htu" when
+	// [VerifyInput.AdvertisedHTU] is empty. Callers MUST pass the URL
+	// the RP would have addressed (i.e. taking any reverse-proxy rewrite
+	// into account); the verifier strips query / fragment internally.
 	URL *url.URL
 
 	// Host is consulted as a fallback when URL.Host is empty (the
@@ -220,6 +221,14 @@ type VerifyInput struct {
 	// TLS is true when the connection terminated TLS at the OP. It
 	// drives the canonical scheme when URL.Scheme is empty.
 	TLS bool
+
+	// AdvertisedHTU, when non-empty, replaces the request-derived URL in
+	// the "htu" comparison: the proof must name one of these absolute
+	// URLs, which an OP endpoint sets to what discovery publishes for it.
+	// The comparison is independent of how a proxy rewrote the request.
+	// Empty keeps the request-derived comparison a resource server needs,
+	// since only the request tells it its own external URL.
+	AdvertisedHTU []string
 
 	// AccessToken is the bearer token the request also carries, or
 	// "" if the proof is not paired with an access token (the typical
@@ -366,8 +375,11 @@ func (v *Verifier) Check(ctx context.Context, in VerifyInput) (*Checked, error) 
 			},
 		})
 	}
-	requestURL := canonicalRequestURL(requestURLSource{URL: in.URL, Host: in.Host, TLS: in.TLS})
-	if !canonicalEqual(parsed.claims.HTU, requestURL) {
+	if len(in.AdvertisedHTU) > 0 {
+		if !slices.ContainsFunc(in.AdvertisedHTU, func(u string) bool { return canonicalEqual(parsed.claims.HTU, u) }) {
+			return nil, ErrProofHTUMismatch
+		}
+	} else if !canonicalEqual(parsed.claims.HTU, canonicalRequestURL(requestURLSource{URL: in.URL, Host: in.Host, TLS: in.TLS})) {
 		return nil, ErrProofHTUMismatch
 	}
 
@@ -464,10 +476,17 @@ func (v *Verifier) checkNonce(nonce string) error {
 // "DPoP" header values surface as [ErrProofMalformed] so the handler
 // emits invalid_request rather than silently picking the first proof.
 func (v *Verifier) VerifyHTTPRequest(ctx context.Context, r *http.Request, accessToken string) (*VerifyResult, error) {
+	return v.VerifyHTTPRequestAt(ctx, r, accessToken, nil)
+}
+
+// VerifyHTTPRequestAt is [Verifier.VerifyHTTPRequest] with the "htu"
+// compared against advertised; see [VerifyInput.AdvertisedHTU].
+func (v *Verifier) VerifyHTTPRequestAt(ctx context.Context, r *http.Request, accessToken string, advertised []string) (*VerifyResult, error) {
 	in, err := httpVerifyInput(r, accessToken)
 	if err != nil {
 		return nil, err
 	}
+	in.AdvertisedHTU = advertised
 	return v.Verify(ctx, in)
 }
 
@@ -477,10 +496,17 @@ func (v *Verifier) VerifyHTTPRequest(ctx context.Context, r *http.Request, acces
 // [Verifier.Commit]. Endpoints that authenticate the client between
 // the two phases use this entry point.
 func (v *Verifier) CheckHTTPRequest(ctx context.Context, r *http.Request, accessToken string) (*Checked, error) {
+	return v.CheckHTTPRequestAt(ctx, r, accessToken, nil)
+}
+
+// CheckHTTPRequestAt is [Verifier.CheckHTTPRequest] with the "htu"
+// compared against advertised; see [VerifyInput.AdvertisedHTU].
+func (v *Verifier) CheckHTTPRequestAt(ctx context.Context, r *http.Request, accessToken string, advertised []string) (*Checked, error) {
 	in, err := httpVerifyInput(r, accessToken)
 	if err != nil {
 		return nil, err
 	}
+	in.AdvertisedHTU = advertised
 	return v.Check(ctx, in)
 }
 

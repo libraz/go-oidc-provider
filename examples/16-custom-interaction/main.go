@@ -123,7 +123,7 @@ func main() {
 		op.WithKeyset(keys.Keyset()),
 		op.WithCookieKeys(keys.CookieKey),
 		// Admit "localhost" as a redirect_uri host alongside 127.0.0.1.
-		op.WithAllowLocalhostLoopback(),
+		op.WithAllowLocalhostRedirectURIs(),
 		// A Driver renders prompts, and prompts only exist because some
 		// step in the login flow asked for input. One password step is
 		// the smallest flow that gives this Driver something to render.

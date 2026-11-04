@@ -327,7 +327,7 @@ func TestClientCredentials_DPoPBound(t *testing.T) {
 	key := newDPoPKey(t)
 
 	form := clientCredsForm("read")
-	proof := makeDPoPProof(t, key, "POST", f.endpoint, f.clock.now, "jti-cc-dpop", "")
+	proof := makeDPoPProof(t, key, "POST", f.htu(), f.clock.now, "jti-cc-dpop", "")
 	resp := postWithDPoP(t, f.prov.HTTPClient(nil), f.endpoint, form, client.ID, secret, proof)
 	defer resp.Body.Close()
 

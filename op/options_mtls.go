@@ -6,7 +6,8 @@ import (
 
 // WithMTLSRootCAs installs the trust anchors the OP validates client
 // certificates against before it uses them for RFC 8705 §3 token
-// binding. The pool is consulted by the OP's own mTLS verifier on
+// binding or §2.1 tls_client_auth client authentication. The pool is
+// consulted by the OP's own mTLS verifier on
 // every request that carries a client certificate, whichever source it
 // came from: the TLS handshake, or the forwarded header configured by
 // [WithMTLSProxy].
@@ -31,20 +32,32 @@ import (
 // certificate surfaces at the request that presented it rather than
 // producing a token nobody expected to be unbound.
 //
+// tls_client_auth admits only a chain-verified certificate. Over direct
+// TLS the handshake's verified chains suffice; a forwarded certificate is
+// verified only by this pool, so [New] fails when tls_client_auth is
+// reachable through [WithMTLSProxy] without it.
+//
+// The pool does not apply to a client registered for
+// self_signed_tls_client_auth. Its certificate authenticates by matching a
+// key in the client's jwks / jwks_uri (RFC 8705 §2.2) and is bound to its
+// tokens as cnf.x5t#S256 without a chain check, at /token and wherever the
+// binding is re-verified. A forwarded certificate still has to arrive from
+// a [WithMTLSProxy] trusted source. Every other client, tls_client_auth or
+// any method using certificate-bound tokens, stays under the pool.
+//
 // Leave the option unset (the default) when TLS termination — direct
-// or at a trusted proxy — has already validated the client chain. A
+// or at a trusted proxy — has already validated the client chain and no
+// tls_client_auth client sits behind a proxy. A
 // nil pool is rejected at construction: [x509.NewCertPool] with no
 // certificate added is the way to express "trust nothing", and
 // accepting nil here would silently mean "trust whatever the transport
 // gave us", the opposite of the caller's evident intent.
 //
 // The pool is consumed by the mTLS verifier, which only exists when
-// [feature.MTLS] is enabled; without that flag there is no
-// certificate-binding path for the anchors to govern, the pool is never
-// consulted, and access tokens are issued as plain bearer tokens.
-// [New] logs a partial-wiring warning in that case rather than failing,
-// so a deployment that provisions anchors ahead of the flag keeps
-// booting. Pair the option with WithFeature(feature.MTLS).
+// [feature.MTLS] is enabled. Without that flag there is no
+// certificate-binding path for the anchors to govern, so [New] fails
+// rather than let the pool go unread while access tokens are issued as
+// plain bearer tokens. Pair the option with WithFeature(feature.MTLS).
 //
 // Stable since v1.1.
 func WithMTLSRootCAs(pool *x509.CertPool) Option {

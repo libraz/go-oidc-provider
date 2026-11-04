@@ -1,6 +1,6 @@
 package op
 
-import "github.com/libraz/go-oidc-provider/internal/authn"
+import "github.com/libraz/go-oidc-provider/op/authn"
 
 // LoginFlow is the high-level seam embedders use to compose an OIDC
 // login. The struct describes the primary credential, a list of

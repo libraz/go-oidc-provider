@@ -83,7 +83,7 @@ func main() {
 		op.WithCookieKeys(keys.CookieKey),
 		// Admit the textual "localhost" host alongside 127.0.0.1
 		// loopback literals so the demo's redirect_uri parses.
-		op.WithAllowLocalhostLoopback(),
+		op.WithAllowLocalhostRedirectURIs(),
 		// The OIDC client still needs an interactive password prompt
 		// for /authorize; the OAuth-only client uses the same login
 		// flow because both sit behind the same /authorize endpoint.

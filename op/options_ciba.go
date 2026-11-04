@@ -9,6 +9,7 @@ import (
 	"github.com/libraz/go-oidc-provider/internal/ciba"
 	"github.com/libraz/go-oidc-provider/internal/cibaendpoint"
 	"github.com/libraz/go-oidc-provider/internal/nilcheck"
+	opciba "github.com/libraz/go-oidc-provider/op/ciba"
 	"github.com/libraz/go-oidc-provider/op/grant"
 )
 
@@ -17,21 +18,21 @@ import (
 // closed: callers exhaustively switch on it and the linter flags any
 // new case the caller forgets to handle.
 //
-// The values mirror the internal [ciba.HintKind] constants verbatim
-// so a [HintResolver] implementation can compare without an explicit
-// adapter.
-type HintKind = ciba.HintKind
+// The declaration lives in
+// [github.com/libraz/go-oidc-provider/op/ciba.HintKind]; this is a
+// re-export so a [HintResolver] implementation stays on the op surface.
+type HintKind = opciba.HintKind
 
 const (
 	// HintNone is the zero value. The library never invokes a
 	// [HintResolver] with this kind alongside a successful classify;
 	// observing it indicates a bug in the dispatch.
-	HintNone = ciba.HintNone
+	HintNone = opciba.HintNone
 
 	// HintLoginHint means the request supplied a login_hint
 	// parameter (an opaque identifier the embedder's resolver maps
 	// to a stable subject).
-	HintLoginHint = ciba.HintLoginHint
+	HintLoginHint = opciba.HintLoginHint
 
 	// HintIDTokenHint means the request supplied an id_token_hint
 	// parameter: an ID Token this OP previously issued to the
@@ -42,12 +43,12 @@ const (
 	// issuer, and an audience naming the authenticated client — before
 	// any [HintResolver] runs. The value a resolver receives for this
 	// kind is therefore the OP-verified "sub" claim, never the JWT.
-	HintIDTokenHint = ciba.HintIDTokenHint
+	HintIDTokenHint = opciba.HintIDTokenHint
 
 	// HintLoginHintToken means the request supplied a
 	// login_hint_token parameter (a signed JWT the embedder's
 	// resolver verifies and maps to a stable subject).
-	HintLoginHintToken = ciba.HintLoginHintToken
+	HintLoginHintToken = opciba.HintLoginHintToken
 )
 
 // HintResolver maps an inbound CIBA hint to a stable end-user

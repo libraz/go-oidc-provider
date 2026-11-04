@@ -586,7 +586,7 @@ func TestContinueVerifySuccessStampsConsumedAt(t *testing.T) {
 // an email-delivered action link, whose one-time-use property must hold
 // so an intercepted code cannot be redeemed a second time.
 //
-// Tracks: CVE-2026-37982 (Keycloak) — required-action email links
+// Tracks: CVE-2026-37982 (another OP) — required-action email links
 // (WebAuthn / TOTP enrollment) had broken one-time-use semantics, so an
 // intercepted link replayed to enroll an attacker authenticator. The
 // structural property this pins is that an email-delivered single-use

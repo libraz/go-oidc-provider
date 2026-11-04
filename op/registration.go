@@ -176,10 +176,23 @@ type ClientMetadata struct {
 	// client_assertion signatures to this JWS alg when non-empty.
 	TokenEndpointAuthSigningAlg string
 
+	// TLSClientAuthSubjectDN, TLSClientAuthSANDNS, TLSClientAuthSANURI,
+	// TLSClientAuthSANIP and TLSClientAuthSANEmail are the RFC 8705 §2.1.2
+	// tls_client_auth_* matchers (subject DN, then the dNSName, URI,
+	// iPAddress and rfc822Name SANs). A tls_client_auth registration
+	// carries exactly one; every other token_endpoint_auth_method leaves
+	// all five empty. The library has already enforced that rule by the
+	// time the hook runs.
+	TLSClientAuthSubjectDN string
+	TLSClientAuthSANDNS    string
+	TLSClientAuthSANURI    string
+	TLSClientAuthSANIP     string
+	TLSClientAuthSANEmail  string
+
 	// ApplicationType is "web" (the default when omitted) or "native".
 	// Custom-scheme redirect URIs require "native"; loopback http
 	// redirect URIs admit the IP literals for either type and the
-	// textual "localhost" only under [WithAllowLocalhostLoopback].
+	// textual "localhost" only under [WithAllowLocalhostRedirectURIs].
 	ApplicationType string
 
 	// SubjectType is "public" or "pairwise". v1.0 only accepts

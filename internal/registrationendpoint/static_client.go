@@ -34,6 +34,12 @@ type StaticClientValidationOptions struct {
 	// library-supported method set.
 	AllowedClientAuthMethods []clientauth.Method
 
+	// ActiveProfile names the profile(s) that narrow
+	// AllowedClientAuthMethods, for example "profile.FAPI2Baseline". It
+	// is quoted in the rejection of a seed whose
+	// token_endpoint_auth_method the profile does not admit.
+	ActiveProfile string
+
 	// AllowedClientSigningAlgs mirrors [Deps.AllowedClientSigningAlgs].
 	AllowedClientSigningAlgs []internaljose.Algorithm
 
@@ -65,6 +71,15 @@ type StaticClientValidationOptions struct {
 	// static seed that declares an excluded algorithm from booting an
 	// OP whose runtime would refuse every encrypted exchange with it.
 	JWEPolicy internaljose.JWEPolicy
+
+	// MTLSClientAuth mirrors [Deps.MTLSClientAuth]: whether the RFC
+	// 8705 §2 methods are admitted at all.
+	MTLSClientAuth bool
+
+	// ProfileAdmitsMTLSClientAuth reports that the active profile would
+	// admit the RFC 8705 §2 methods with feature.MTLS on, so a profile
+	// rejection can name the mTLS seed types alongside the others.
+	ProfileAdmitsMTLSClientAuth bool
 }
 
 // StaticClientValidationError reports a structural rule violation a
@@ -150,7 +165,7 @@ func ValidateStaticClient(c store.Client, opts StaticClientValidationOptions) er
 		opts.AllowLocalhostLoopback,
 		opts.AllowInsecureBackchannelLogoutForDev,
 		opts.JWEPolicy,
-		profilePolicy{authMethods: opts.AllowedClientAuthMethods, signingAlgs: opts.AllowedClientSigningAlgs, signingAlg: opts.SigningAlg},
+		profilePolicy{authMethods: opts.AllowedClientAuthMethods, signingAlgs: opts.AllowedClientSigningAlgs, signingAlg: opts.SigningAlg, static: true, profileName: opts.ActiveProfile, mtlsClientAuth: opts.MTLSClientAuth, profileAdmitsMTLS: opts.ProfileAdmitsMTLSClientAuth},
 	)
 	if err == nil {
 		return nil
@@ -239,6 +254,11 @@ func staticClientToMetadata(c store.Client) ClientMetadata {
 		Scope:                             strings.Join(c.Scopes, " "),
 		TokenEndpointAuthMethod:           c.TokenEndpointAuthMethod,
 		TokenEndpointAuthSigningAlg:       c.TokenEndpointAuthSigningAlg,
+		TLSClientAuthSubjectDN:            c.TLSClientAuthSubjectDN,
+		TLSClientAuthSANDNS:               c.TLSClientAuthSANDNS,
+		TLSClientAuthSANURI:               c.TLSClientAuthSANURI,
+		TLSClientAuthSANIP:                c.TLSClientAuthSANIP,
+		TLSClientAuthSANEmail:             c.TLSClientAuthSANEmail,
 		ApplicationType:                   c.ApplicationType,
 		SubjectType:                       c.SubjectType,
 		IDTokenSignedResponseAlg:          c.IDTokenSignedResponseAlg,

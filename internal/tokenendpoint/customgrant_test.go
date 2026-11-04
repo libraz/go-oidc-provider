@@ -517,7 +517,7 @@ func TestCustomGrant_BoundAccessToken_DPoP(t *testing.T) {
 
 	key := newDPoPKey(t)
 	form := url.Values{"grant_type": []string{grantURN}}
-	proof := makeDPoPProof(t, key, "POST", f.endpoint, clock.now, "jti-cg-dpop-1", "")
+	proof := makeDPoPProof(t, key, "POST", f.htu(), clock.now, "jti-cg-dpop-1", "")
 	resp := postWithDPoP(t, prov.HTTPClient(nil), f.endpoint, form, client.ID, secret, proof)
 	defer resp.Body.Close()
 

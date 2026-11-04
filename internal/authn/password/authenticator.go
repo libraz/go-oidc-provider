@@ -12,6 +12,7 @@ import (
 	"github.com/libraz/go-oidc-provider/internal/authn"
 	"github.com/libraz/go-oidc-provider/internal/authn/lockout"
 	"github.com/libraz/go-oidc-provider/internal/clientauth"
+	opauthn "github.com/libraz/go-oidc-provider/op/authn"
 	"github.com/libraz/go-oidc-provider/op/interaction"
 	"github.com/libraz/go-oidc-provider/op/store"
 )
@@ -69,16 +70,16 @@ type Authenticator struct {
 	updater         store.UserPasswordHashUpdater
 	logger          *slog.Logger
 	unsupportedOnce *sync.Once
+
+	// unrecognizedOnce limits the unrecognized-hash warning to one per
+	// process-lifetime Authenticator; copies made by the With* methods share it.
+	unrecognizedOnce *sync.Once
 }
 
 // LegacyScheme verifies password hashes that are not argon2id PHC
-// strings. Recognizes selects the scheme by the stored encoding; Verify
-// reports a match, returning an error only for a backend fault (a
-// mismatch is (false, nil)).
-type LegacyScheme interface {
-	Recognizes(encoded []byte) bool
-	Verify(ctx context.Context, encoded []byte, password string) (bool, error)
-}
+// strings; the declaration is
+// [github.com/libraz/go-oidc-provider/op/authn.PasswordHashScheme].
+type LegacyScheme = opauthn.PasswordHashScheme
 
 // Config carries the optional legacy-hash settings applied by
 // [Authenticator.WithConfig].
@@ -102,6 +103,7 @@ func (a *Authenticator) WithConfig(cfg Config) *Authenticator {
 	cp.updater = cfg.HashUpdater
 	cp.logger = cfg.Logger
 	cp.unsupportedOnce = &sync.Once{}
+	cp.unrecognizedOnce = &sync.Once{}
 	return &cp
 }
 
@@ -130,7 +132,7 @@ func NewAuthenticator(s store.UserPasswordStore) (*Authenticator, error) {
 	if s == nil {
 		return nil, ErrStoreRequired
 	}
-	return &Authenticator{store: s, unsupportedOnce: &sync.Once{}}, nil
+	return &Authenticator{store: s, unsupportedOnce: &sync.Once{}, unrecognizedOnce: &sync.Once{}}, nil
 }
 
 // Type implements [authn.Authenticator]. Always returns
@@ -255,6 +257,9 @@ func (a *Authenticator) verifyCandidate(ctx context.Context, hash []byte, candid
 	if consult {
 		scheme = a.legacySchemeFor(hash)
 	}
+	if scheme == nil && consult {
+		a.warnUnrecognized(ctx, hash)
+	}
 	if scheme != nil {
 		ok, err := scheme.Verify(ctx, hash, candidate)
 		if err != nil {
@@ -300,6 +305,22 @@ func (a *Authenticator) legacySchemeFor(hash []byte) LegacyScheme { //nolint:ire
 		}
 	}
 	return nil
+}
+
+// warnUnrecognized logs once that a stored hash is neither argon2id nor
+// claimed by a configured scheme. It names neither the user nor the hash.
+func (a *Authenticator) warnUnrecognized(ctx context.Context, hash []byte) {
+	if bytes.HasPrefix(hash, []byte(argon2idPrefix)) {
+		return
+	}
+	a.unrecognizedOnce.Do(func() {
+		logger := a.logger
+		if logger == nil {
+			logger = slog.Default()
+		}
+		logger.WarnContext(ctx, "password: a stored password hash is not argon2id and no configured legacy scheme recognizes it; "+
+			"logins with such hashes fail. Set PrimaryPassword.LegacySchemes (for example op.BcryptHashScheme()) to verify and migrate them")
+	})
 }
 
 // rehash upgrades a verified legacy password to argon2id. A failure never

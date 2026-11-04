@@ -211,7 +211,7 @@ type Policy struct {
 }
 
 // DropClaimsUnless discards the parsed OIDC Core 1.0 §5.5 claims payload
-// when the claims parameter is disabled (op.WithClaimsParameterSupported(false)),
+// when the claims parameter is disabled (op.WithClaimsParameterDisabled()),
 // so the snapshot, grant and token projections behave as if it had been
 // ignored. It is a no-op when enabled.
 func (r *Request) DropClaimsUnless(enabled bool) {

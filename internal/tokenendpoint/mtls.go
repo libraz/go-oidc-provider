@@ -7,6 +7,7 @@ import (
 
 	"github.com/libraz/go-oidc-provider/internal/endpointsupport"
 	"github.com/libraz/go-oidc-provider/internal/mtls"
+	"github.com/libraz/go-oidc-provider/op/store"
 )
 
 // mtlsOutcome is the result of [verifyTokenMTLS]: a (possibly empty)
@@ -36,12 +37,13 @@ type mtlsOutcome struct {
 // the bearer / DPoP path and yields (&mtlsOutcome{}, true).
 //
 // DPoP presence does not suppress mTLS extraction because an issued token
-// may carry both cnf.jkt and cnf.x5t#S256.
-func verifyTokenMTLS(w http.ResponseWriter, r *http.Request, deps Deps) (*mtlsOutcome, bool) {
+// may carry both cnf.jkt and cnf.x5t#S256. The certificate is read under
+// the authenticated client's trust rule ([mtls.Verifier.ForClient]).
+func verifyTokenMTLS(w http.ResponseWriter, r *http.Request, deps Deps, client *store.Client) (*mtlsOutcome, bool) {
 	if deps.MTLS == nil {
 		return &mtlsOutcome{}, true
 	}
-	cert, err := deps.MTLS.CertificateFromRequest(r)
+	cert, err := deps.MTLS.ForClient(client.TokenEndpointAuthMethod).CertificateFromRequest(r)
 	if err != nil {
 		if errors.Is(err, mtls.ErrNoClientCert) {
 			// Bearer path: the request did not present a cert and
@@ -69,7 +71,7 @@ func verifyTokenMTLS(w http.ResponseWriter, r *http.Request, deps Deps) (*mtlsOu
 // mid-chain upgrades would require the resource server to re-check
 // every cached token; the library's posture is "bind once, enforce
 // always".
-func requireMTLSMatch(w http.ResponseWriter, r *http.Request, deps Deps, boundThumbprint string) bool {
+func requireMTLSMatch(w http.ResponseWriter, r *http.Request, deps Deps, client *store.Client, boundThumbprint string) bool {
 	if boundThumbprint == "" {
 		return true
 	}
@@ -82,7 +84,7 @@ func requireMTLSMatch(w http.ResponseWriter, r *http.Request, deps Deps, boundTh
 			"refresh token is mTLS-bound but mTLS is not enabled")
 		return false
 	}
-	if err := deps.MTLS.VerifyBoundRequest(r, boundThumbprint); err != nil {
+	if err := deps.MTLS.ForClient(client.TokenEndpointAuthMethod).VerifyBoundRequest(r, boundThumbprint); err != nil {
 		writeMTLSError(w, err)
 		return false
 	}

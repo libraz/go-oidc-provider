@@ -691,11 +691,12 @@ rows:
     severity: P0
     spec: RFC 7523 §3 / OIDC Core §9 / FAPI 2.0 §5.2.2
     behaviour: |
-      aud is accepted when it matches the absolute token endpoint URL
-      or the issuer URL — either as a string or inside a JSON array.
-      The verifier wires AuxAudiences = {issuer, PAR endpoint} so
-      OIDC Core §9 (aud == token endpoint) and FAPI 2.0 §5.2.2
-      (aud == issuer) clients both authenticate against one OP. Any
+      Outside the FAPI 2.0 profiles (which accept only the issuer as a
+      string; see fapi#FAPI-V2-021), aud is accepted when it matches the
+      absolute token endpoint URL or the issuer URL — either as a string
+      or inside a JSON array. The verifier wires AuxAudiences =
+      {issuer, PAR endpoint} so OIDC Core §9 (aud == token endpoint) and
+      issuer-addressed clients both authenticate against one OP. Any
       other aud value yields 401 invalid_client with the canonical
       "client authentication failed" description.
     status: active
@@ -821,8 +822,7 @@ rows:
       The OP retrieves the proxy-supplied client certificate and
       treats CA validation success (equivalent to certificateAuthorized
       returning true) as a precondition for authentication.
-    status: out-of-scope
-    out_of_scope_reason: "Certificate retrieval and chain validation are both shipped and configurable (op.WithMTLSProxy names the trusted forwarding header and its CIDR allow-list; op.WithMTLSRootCAs supplies the anchors the OP re-checks the leaf against), but they feed RFC 8705 §3 token binding, not §2 authentication. There is no authentication step for a validated certificate to be a precondition of: tls_client_auth is not selectable as a token_endpoint_auth_method. Revisit when that method ships."
+    status: active
 
   - id: CA-MTLS-PKI-02
     severity: P0
@@ -832,8 +832,7 @@ rows:
       tls_client_auth_san_dns, tls_client_auth_san_uri,
       tls_client_auth_san_ip, or tls_client_auth_san_email; declaring
       more than one yields invalid_client_metadata.
-    status: out-of-scope
-    out_of_scope_reason: "The OP does not offer RFC 8705 §2 mutual-TLS client authentication. tls_client_auth and self_signed_tls_client_auth are not selectable as a token_endpoint_auth_method: discovery never lists them, and both static seeding and dynamic registration reject them (op.AuthTLSClientAuth / op.AuthSelfSignedTLSClientAuth). No endpoint reaches mtls.VerifyClientAuth, so the behaviour has no wire surface. RFC 8705 §3 certificate-BOUND tokens are a separate shipped feature (op.WithFeature(feature.MTLS), configured by op.WithMTLSProxy / op.WithMTLSRootCAs) and are covered by CA-DISC-07 and the mtls_certificate_binding rows. Revisit when tls_client_auth ships as a token_endpoint_auth_method."
+    status: active
 
   - id: CA-MTLS-PKI-03
     severity: P0
@@ -842,8 +841,7 @@ rows:
       The registered metadata value MUST exactly match the
       corresponding SAN/Subject DN field in the presented certificate;
       mismatch yields 401 invalid_client.
-    status: out-of-scope
-    out_of_scope_reason: "The OP does not offer RFC 8705 §2 mutual-TLS client authentication. tls_client_auth and self_signed_tls_client_auth are not selectable as a token_endpoint_auth_method: discovery never lists them, and both static seeding and dynamic registration reject them (op.AuthTLSClientAuth / op.AuthSelfSignedTLSClientAuth). No endpoint reaches mtls.VerifyClientAuth, so the behaviour has no wire surface. RFC 8705 §3 certificate-BOUND tokens are a separate shipped feature (op.WithFeature(feature.MTLS), configured by op.WithMTLSProxy / op.WithMTLSRootCAs) and are covered by CA-DISC-07 and the mtls_certificate_binding rows. Revisit when tls_client_auth ships as a token_endpoint_auth_method."
+    status: active
 
   - id: CA-MTLS-PKI-04
     severity: P0
@@ -851,8 +849,7 @@ rows:
     behaviour: |
       When no client certificate is forwarded by the proxy, the OP
       returns 401 invalid_client.
-    status: out-of-scope
-    out_of_scope_reason: "The OP does not offer RFC 8705 §2 mutual-TLS client authentication. tls_client_auth and self_signed_tls_client_auth are not selectable as a token_endpoint_auth_method: discovery never lists them, and both static seeding and dynamic registration reject them (op.AuthTLSClientAuth / op.AuthSelfSignedTLSClientAuth). No endpoint reaches mtls.VerifyClientAuth, so the behaviour has no wire surface. RFC 8705 §3 certificate-BOUND tokens are a separate shipped feature (op.WithFeature(feature.MTLS), configured by op.WithMTLSProxy / op.WithMTLSRootCAs) and are covered by CA-DISC-07 and the mtls_certificate_binding rows. Revisit when tls_client_auth ships as a token_endpoint_auth_method."
+    status: active
 
   - id: CA-MTLS-PKI-05
     severity: P0
@@ -862,7 +859,7 @@ rows:
       x-ssl-client-verify header is not SUCCESS), the OP returns
       401 invalid_client.
     status: out-of-scope
-    out_of_scope_reason: "The OP does not offer RFC 8705 §2 mutual-TLS client authentication. tls_client_auth and self_signed_tls_client_auth are not selectable as a token_endpoint_auth_method: discovery never lists them, and both static seeding and dynamic registration reject them (op.AuthTLSClientAuth / op.AuthSelfSignedTLSClientAuth). No endpoint reaches mtls.VerifyClientAuth, so the behaviour has no wire surface. RFC 8705 §3 certificate-BOUND tokens are a separate shipped feature (op.WithFeature(feature.MTLS), configured by op.WithMTLSProxy / op.WithMTLSRootCAs) and are covered by CA-DISC-07 and the mtls_certificate_binding rows. Revisit when tls_client_auth ships as a token_endpoint_auth_method."
+    out_of_scope_reason: "Divergent shape: the OP reads no proxy verify-status header (x-ssl-client-verify or similar). A forwarded certificate counts as chain-verified only when the OP itself verifies it against op.WithMTLSRootCAs, and op.New refuses tls_client_auth behind op.WithMTLSProxy without those anchors, so a proxy that forwards an unverified certificate is caught by the OP's own check. That rejection is asserted by CA-MTLS-PKI-01."
 
   - id: CA-MTLS-PKI-06
     severity: P0
@@ -929,7 +926,7 @@ rows:
       certificateAuthorized(ctx) so certificate retrieval and trust
       anchoring stay framework-agnostic.
     status: out-of-scope
-    out_of_scope_reason: "The OP does not expose per-request certificate hooks under these names or any other. Certificate retrieval is internal and configured declaratively (op.WithMTLSProxy for the forwarded-header path, op.WithMTLSRootCAs for the trust anchors), which keeps the OP framework-agnostic by a different route than the callback shape this row describes. The row asserts an API design the library deliberately does not have, so there is nothing to observe rather than something unreachable."
+    out_of_scope_reason: "Divergent shape: certificate retrieval and trust anchoring are configured, not hooked. op.WithMTLSProxy names the forwarding header and the trusted proxy CIDRs, op.WithMTLSRootCAs supplies the anchors, and direct TLS uses the embedder's own crypto/tls server configuration; the OP exposes no getCertificate / certificateAuthorized callbacks. Framework-agnosticism holds because op.New returns an http.Handler that reads only the request's TLS state and headers."
 
   - id: CA-MTLS-PKI-12
     severity: P1
@@ -938,7 +935,7 @@ rows:
       When mTLS is enabled, discovery advertises
       mtls_endpoint_aliases.
     status: out-of-scope
-    out_of_scope_reason: "Duplicate: mtls_endpoint_aliases advertisement is asserted by CA-DISC-07, which is active. RFC 8705 §5 discovery is part of the shipped §3 certificate-binding feature and is reachable through op.WithFeature(feature.MTLS) with op.WithDiscoveryMetadata; this row restates it from the §2 client-authentication side, where the OP has no surface."
+    out_of_scope_reason: "Duplicate: mtls_endpoint_aliases advertisement is asserted by CA-DISC-07, which is active. RFC 8705 §5 discovery is reachable through op.WithFeature(feature.MTLS) with op.WithDiscoveryMetadata; this row restates it from the §2 client-authentication side."
 
   - id: CA-MTLS-SS-01
     severity: P0
@@ -957,8 +954,8 @@ rows:
     behaviour: |
       When the cached jwks_uri document is stale, the OP refetches
       and re-verifies before failing.
-    status: out-of-scope
-    out_of_scope_reason: "The OP does not offer RFC 8705 §2 mutual-TLS client authentication. tls_client_auth and self_signed_tls_client_auth are not selectable as a token_endpoint_auth_method: discovery never lists them, and both static seeding and dynamic registration reject them (op.AuthTLSClientAuth / op.AuthSelfSignedTLSClientAuth). No endpoint reaches mtls.VerifyClientAuth, so the behaviour has no wire surface. RFC 8705 §3 certificate-BOUND tokens are a separate shipped feature (op.WithFeature(feature.MTLS), configured by op.WithMTLSProxy / op.WithMTLSRootCAs) and are covered by CA-DISC-07 and the mtls_certificate_binding rows. Revisit when tls_client_auth ships as a token_endpoint_auth_method."
+    status: active
+    covered_by: internal/clientauth.TestMTLSVerifier_SelfSigned
 
   - id: CA-MTLS-SS-03
     severity: P0
@@ -966,8 +963,8 @@ rows:
     behaviour: |
       Certificates carrying RSA, EC (P-256, P-384, P-521), or Ed25519
       keys MUST be accepted.
-    status: out-of-scope
-    out_of_scope_reason: "The OP does not offer RFC 8705 §2.2 self-signed client authentication (self_signed_tls_client_auth is not selectable as a token_endpoint_auth_method), so the accept-set has no wire surface. The verifier behind it accepts EC and RSA certificates (mtls.VerifySelfSignedTLSClientAuth, exercised by internal/mtls unit tests) but has no Ed25519 case, so this row is NOT delegated: binding it would claim an accept-set wider than what is asserted anywhere. Revisit when the method ships, and cover Ed25519 then."
+    status: active
+    covered_by: internal/mtls.TestVerifySelfSignedTLSClientAuthKeySet_KeyTypes
 
   - id: CA-MTLS-SS-04
     severity: P0
@@ -975,8 +972,7 @@ rows:
     behaviour: |
       When no key in the registered jwks matches the certificate
       thumbprint, the OP returns 401 invalid_client.
-    status: out-of-scope
-    out_of_scope_reason: "The OP does not offer RFC 8705 §2 mutual-TLS client authentication. tls_client_auth and self_signed_tls_client_auth are not selectable as a token_endpoint_auth_method: discovery never lists them, and both static seeding and dynamic registration reject them (op.AuthTLSClientAuth / op.AuthSelfSignedTLSClientAuth). No endpoint reaches mtls.VerifyClientAuth, so the behaviour has no wire surface. RFC 8705 §3 certificate-BOUND tokens are a separate shipped feature (op.WithFeature(feature.MTLS), configured by op.WithMTLSProxy / op.WithMTLSRootCAs) and are covered by CA-DISC-07 and the mtls_certificate_binding rows. Revisit when tls_client_auth ships as a token_endpoint_auth_method."
+    status: active
 
   - id: CA-MTLS-SS-05
     severity: P0
@@ -984,8 +980,7 @@ rows:
     behaviour: |
       When the certificate cannot be obtained from the proxy, the OP
       returns 401 invalid_client.
-    status: out-of-scope
-    out_of_scope_reason: "The OP does not offer RFC 8705 §2 mutual-TLS client authentication. tls_client_auth and self_signed_tls_client_auth are not selectable as a token_endpoint_auth_method: discovery never lists them, and both static seeding and dynamic registration reject them (op.AuthTLSClientAuth / op.AuthSelfSignedTLSClientAuth). No endpoint reaches mtls.VerifyClientAuth, so the behaviour has no wire surface. RFC 8705 §3 certificate-BOUND tokens are a separate shipped feature (op.WithFeature(feature.MTLS), configured by op.WithMTLSProxy / op.WithMTLSRootCAs) and are covered by CA-DISC-07 and the mtls_certificate_binding rows. Revisit when tls_client_auth ships as a token_endpoint_auth_method."
+    status: active
 
   - id: CA-MTLS-SS-06
     severity: P1
@@ -994,8 +989,7 @@ rows:
       tls_client_auth_* metadata fields MUST NOT be combined with
       self_signed_tls_client_auth registration; mixed registration
       yields invalid_client_metadata.
-    status: out-of-scope
-    out_of_scope_reason: "The OP does not offer RFC 8705 §2 mutual-TLS client authentication. tls_client_auth and self_signed_tls_client_auth are not selectable as a token_endpoint_auth_method: discovery never lists them, and both static seeding and dynamic registration reject them (op.AuthTLSClientAuth / op.AuthSelfSignedTLSClientAuth). No endpoint reaches mtls.VerifyClientAuth, so the behaviour has no wire surface. RFC 8705 §3 certificate-BOUND tokens are a separate shipped feature (op.WithFeature(feature.MTLS), configured by op.WithMTLSProxy / op.WithMTLSRootCAs) and are covered by CA-DISC-07 and the mtls_certificate_binding rows. Revisit when tls_client_auth ships as a token_endpoint_auth_method."
+    status: active
 
   - id: CA-ATT-01
     severity: P0

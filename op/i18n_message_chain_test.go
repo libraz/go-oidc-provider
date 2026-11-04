@@ -7,7 +7,7 @@ import (
 )
 
 // TestProviderLocaleResolver_MessageEndsAtEnglish pins the last tier of
-// the chain [op.Resolver.Message] documents: with a partial bundle as the
+// the chain [op.LocaleResolver.Message] documents: with a partial bundle as the
 // default locale, a key neither the requested nor the default bundle
 // defines still resolves from the library's English catalogue.
 func TestProviderLocaleResolver_MessageEndsAtEnglish(t *testing.T) {

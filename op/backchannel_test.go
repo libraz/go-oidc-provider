@@ -8,11 +8,12 @@ import (
 	"github.com/libraz/go-oidc-provider/op"
 )
 
-func TestWithBackchannelLogoutHTTPClient_AcceptsCustomClient(t *testing.T) {
+func TestWithBackchannelLogout_AcceptsCustomTransport(t *testing.T) {
 	t.Parallel()
 
-	client := &http.Client{Timeout: 750 * time.Millisecond}
-	provider, err := op.New(append(validBaseOpts(t), op.WithBackchannelLogoutHTTPClient(client))...)
+	provider, err := op.New(append(validBaseOpts(t), op.WithBackchannelLogout(op.BackchannelLogout{
+		Transport: http.DefaultTransport,
+	}))...)
 	if err != nil {
 		t.Fatalf("op.New: %v", err)
 	}
@@ -21,22 +22,13 @@ func TestWithBackchannelLogoutHTTPClient_AcceptsCustomClient(t *testing.T) {
 	}
 }
 
-func TestWithBackchannelLogoutHTTPClient_AcceptsNil(t *testing.T) {
+func TestWithBackchannelLogout_AcceptsPositive(t *testing.T) {
 	t.Parallel()
 
-	provider, err := op.New(append(validBaseOpts(t), op.WithBackchannelLogoutHTTPClient(nil))...)
-	if err != nil {
-		t.Fatalf("op.New with nil HTTP client: %v", err)
-	}
-	if provider == nil {
-		t.Fatalf("provider is nil")
-	}
-}
-
-func TestWithBackchannelLogoutTimeout_AcceptsPositive(t *testing.T) {
-	t.Parallel()
-
-	provider, err := op.New(append(validBaseOpts(t), op.WithBackchannelLogoutTimeout(2*time.Second))...)
+	provider, err := op.New(append(validBaseOpts(t), op.WithBackchannelLogout(op.BackchannelLogout{
+		Timeout:      2 * time.Second,
+		FanOutBudget: time.Minute,
+	}))...)
 	if err != nil {
 		t.Fatalf("op.New: %v", err)
 	}
@@ -45,12 +37,12 @@ func TestWithBackchannelLogoutTimeout_AcceptsPositive(t *testing.T) {
 	}
 }
 
-func TestWithBackchannelLogoutTimeout_ZeroFallsBack(t *testing.T) {
+func TestWithBackchannelLogout_ZeroFallsBack(t *testing.T) {
 	t.Parallel()
 
-	provider, err := op.New(append(validBaseOpts(t), op.WithBackchannelLogoutTimeout(0))...)
+	provider, err := op.New(append(validBaseOpts(t), op.WithBackchannelLogout(op.BackchannelLogout{}))...)
 	if err != nil {
-		t.Fatalf("op.New with zero timeout: %v", err)
+		t.Fatalf("op.New with zero BackchannelLogout: %v", err)
 	}
 	if provider == nil {
 		t.Fatalf("provider is nil")

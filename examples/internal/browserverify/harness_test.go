@@ -37,6 +37,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -73,6 +74,9 @@ type exampleSpec struct {
 	username string
 	password string
 	wantSub  string
+	// wantSubPattern replaces wantSub for an example whose subject is
+	// random per run and so can only be matched by shape.
+	wantSubPattern *regexp.Regexp
 	// wantClaims are example-specific substrings that must appear in the
 	// /me JSON beyond the common iss/sub — the feature the example exists
 	// to demonstrate. Empty means iss/sub fully characterise the round-trip.
@@ -182,7 +186,11 @@ func runRoundTrip(t *testing.T, spec exampleSpec) {
 	if !strings.Contains(body, `"iss": "`+defaultOPIssuer+`"`) {
 		t.Fatalf("/me body missing expected iss %q; got:\n%s", defaultOPIssuer, body)
 	}
-	if !strings.Contains(body, `"sub": "`+spec.wantSub+`"`) {
+	if spec.wantSubPattern != nil {
+		if !regexp.MustCompile(`"sub": "` + spec.wantSubPattern.String() + `"`).MatchString(body) {
+			t.Fatalf("/me body sub does not match %s; got:\n%s", spec.wantSubPattern, body)
+		}
+	} else if !strings.Contains(body, `"sub": "`+spec.wantSub+`"`) {
 		t.Fatalf("/me body missing expected sub %q; got:\n%s", spec.wantSub, body)
 	}
 	for _, want := range spec.wantClaims {
@@ -190,7 +198,11 @@ func runRoundTrip(t *testing.T, spec exampleSpec) {
 			t.Fatalf("/me body missing expected claim %q; got:\n%s", want, body)
 		}
 	}
-	t.Logf("round-trip OK: /me rendered iss=%s sub=%s claims=%v", defaultOPIssuer, spec.wantSub, spec.wantClaims)
+	wantSub := spec.wantSub
+	if spec.wantSubPattern != nil {
+		wantSub = spec.wantSubPattern.String()
+	}
+	t.Logf("round-trip OK: /me rendered iss=%s sub=%s claims=%v", defaultOPIssuer, wantSub, spec.wantClaims)
 }
 
 func requireChrome(t *testing.T) string {

@@ -312,11 +312,9 @@ func TestWithStaticClients_FAPIRejectsSecretAuthSeed(t *testing.T) {
 
 // TestWithStaticClients_FAPIRejectsMTLSAuthSeed pins that a FAPI static
 // client declaring an mTLS token-endpoint auth method (tls_client_auth /
-// self_signed_tls_client_auth) is rejected at construction. The runtime
-// client-auth verifier handles only none / client_secret_basic /
-// client_secret_post / private_key_jwt, so accepting an mTLS seed would
-// produce a client that boots clean yet can never authenticate at /token.
-// op.New must fail fast rather than admit that dead-on-arrival seed.
+// self_signed_tls_client_auth) is rejected at construction when
+// feature.MTLS is off: no endpoint could read its certificate, so the
+// seed would boot clean yet never authenticate at /token.
 func TestWithStaticClients_FAPIRejectsMTLSAuthSeed(t *testing.T) {
 	t.Parallel()
 
@@ -334,10 +332,10 @@ func TestWithStaticClients_FAPIRejectsMTLSAuthSeed(t *testing.T) {
 				}),
 			)...)
 			if err == nil {
-				t.Fatalf("expected FAPI profile to reject %s static client (runtime cannot enforce mTLS), got nil", method)
+				t.Fatalf("expected FAPI profile to reject %s static client without feature.MTLS, got nil", method)
 			}
-			// The seed must be rejected because the runtime cannot enforce
-			// the method. The diagnostic references the method name; the
+			// The seed must be rejected because feature.MTLS is off. The
+			// diagnostic references the method name; the
 			// exact wording ("not supported" from the global validator, or
 			// "not allowed by active profile" from the profile gate) is an
 			// implementation detail of which layer fires first.
@@ -350,7 +348,7 @@ func TestWithStaticClients_FAPIRejectsMTLSAuthSeed(t *testing.T) {
 
 // TestWithStaticClients_AcceptsHTTPLoopbackBackchannelWithDevOptIn
 // pins the dev / CI carve-out introduced by
-// [op.WithAllowInsecureBackchannelLogoutForDev]: a static seed
+// [op.WithAllowInsecureOutboundForDev] ([op.OutboundBackchannel]): a static seed
 // carrying a plain-http loopback `backchannel_logout_uri` constructs
 // successfully when the option is configured, while production
 // posture (option absent) keeps rejecting the same URL.
@@ -384,7 +382,7 @@ func TestWithStaticClients_AcceptsHTTPLoopbackBackchannelWithDevOptIn(t *testing
 			// With the opt-in the URL is accepted.
 			_, err = op.New(append(validBaseOptsWithInmem(t),
 				op.WithIssuer(devIssuer),
-				op.WithAllowInsecureBackchannelLogoutForDev(),
+				op.WithAllowInsecureOutboundForDev(op.OutboundBackchannel),
 				op.WithStaticClients(op.ConfidentialClient{
 					ID:                   "demo-rp",
 					Secret:               "rotate-me-0123456789-abcdefghijklmnopqrst",
@@ -395,7 +393,7 @@ func TestWithStaticClients_AcceptsHTTPLoopbackBackchannelWithDevOptIn(t *testing
 				}),
 			)...)
 			if err != nil {
-				t.Fatalf("WithAllowInsecureBackchannelLogoutForDev rejected loopback %q: %v", raw, err)
+				t.Fatalf("WithAllowInsecureOutboundForDev(OutboundBackchannel) rejected loopback %q: %v", raw, err)
 			}
 		})
 	}
@@ -411,7 +409,7 @@ func TestWithStaticClients_RejectsHTTPNonLoopbackBackchannelEvenWithDevOptIn(t *
 
 	_, err := op.New(append(validBaseOptsWithInmem(t),
 		op.WithIssuer(devIssuer),
-		op.WithAllowInsecureBackchannelLogoutForDev(),
+		op.WithAllowInsecureOutboundForDev(op.OutboundBackchannel),
 		op.WithStaticClients(op.ConfidentialClient{
 			ID:                   "demo-rp",
 			Secret:               "rotate-me-0123456789-abcdefghijklmnopqrst",
@@ -456,21 +454,21 @@ func TestWithStaticClients_RejectsUnknownGrantType(t *testing.T) {
 
 // TestWithStaticClients_AcceptsLoopbackWithOptIn confirms that the
 // textual "http://localhost" host is admitted when the embedder opted
-// in via [op.WithAllowLocalhostLoopback]. Without the option the URI
+// in via [op.WithAllowLocalhostRedirectURIs]. Without the option the URI
 // would be rejected because RFC 8252 §7.3 only carves out IP literals
 // (127.0.0.1 / [::1]) by default.
 func TestWithStaticClients_AcceptsLoopbackWithOptIn(t *testing.T) {
 	t.Parallel()
 
 	if _, err := op.New(append(validBaseOptsWithInmem(t),
-		op.WithAllowLocalhostLoopback(),
+		op.WithAllowLocalhostRedirectURIs(),
 		op.WithStaticClients(op.PublicClient{
 			ID:           "demo-native",
 			RedirectURIs: []string{"http://localhost:8080/cb"},
 			Scopes:       []string{"openid"},
 		}),
 	)...); err != nil {
-		t.Fatalf("WithStaticClients rejected http://localhost under WithAllowLocalhostLoopback: %v", err)
+		t.Fatalf("WithStaticClients rejected http://localhost under WithAllowLocalhostRedirectURIs: %v", err)
 	}
 }
 

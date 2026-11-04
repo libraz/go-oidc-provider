@@ -33,6 +33,11 @@ type registrationResponse struct {
 	Scope                             string          `json:"scope,omitempty"`
 	TokenEndpointAuthMethod           string          `json:"token_endpoint_auth_method,omitempty"`
 	TokenEndpointAuthSigningAlg       string          `json:"token_endpoint_auth_signing_alg,omitempty"`
+	TLSClientAuthSubjectDN            string          `json:"tls_client_auth_subject_dn,omitempty"`
+	TLSClientAuthSANDNS               string          `json:"tls_client_auth_san_dns,omitempty"`
+	TLSClientAuthSANURI               string          `json:"tls_client_auth_san_uri,omitempty"`
+	TLSClientAuthSANIP                string          `json:"tls_client_auth_san_ip,omitempty"`
+	TLSClientAuthSANEmail             string          `json:"tls_client_auth_san_email,omitempty"`
 	ApplicationType                   string          `json:"application_type,omitempty"`
 	SubjectType                       string          `json:"subject_type,omitempty"`
 	IDTokenAlg                        string          `json:"id_token_signed_response_alg,omitempty"`
@@ -238,6 +243,11 @@ func persistRegistration(ctx context.Context, w http.ResponseWriter, deps Deps, 
 		Scope:                             m.Scope,
 		TokenEndpointAuthMethod:           m.TokenEndpointAuthMethod,
 		TokenEndpointAuthSigningAlg:       m.TokenEndpointAuthSigningAlg,
+		TLSClientAuthSubjectDN:            m.TLSClientAuthSubjectDN,
+		TLSClientAuthSANDNS:               m.TLSClientAuthSANDNS,
+		TLSClientAuthSANURI:               m.TLSClientAuthSANURI,
+		TLSClientAuthSANIP:                m.TLSClientAuthSANIP,
+		TLSClientAuthSANEmail:             m.TLSClientAuthSANEmail,
 		ApplicationType:                   m.ApplicationType,
 		SubjectType:                       m.SubjectType,
 		IDTokenAlg:                        m.IDTokenSignedResponseAlg,
@@ -286,6 +296,11 @@ func clientFromMetadata(m ClientMetadata, clientID, secretHash string) *store.Cl
 		Scopes:                            oidcscope.Parse(m.Scope),
 		TokenEndpointAuthMethod:           m.TokenEndpointAuthMethod,
 		TokenEndpointAuthSigningAlg:       m.TokenEndpointAuthSigningAlg,
+		TLSClientAuthSubjectDN:            m.TLSClientAuthSubjectDN,
+		TLSClientAuthSANDNS:               m.TLSClientAuthSANDNS,
+		TLSClientAuthSANURI:               m.TLSClientAuthSANURI,
+		TLSClientAuthSANIP:                m.TLSClientAuthSANIP,
+		TLSClientAuthSANEmail:             m.TLSClientAuthSANEmail,
 		SecretHash:                        secretHash,
 		PublicClient:                      isPublicAuthMethod(m.TokenEndpointAuthMethod),
 		ApplicationType:                   m.ApplicationType,

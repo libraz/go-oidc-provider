@@ -20,47 +20,47 @@ advisories:
   # --- T-01 Redirect URI matching -----------------------------------
   - id: CVE-2020-15234
     severity: P0
-    source: https://github.com/ory/fosite/security/advisories/GHSA-grfp-q2mm-hfp6
+    source: https://github.com/advisories/GHSA-grfp-q2mm-hfp6
     threat: T-01
     status: covered
-    notes: fosite case-variant redirect_uri match.
+    notes: Another OP case-variant redirect_uri match.
   - id: GHSA-rfq3-w54c-f9q5
     severity: P0
-    source: https://github.com/ory/fosite/security/advisories/GHSA-rfq3-w54c-f9q5
+    source: https://github.com/advisories/GHSA-rfq3-w54c-f9q5
     threat: T-01
     status: covered
-    notes: fosite loopback rule ignored query / host components.
+    notes: Another OP loopback rule ignored query / host components.
   - id: CVE-2024-8883
     severity: P0
     source: https://nvd.nist.gov/vuln/detail/CVE-2024-8883
     threat: T-01
     status: covered
-    notes: Keycloak wildcard / suffix bypass.
+    notes: Another OP wildcard / suffix bypass.
   - id: CVE-2023-6134
     severity: P0
     source: https://nvd.nist.gov/vuln/detail/CVE-2023-6134
     threat: T-01
     status: covered
-    notes: Keycloak redirect_uri pre-JARM bypass.
+    notes: Another OP redirect_uri pre-JARM bypass.
   - id: CVE-2026-3872
     severity: P0
     source: https://nvd.nist.gov/vuln/detail/CVE-2026-3872
     threat: T-01
     status: covered
-    notes: Keycloak wildcard redirect URI path traversal via ..;/.
+    notes: Another OP wildcard redirect URI path traversal via ..;/.
   - id: CVE-2026-7504
     severity: P0
     source: https://access.redhat.com/security/cve/CVE-2026-7504
     threat: T-01
     status: covered
-    notes: Keycloak wildcard redirect URI parser confusion via multi-@ userinfo.
+    notes: Another OP wildcard redirect URI parser confusion via multi-@ userinfo.
   - id: CVE-2026-9689
     severity: P1
     source: https://nvd.nist.gov/vuln/detail/CVE-2026-9689
     threat: T-01
     status: covered
     notes: |
-      Keycloak HTTP parameter pollution on the OIDC redirect URI let a
+      another OP HTTP parameter pollution on the OIDC redirect URI let a
       duplicated request parameter be reflected into the authorization
       response as a duplicated response parameter. Structural property:
       the authorize parser (singleValue / singleEntry) rejects any
@@ -91,7 +91,7 @@ advisories:
     threat: T-01
     status: covered
     notes: |
-      Keycloak (GHSA-v3f7-2p4r-mwfw) let a case-variant javascript: / data:
+      another OP (GHSA-v3f7-2p4r-mwfw) let a case-variant javascript: / data:
       redirect URI past validation. Schemes are parsed and lowercased before
       the allow-list; TestValidateRedirectURIs_CaseVariantDangerousSchemes
       covers redirect and post-logout URIs for web and native clients.
@@ -113,21 +113,21 @@ advisories:
     source: https://nvd.nist.gov/vuln/detail/CVE-2024-10318
     threat: T-02
     status: covered
-    notes: NGINX OIDC reference module; nonce never validated.
+    notes: A reverse-proxy OIDC module; nonce never validated.
   - id: CVE-2026-7571
     severity: P0
     source: https://access.redhat.com/security/cve/CVE-2026-7571
     threat: T-02
     status: covered
-    notes: Keycloak implicit-flow disable bypass and access-token disclosure.
+    notes: Another OP implicit-flow disable bypass and access-token disclosure.
 
   # --- T-03 Mix-up / code-injection ---------------------------------
   - id: CVE-2024-23647
     severity: P0
-    source: https://docs.goauthentik.io/security/cves/CVE-2024-23647/
+    source: https://nvd.nist.gov/vuln/detail/CVE-2024-23647
     threat: T-03
     status: covered
-    notes: authentik PKCE downgrade (challenge-absent path).
+    notes: Another OP PKCE downgrade (challenge-absent path).
   - id: CVE-2025-4144
     severity: P0
     source: https://nvd.nist.gov/vuln/detail/CVE-2025-4144
@@ -136,11 +136,11 @@ advisories:
     notes: Cloudflare workers-oauth-provider code interception.
   - id: GHSA-vh7g-p26c-j2cw
     severity: P0
-    source: https://github.com/dexidp/dex/security/advisories/GHSA-vh7g-p26c-j2cw
+    source: https://github.com/advisories/GHSA-vh7g-p26c-j2cw
     threat: T-03
     status: covered
     notes: |
-      dex back-channel ID-token retrieval after authorization-code
+      another OP back-channel ID-token retrieval after authorization-code
       interception. The (code, client_id, redirect_uri, code_verifier)
       tuple match in internal/grants/authcode prevents the bypass;
       TestExchange_RejectsClientMismatch pins the client_id half.
@@ -150,7 +150,7 @@ advisories:
     threat: T-03
     status: covered
     notes: |
-      Keycloak authorization-code forgery via SingleUseObjectProvider
+      another OP authorization-code forgery via SingleUseObjectProvider
       isolation flaw. The OP has no generic single-use provider: every
       artefact kind is its own substore interface, and the store contract
       harness (namespaceDisjoint / namespaceConsumeIsScoped) pins that
@@ -195,7 +195,7 @@ advisories:
     source: https://access.redhat.com/security/cve/CVE-2026-37979
     threat: T-04
     status: covered
-    notes: Keycloak OIDC token introspection audience bypass.
+    notes: Another OP OIDC token introspection audience bypass.
   - id: CVE-2024-53861
     severity: P2
     source: https://github.com/advisories/GHSA-75c5-xw7c-p5pm
@@ -340,7 +340,7 @@ advisories:
     threat: T-05
     status: covered
     notes: |
-      Keycloak JWT authorization-grant algorithm confusion (CWE-347,
+      another OP JWT authorization-grant algorithm confusion (CWE-347,
       CVSS 8.1): an attacker holding any valid client credential in the
       realm forged an assertion by manipulating the "alg" header, and
       signature verification was satisfied without the registered key.
@@ -560,7 +560,7 @@ advisories:
     source: https://nvd.nist.gov/vuln/detail/CVE-2019-7644
     threat: T-06
     status: covered
-    notes: Auth0 jsonwebtoken-koa trusted jwk header.
+    notes: Another OP jsonwebtoken-koa trusted jwk header.
   - id: CVE-2026-34240
     severity: P0
     source: https://nvd.nist.gov/vuln/detail/CVE-2026-34240
@@ -941,23 +941,23 @@ advisories:
   # --- T-07 Replay --------------------------------------------------
   - id: CVE-2020-15222
     severity: P0
-    source: https://github.com/ory/fosite/security/advisories/GHSA-mh3m-8c74-74xh
+    source: https://github.com/advisories/GHSA-mh3m-8c74-74xh
     threat: T-07
     status: covered
-    notes: fosite < 0.31.0 PAR replay / DoS.
+    notes: Another OP < 0.31.0 PAR replay / DoS.
   - id: GHSA-mh3m-8c74-74xh
     severity: P0
-    source: https://github.com/ory/fosite/security/advisories/GHSA-mh3m-8c74-74xh
+    source: https://github.com/advisories/GHSA-mh3m-8c74-74xh
     threat: T-07
     status: covered
     notes: GHSA pair of CVE-2020-15222.
   - id: GHSA-v3q9-2p3m-7g43
     severity: P0
-    source: https://github.com/ory/fosite/security/advisories/GHSA-v3q9-2p3m-7g43
+    source: https://github.com/advisories/GHSA-v3q9-2p3m-7g43
     threat: T-07
     status: covered
     notes: |
-      fosite private_key_jwt jti replay (2020).
+      another OP private_key_jwt jti replay (2020).
       TestPrivateKeyJWTVerifier_JTIReplay_Rejected pins the per-jti
       single-use contract that blocks the replay.
   - id: CVE-2026-1035
@@ -965,14 +965,14 @@ advisories:
     source: https://nvd.nist.gov/vuln/detail/CVE-2026-1035
     threat: T-07
     status: covered
-    notes: Keycloak refresh token reuse bypass via TOCTOU race.
+    notes: Another OP refresh token reuse bypass via TOCTOU race.
   - id: CVE-2026-37982
     severity: P1
     source: https://nvd.nist.gov/vuln/detail/CVE-2026-37982
     threat: T-07
     status: covered
     notes: |
-      Keycloak required-action email links (WebAuthn / TOTP enrollment,
+      another OP required-action email links (WebAuthn / TOTP enrollment,
       account management) had broken one-time-use semantics, so an
       intercepted link could be replayed to enroll an attacker
       authenticator — silent takeover. Structural property: any
@@ -985,11 +985,11 @@ advisories:
       (TestVerify_RejectsConsumedCode).
   - id: CVE-2026-9802
     severity: P1
-    source: https://github.com/keycloak/keycloak/issues/49426
+    source: https://nvd.nist.gov/vuln/detail/CVE-2026-9802
     threat: T-07
     status: covered
     notes: |
-      Keycloak decided whether a rotated refresh token was stale by
+      another OP decided whether a rotated refresh token was stale by
       comparing it against the cluster's startup timestamp, an
       in-process value. A restart reset that timestamp, so every
       previously rotated token stopped looking stale and became
@@ -1097,7 +1097,7 @@ advisories:
     threat: T-08
     status: covered
     notes: |
-      Keycloak OIDC DCR jwks_uri SSRF during private_key_jwt key resolution.
+      another OP OIDC DCR jwks_uri SSRF during private_key_jwt key resolution.
       The client ID metadata document fetch (client_id URL) is a second
       client-supplied URL on the same securefetch dial-time deny-list;
       TestScenario_CIMD_RES_11_SSRFBlocksPrivateRanges pins it.
@@ -1137,11 +1137,11 @@ advisories:
   # --- T-09 Token / sensitive-info leak paths ----------------------
   - id: GHSA-7mqr-2v3q-v2wm
     severity: P1
-    source: https://github.com/ory/fosite/security/advisories/GHSA-7mqr-2v3q-v2wm
+    source: https://github.com/advisories/GHSA-7mqr-2v3q-v2wm
     threat: T-09
     status: covered
     notes: |
-      fosite revoke silently swallowed storage errors. The library
+      another OP revoke silently swallowed storage errors. The library
       keeps the wire 200 (RFC 7009 §2.2) but emits the
       "token.revoke_failed" audit event on every non-NotFound store
       fault so SOC tooling can detect the silent-failure class.
@@ -1153,7 +1153,7 @@ advisories:
     threat: T-09
     status: covered
     notes: |
-      Keycloak introspection ignored the realm-level notBefore when a
+      another OP introspection ignored the realm-level notBefore when a
       client-level notBefore was set, so a token inside the revoked
       window still introspected as active.
       TestEndToEnd_ActiveHonoursEveryRevocationInput drives the endpoint
@@ -1191,11 +1191,11 @@ advisories:
   # --- T-10 Timing ---------------------------------------------------
   - id: CVE-2026-22746
     severity: P2
-    source: https://spring.io/security/cve-2026-22746/
+    source: https://nvd.nist.gov/vuln/detail/CVE-2026-22746
     threat: T-10
     status: covered
     notes: |
-      Spring Security's DaoAuthenticationProvider took a measurably
+      A web framework's password authentication provider took a measurably
       different amount of time when the presented principal did not
       exist than when it existed with a wrong password, because the
       expensive password hash was only computed on the second path. The
@@ -1230,14 +1230,14 @@ advisories:
     source: https://nvd.nist.gov/vuln/detail/CVE-2023-6927
     threat: T-11
     status: covered
-    notes: Keycloak JARM form_post.jwt open redirect.
+    notes: Another OP JARM form_post.jwt open redirect.
   - id: GHSA-27gc-wj6x-9w55
     severity: P1
-    source: https://github.com/keycloak/keycloak/security/advisories/GHSA-27gc-wj6x-9w55
+    source: https://github.com/advisories/GHSA-27gc-wj6x-9w55
     threat: T-11
     status: covered
     notes: |
-      Keycloak error_description injection on error pages → phishing.
+      another OP error_description injection on error pages → phishing.
       Two-layer mitigation:
         - error_description values are a closed catalogue of hardcoded
           sentinels (internal/authorize/errors.go); RP-supplied bytes
@@ -1297,7 +1297,7 @@ advisories:
       A "state" value (and, in the broader class, other echoed request
       parameters) was reflected into the form_post auto-submit response
       body without HTML escaping — the same reflected-HTML class as
-      GHSA-27gc-wj6x-9w55 (Keycloak error pages) on a different emit
+      GHSA-27gc-wj6x-9w55 (another OP error pages) on a different emit
       point. TestWriteFormPost_EscapesRedirectAndJWT and
       TestWriteParamsFormPost_EscapesValues both require every hidden
       input value and the form action to pass through html.EscapeString
@@ -1328,11 +1328,11 @@ advisories:
   # --- T-12 Session fixation ---------------------------------------
   - id: GHSA-xhpr-465j-7p9q
     severity: P1
-    source: https://github.com/keycloak/keycloak/security/advisories/GHSA-xhpr-465j-7p9q
+    source: https://github.com/advisories/GHSA-xhpr-465j-7p9q
     threat: T-12
     status: covered
     notes: |
-      Keycloak first-login phishing via email verification step. The
+      another OP first-login phishing via email verification step. The
       session manager exposes a Rotate primitive that issues a fresh
       ID and invalidates the old, while preserving CreatedAt so an
       attacker cannot extend lifetime by triggering rotation.
@@ -1345,7 +1345,7 @@ advisories:
     threat: T-12
     status: covered
     notes: |
-      Keycloak OIDC-login session fixation leading to account takeover:
+      another OP OIDC-login session fixation leading to account takeover:
       the session was not rebound across the privilege transition, so a
       pre-seeded session ID survived login. Where GHSA-xhpr-465j-7p9q is
       pinned at the Manager.Rotate primitive, this is pinned at the wire
@@ -1439,11 +1439,11 @@ advisories:
       The mitigation belongs to the embedder. Reviewed and excluded.
   - id: GHSA-84fg-x5h4-w8xv
     severity: P2
-    source: https://github.com/zitadel/zitadel/security/advisories/GHSA-84fg-x5h4-w8xv
+    source: https://github.com/advisories/GHSA-84fg-x5h4-w8xv
     threat: T-12
     status: covered
     notes: |
-      ZITADEL kept a step-completion proof in a cookie derived from
+      another OP kept a step-completion proof in a cookie derived from
       client-known values. Interaction progress is server-side, the cookie
       is an AEAD seal of the uid and CSRF tokens are HMAC-bound;
       TestInteraction_ProofCookieNotDerivableFromClientKnownValues pins
@@ -1451,11 +1451,11 @@ advisories:
       interaction are refused.
   - id: GHSA-mchc-246r-6m76
     severity: P2
-    source: https://github.com/zitadel/zitadel/security/advisories/GHSA-mchc-246r-6m76
+    source: https://github.com/advisories/GHSA-mchc-246r-6m76
     threat: T-12
     status: covered
     notes: |
-      ZITADEL built emailed links from client-supplied forwarding headers.
+      another OP built emailed links from client-supplied forwarding headers.
       Every absolute URL this OP emits derives from the configured issuer;
       TestAdvisory_EmittedURLsIgnoreHostHeaders sends hostile Host /
       X-Forwarded-* / Forwarded to discovery and device authorization.
@@ -1477,7 +1477,7 @@ advisories:
     threat: T-13
     status: covered
     notes: |
-      Keycloak jwt-authorization-grant issued tokens without checking
+      another OP jwt-authorization-grant issued tokens without checking
       that the backing identity provider was enabled — a token-issuance
       authorisation gate skipped.
       TestCustomGrant_NoTokenEscapesAFailedPrecondition pins the gate on
@@ -1491,7 +1491,7 @@ advisories:
     threat: T-13
     status: covered
     notes: |
-      Keycloak's token-exchange endpoint dropped the subject_token
+      Another OP's token-exchange endpoint dropped the subject_token
       parameter under some request shapes instead of rejecting the
       request, and the exchange then proceeded on the caller's own
       authority — so a client with no delegation at all obtained a token
@@ -1571,11 +1571,11 @@ advisories:
       CVE-2026-93999, CVE-2026-1609.
   - id: GHSA-mxv6-xwqj-ww2p
     severity: P1
-    source: https://github.com/DuendeSoftware/products/security/advisories/GHSA-mxv6-xwqj-ww2p
+    source: https://github.com/advisories/GHSA-mxv6-xwqj-ww2p
     threat: T-13
     status: covered
     notes: |
-      Duende did not bind a pushed request to its client. /par rejects a
+      another OP did not bind a pushed request to its client. /par rejects a
       mismatched client_id; /authorize rejects a request_uri presented by
       another client, leaving the record unconsumed. Pinned by
       TestHandler_ClientIDMismatch_Rejected and
@@ -1607,7 +1607,7 @@ advisories:
     threat: T-13
     status: covered
     notes: |
-      ForgeRock accepted a refresh token as an access token. userinfo refuses
+      another OP accepted a refresh token as an access token. userinfo refuses
       a refresh token as Bearer (TestHandler_RefreshTokenAsBearerRefused),
       and introspection no longer tags a refresh token with the access-token
       type "Bearer" (TestHandler_RefreshToken_CarriesNoAccessTokenType).
@@ -1627,7 +1627,7 @@ advisories:
     threat: T-13
     status: covered
     notes: |
-      ZITADEL's token exchange skipped its impersonation check. The
+      Another OP's token exchange skipped its impersonation check. The
       embedder's exchange policy is mandatory and always consulted. Pinned by
       TestScenario_TX_011_PolicyErrorPreservedVerbatim (denied exchange
       refused) and TestScenario_TX_009_ScopeInflationRejected.
@@ -1677,11 +1677,11 @@ advisories:
   # --- T-15 TOTP / RFC 6238 ----------------------------------------
   - id: GHSA-9r3w-4j8q-pw98
     severity: P0
-    source: https://github.com/calcom/cal.com/security/advisories/GHSA-9r3w-4j8q-pw98
+    source: https://github.com/calcom/another OP/security/advisories/GHSA-9r3w-4j8q-pw98
     threat: T-15
     status: covered
     notes: |
-      cal.com TOTP bypass — providing a TOTP code skipped the password
+      another OP TOTP bypass — providing a TOTP code skipped the password
       check entirely. Two-layer mitigation:
         - authn.TestLoginFlowTOTPRequiresPrimary pins the orchestrator
           invariant (TOTP step is unreachable until Primary completes).
@@ -1690,11 +1690,11 @@ advisories:
           side gate (TOTP rejects empty Subject).
   - id: GHSA-5jfq-x6xp-7rw2
     severity: P0
-    source: https://github.com/keycloak/keycloak/security/advisories/GHSA-5jfq-x6xp-7rw2
+    source: https://github.com/advisories/GHSA-5jfq-x6xp-7rw2
     threat: T-15
     status: covered
     notes: |
-      Keycloak two-factor authentication bypass. Same structural
+      another OP two-factor authentication bypass. Same structural
       property as 9r3w — covered by the same two-layer mitigation
       (orchestrator step ordering + adapter subject-required gate).
   - id: CVE-2026-33473
@@ -1776,7 +1776,7 @@ advisories:
     threat: T-15
     status: covered
     notes: |
-      nginx-ignition accepted one TOTP code more than once within its window.
+      A reverse-proxy admin console accepted one TOTP code more than once within its window.
       Pinned by TestVerify_ReplaysSameStepRejected (same step) and the
       "AcceptRejectsEarlierStep" store contract case (totpAcceptEarlier).
       Aliases: GHSA-hf33-q6cf-c66f.
@@ -1832,11 +1832,11 @@ advisories:
       ceremony slot is cleared as soon as the factor produces a result.
   - id: CVE-2026-6856
     severity: P1
-    source: https://github.com/keycloak/keycloak/issues/48388
+    source: https://nvd.nist.gov/vuln/detail/CVE-2026-6856
     threat: T-16
     status: covered
     notes: |
-      Keycloak requested direct attestation but accepted a registration
+      another OP requested direct attestation but accepted a registration
       whose response carried packed self-attestation — no x5c chain, so
       nothing vouched for the AAGUID the authenticator claimed. The
       acceptable-AAGUID allowlist was then applied to an unauthenticated
@@ -1926,7 +1926,7 @@ advisories:
     threat: T-16
     status: out-of-scope
     out_of_scope_reason: |
-      ZITADEL accepted authenticator enrolment before any primary factor. This OP exposes no such step: the login
+      another OP accepted authenticator enrolment before any primary factor. This OP exposes no such step: the login
       chain has no enrolment prompt; enrolment happens only through
       embedder-called passkeykit / totpkit.
       The mitigation belongs to the embedder. Reviewed and excluded.
@@ -1966,7 +1966,7 @@ advisories:
     threat: T-16
     status: out-of-scope
     out_of_scope_reason: |
-      Nginx-UI allowed TOTP / passkey enrolment without re-authentication. This OP exposes no such account-management API: requiring a
+      another OP allowed TOTP / passkey enrolment without re-authentication. This OP exposes no such account-management API: requiring a
       recent sign-in before calling passkeykit / totpkit is the embedder's
       account UI, as their package docs state.
       Aliases: GHSA-gfrc-g87h-7h5w.
@@ -1975,11 +1975,11 @@ advisories:
   # --- T-17 email-OTP -----------------------------------------------
   - id: CVE-2026-22751
     severity: P2
-    source: https://spring.io/security/cve-2026-22751/
+    source: https://nvd.nist.gov/vuln/detail/CVE-2026-22751
     threat: T-17
     status: covered
     notes: |
-      Spring Security's JDBC one-time-token service read the token,
+      A web framework's JDBC one-time-token service read the token,
       decided it was unused, and deleted it in separate statements, so
       two requests arriving together both passed the check and both
       authenticated. Where CVE-2026-1035 is the same race on refresh
@@ -2106,11 +2106,11 @@ advisories:
   # --- T-21 mTLS bound token / x5t#S256 ----------------------------
   - id: CVE-2026-22747
     severity: P1
-    source: https://spring.io/security/cve-2026-22747/
+    source: https://nvd.nist.gov/vuln/detail/CVE-2026-22747
     threat: T-21
     status: covered
     notes: |
-      Spring Security derived the username from an X.509 client
+      A web framework derived the username from an X.509 client
       certificate by pattern-matching the subject DN's string form, and
       certain malformed CN values — escapes and separators that survive
       the round trip to text — made the extractor read the wrong field,
@@ -2129,7 +2129,7 @@ advisories:
       covers the multi-valued-RDN spelling of the same idea.
   - id: CVE-2026-47838
     severity: P1
-    source: https://spring.io/security/cve-2026-47838/
+    source: https://nvd.nist.gov/vuln/detail/CVE-2026-47838
     threat: T-21
     status: covered
     notes: |
@@ -2160,7 +2160,7 @@ advisories:
     threat: T-22
     status: covered
     notes: |
-      Keycloak CIBA authentication flow bypassed the brute-force account
+      another OP CIBA authentication flow bypassed the brute-force account
       lockout that the interactive login enforces — an alternate authn
       path that received a separate brute-force budget. Structural
       property: every OP-side credential factor consults one shared
@@ -2174,11 +2174,11 @@ advisories:
       polling, gated separately by ciba.poll_abuse.lockout.
   - id: GHSA-qj3q-235g-qr6w
     severity: P0
-    source: https://github.com/zitadel/zitadel/security/advisories/GHSA-qj3q-235g-qr6w
+    source: https://github.com/advisories/GHSA-qj3q-235g-qr6w
     threat: T-22
     status: out-of-scope
     out_of_scope_reason: |
-      ZITADEL approved a device code from an existing session with no
+      another OP approved a device code from an existing session with no
       user_code entry or consent. This OP exposes no such page: the /device
       verification ceremony is embedder-owned; the OP only issues
       verification_uri_complete and approves through an explicit
@@ -2200,7 +2200,7 @@ advisories:
     threat: T-22
     status: covered
     notes: |
-      Keycloak did not check that a client was allowed CIBA. Pinned by
+      another OP did not check that a client was allowed CIBA. Pinned by
       TestServe_RejectsClientWithoutCIBAGrant: unauthorized_client.
       Aliases: GHSA-68jh-rrf2-v9vr.
   - id: CVE-2026-105305
@@ -2209,7 +2209,7 @@ advisories:
     threat: T-22
     status: out-of-scope
     out_of_scope_reason: |
-      Keycloak's device grant ignored the client's minimum authentication
+      Another OP's device grant ignored the client's minimum authentication
       level. This OP exposes no such interaction: device verification runs no OP
       interaction; ApproveUserCode takes the subject and auth_time from the
       embedder, which owns the authentication it performed.
@@ -2240,11 +2240,11 @@ advisories:
   # --- T-23 Dynamic Client Registration / RAT ----------------------
   - id: CVE-2026-22752
     severity: P0
-    source: https://spring.io/security/cve-2026-22752/
+    source: https://nvd.nist.gov/vuln/detail/CVE-2026-22752
     threat: T-23
     status: covered
     notes: |
-      Spring Authorization Server's DCR endpoints accepted client
+      Another OP's DCR endpoints accepted client
       metadata fields without validating them (CVSS 9.6), reachable by
       anyone holding a valid initial access token — no administrative
       privilege. Depending on the field, the outcome was stored XSS,
@@ -2313,7 +2313,7 @@ advisories:
     threat: T-23
     status: covered
     notes: |
-      Keycloak's DCR stored security-sensitive client attributes. Metadata is
+      Another OP's DCR stored security-sensitive client attributes. Metadata is
       an explicit allow-list. Pinned by
       TestRegister_InternalClientAttributesNotWritable: injected internal
       fields never reach the stored client.
@@ -2324,7 +2324,7 @@ advisories:
     threat: T-23
     status: covered
     notes: |
-      Keycloak's DCR response omitted a setting, so read-modify-write lost it.
+      Another OP's DCR response omitted a setting, so read-modify-write lost it.
       Pinned by TestManage_ReadModifyWriteIsLossless: GET, PUT the body back,
       GET again yields identical responses and an unchanged stored client.
       Aliases: GHSA-qxj8-968q-qm7w.
@@ -2334,7 +2334,7 @@ advisories:
     threat: T-23
     status: covered
     notes: |
-      Keycloak (GHSA-r7rc-c989-86g6): a registration access token re-enabled
+      another OP (GHSA-r7rc-c989-86g6): a registration access token re-enabled
       an administrator-disabled client. This OP has no disabled state; an
       operator removes a client by deleting it, and
       TestManage_OperatorDeletedClientRATCannotRecreate pins that the old
@@ -2343,7 +2343,7 @@ advisories:
   # --- Out-of-scope (not OP responsibility) ------------------------
   - id: GHSA-gr79-9v6v-gc9r
     severity: P1
-    source: https://github.com/dexidp/dex/security/advisories/GHSA-gr79-9v6v-gc9r
+    source: https://github.com/advisories/GHSA-gr79-9v6v-gc9r
     threat: T-14
     status: out-of-scope
     out_of_scope_reason: |
@@ -2352,20 +2352,20 @@ advisories:
       "library posture" §observability and §TLS state this explicitly.
   - id: GHSA-q8hq-4h99-fj7x
     severity: P1
-    source: https://github.com/keycloak/keycloak/security/advisories/GHSA-q8hq-4h99-fj7x
+    source: https://github.com/advisories/GHSA-q8hq-4h99-fj7x
     threat: T-14
     status: out-of-scope
     out_of_scope_reason: |
-      Keycloak TLS client-initiated renegotiation DoS. TLS layer is
+      another OP TLS client-initiated renegotiation DoS. TLS layer is
       embedder-owned per CLAUDE.md; library does not configure
       `tls.Config.Renegotiation`.
   - id: GHSA-m9hp-7r99-94h5
     severity: P0
-    source: https://github.com/dexidp/dex/security/advisories/GHSA-m9hp-7r99-94h5
+    source: https://github.com/advisories/GHSA-m9hp-7r99-94h5
     threat: T-06
     status: out-of-scope
     out_of_scope_reason: |
-      dex SAML XML self-rolled parser bug. SAML is not implemented in
+      another OP SAML XML self-rolled parser bug. SAML is not implemented in
       go-oidc-provider (CLAUDE.md "ライブラリ性の核": OP only). Listed
       here so future contributors know it was reviewed and excluded.
   - id: CVE-2026-4874
@@ -2374,7 +2374,7 @@ advisories:
     threat: T-14
     status: out-of-scope
     out_of_scope_reason: |
-      Keycloak SSRF via token-endpoint URL manipulation. Outbound
+      another OP SSRF via token-endpoint URL manipulation. Outbound
       request egress control is the embedder's network boundary, not OP
       logic (CLAUDE.md "library posture": HTTP / transport concerns are
       embedder-owned). Reviewed and excluded.
@@ -2384,7 +2384,7 @@ advisories:
     threat: T-22
     status: out-of-scope
     out_of_scope_reason: |
-      Keycloak CIBA backchannel-notification SSRF: a privileged client
+      another OP CIBA backchannel-notification SSRF: a privileged client
       configured an internal URL as its notification endpoint. The SSRF
       egress control is embedder-owned; the OP does not make outbound
       calls to client-supplied URLs in this library's CIBA surface.
@@ -2508,7 +2508,7 @@ advisories:
     threat: T-02
     status: out-of-scope
     out_of_scope_reason: |
-      Nginx-UI's Casdoor SSO callback used a constant state, giving login CSRF on the relying party. State
+      Another OP's another OP SSO callback used a constant state, giving login CSRF on the relying party. State
       generation and callback verification are the RP's responsibility; the
       OP echoes state verbatim per RFC 6749. Reviewed and excluded.
   - id: CVE-2026-108738
@@ -2580,7 +2580,7 @@ advisories:
     threat: T-13
     status: out-of-scope
     out_of_scope_reason: |
-      Keycloak Policy Enforcer authorization bypass via the access-denied page
+      another OP Policy Enforcer authorization bypass via the access-denied page
       path. Resource-server policy enforcement is not part of this OP. Feature
       absent. Reviewed and excluded.
   - id: CVE-2026-9799
@@ -2589,7 +2589,7 @@ advisories:
     threat: T-13
     status: out-of-scope
     out_of_scope_reason: |
-      Keycloak UMA permission ticket bypass. This OP implements no UMA. Feature
+      another OP UMA permission ticket bypass. This OP implements no UMA. Feature
       absent. Reviewed and excluded.
   - id: GHSA-h2r5-x5m7-3935
     severity: P2

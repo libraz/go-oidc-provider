@@ -40,10 +40,13 @@ const (
 
 // authorize accepts the request's access token and checks that the
 // receiver obtained it on its own behalf, that its audience contains the
-// issuer and that its scope covers level. It returns the receiver's
-// client_id, or writes the RFC 6750 §3.1 rejection and reports false.
-func (h *Handlers) authorize(w http.ResponseWriter, r *http.Request, level authLevel) (string, bool) {
-	access, err := endpointsupport.AcceptBearer(r, h.bearer)
+// issuer and that its scope covers level. A DPoP proof must name htu, the
+// endpoint's advertised URL. It returns the receiver's client_id, or
+// writes the RFC 6750 §3.1 rejection and reports false.
+func (h *Handlers) authorize(w http.ResponseWriter, r *http.Request, level authLevel, htu []string) (string, bool) {
+	bearer := h.bearer
+	bearer.DPoPHTU = htu
+	access, err := endpointsupport.AcceptBearer(r, bearer)
 	if err != nil {
 		httpx.StampNoStore(w)
 		var be *endpointsupport.BearerError

@@ -229,7 +229,7 @@ func TestGrantLineage_RevokeSubjectReachesEveryGrantType(t *testing.T) {
 func TestGrantLineage_RefreshGrantIDResolvesForTheClient(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	gm := op.WithGrantManagement([]op.GrantManagementAction{op.GrantActionQuery, op.GrantActionRevoke}, false)
+	gm := op.WithGrantManagement(op.GrantManagement{Actions: []op.GrantManagementAction{op.GrantActionQuery, op.GrantActionRevoke}})
 
 	p := newDevProviderWithResources(t, []string{"openid", "offline_access"}, nil, testkit.WithOptions(gm))
 	dc := p.issueDeviceCode(t, "openid offline_access")

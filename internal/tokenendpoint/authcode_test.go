@@ -680,7 +680,7 @@ func TestAuthCode_Replay(t *testing.T) {
 // SHOULD revoke ... all tokens previously issued based on that
 // authorization code"), RFC 9700 §2.1.1 (Security BCP recommends
 // rotation + reuse-detection revocation as the strict-stance default),
-// and the matching threat shape that drives ory/fosite's
+// and the matching threat shape that drives another OAuth library's
 // "TestRefreshTokenChainRevocation" — the same revocation contract
 // flipped on the code half of the flow. CWE-294 (Authentication
 // Bypass by Capture-Replay) is the canonical CWE.
@@ -1056,7 +1056,7 @@ func TestAuthCode_OpaqueFormat_DPoPBindingPersisted(t *testing.T) {
 
 	key := newDPoPKey(t)
 	form := authCodeForm(codeID, redirect, verifier)
-	proof := makeDPoPProof(t, key, "POST", f.endpoint, f.clock.now, "jti-ac-opaque-dpop", "")
+	proof := makeDPoPProof(t, key, "POST", f.htu(), f.clock.now, "jti-ac-opaque-dpop", "")
 	resp := postWithDPoP(t, f.prov.HTTPClient(nil), f.endpoint, form, client.ID, secret, proof)
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {

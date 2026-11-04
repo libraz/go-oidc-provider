@@ -141,14 +141,16 @@ rows:
 
   - id: FAPI-V2-021
     severity: P0
-    spec: FAPI 2.0 §5.3.2.2 + RFC 7523 §3
+    spec: FAPI 2.0 Security Profile §5.3.2.1 + RFC 7523 §3
+    shape: value
     behaviour: |
-      A private_key_jwt client assertion's aud MUST equal the issuer
-      identifier URL (NOT the token or PAR endpoint URL); a mismatch
-      yields 401 invalid_client with error_detail
-      "audience (aud) must equal the issuer identifier url".
-    status: out-of-scope
-    out_of_scope_reason: "non-spec residue (divergent posture): catalog asserts a strict aud == issuer rule for private_key_jwt at FAPI 2.0; v1.0 instead accepts both the issuer URL AND the absolute token / PAR endpoint URL as valid aud values via clientauth.PrivateKeyJWTVerifier.AuxAudiences (op/op_builders.go buildAssertionVerifier). The dual posture lets a single OP serve OIDC Core (aud == token endpoint URL per OIDC Core §9) and FAPI 2.0 (aud == issuer per §5.2.2) clients without forcing a per-profile verifier swap; the OFCS PAR audience module that uses aud == PAR endpoint also relies on this. A spec-strict embedder who wants the narrower posture swaps the verifier through the public store seam."
+      Under FAPI 2.0 Baseline / Message Signing a private_key_jwt client
+      assertion authenticates only when its aud is the issuer identifier
+      as a single JSON string. An array (even one holding only the
+      issuer), the token endpoint URL and the PAR endpoint URL are
+      refused with 401 invalid_client. A provider without the profile
+      keeps accepting the issuer, the endpoint URL and arrays.
+    status: active
 
   - id: FAPI-V2-022
     severity: P0
@@ -190,6 +192,16 @@ rows:
       (and state if the RP sent one) in the redirect query — NOT in
       the fragment, NOT JARM by default.
     status: active
+
+  - id: FAPI-V2-026
+    severity: P0
+    spec: FAPI 2.0 Security Profile §5.3.2.1 + RFC 6749 §6
+    shape: order
+    behaviour: |
+      Under FAPI 2.0 Baseline / Message Signing the refresh_token grant
+      does not rotate: the response carries a new access token and no
+      refresh_token, the presented refresh token stays redeemable until
+      it expires, and revoking its grant ends it with 400 invalid_grant.
 
   - id: FAPI-030
     severity: P0

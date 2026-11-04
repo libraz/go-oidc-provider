@@ -384,6 +384,50 @@ func TestAcceptBearer_MTLSBound(t *testing.T) {
 	requireBearerRejection(t, err, endpointsupport.BearerSchemeBearer, "mTLS verification is not enabled")
 }
 
+// TestAcceptBearer_MTLSRootCAsFollowTheTokensClient pins that a bound
+// certificate is re-verified under the trust rule of the token's client:
+// under RootCAs a self-signed certificate passes for a
+// self_signed_tls_client_auth client and is refused for any other.
+func TestAcceptBearer_MTLSRootCAsFollowTheTokensClient(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		method string
+		ok     bool
+	}{
+		{"self_signed_tls_client_auth", true},
+		{"tls_client_auth", false},
+		{"private_key_jwt", false},
+	} {
+		t.Run(tc.method, func(t *testing.T) {
+			t.Parallel()
+			f := newBearerFixture(t)
+			if err := f.st.RegisterClient(context.Background(), &store.Client{ID: "client-1", TokenEndpointAuthMethod: tc.method}); err != nil {
+				t.Fatalf("RegisterClient: %v", err)
+			}
+			f.deps.Clients = f.st.Clients()
+			v, err := mtls.NewVerifier(mtls.VerifierConfig{RootCAs: x509.NewCertPool()})
+			if err != nil {
+				t.Fatalf("mtls.NewVerifier: %v", err)
+			}
+			f.deps.MTLS = v
+			cert := bearerTestCert(t)
+			raw := f.jwt(t, func(c *tokens.AccessTokenClaims) {
+				c.Confirmation = map[string]string{tokens.CnfX5tS256: mtls.Thumbprint(cert)}
+			})
+			r := bearerRequest(t, "Bearer "+raw)
+			r.TLS = &tls.ConnectionState{PeerCertificates: []*x509.Certificate{cert}}
+			_, err = endpointsupport.AcceptBearer(r, f.deps)
+			if tc.ok {
+				if err != nil {
+					t.Fatalf("AcceptBearer: %v", err)
+				}
+				return
+			}
+			requireBearerRejection(t, err, endpointsupport.BearerSchemeBearer, "client certificate does not match the bound thumbprint")
+		})
+	}
+}
+
 type countingNonces struct{ n int }
 
 func (c *countingNonces) IssueNonce() string {

@@ -107,7 +107,7 @@ func main() {
 		op.WithKeyset(keys.Keyset()),
 		op.WithCookieKeys(keys.CookieKey),
 		// Admit "localhost" as a redirect_uri host alongside 127.0.0.1.
-		op.WithAllowLocalhostLoopback(),
+		op.WithAllowLocalhostRedirectURIs(),
 		// A primary factor is what turns a browser into an account the
 		// chooser can list; without it /authorize has no interaction to
 		// hand the user to.

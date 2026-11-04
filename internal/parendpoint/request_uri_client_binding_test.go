@@ -20,7 +20,7 @@ import (
 // code, and leave the record unconsumed so the rightful client can still
 // redeem it.
 //
-// Tracks: GHSA-mxv6-xwqj-ww2p (Duende IdentityServer — a pushed request was not bound to the client that authenticated at the PAR endpoint)
+// Tracks: GHSA-mxv6-xwqj-ww2p (another OP — a pushed request was not bound to the client that authenticated at the PAR endpoint)
 func TestEndToEnd_PAR_RequestURIBoundToPushingClient(t *testing.T) {
 	t.Parallel()
 

@@ -30,7 +30,7 @@ import (
 // state underneath. A verdict that depended on anything the first
 // instance accumulated would come out differently here.
 //
-// Tracks: CVE-2026-9802 (Keycloak) — stale-token detection compared the
+// Tracks: CVE-2026-9802 (another OP) — stale-token detection compared the
 // token against the cluster startup time, which a server restart reset,
 // so refresh tokens already rotated away were accepted again by anyone
 // who had captured one.

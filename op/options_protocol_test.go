@@ -5,14 +5,15 @@ package op
 
 import (
 	"errors"
+	"net/http"
 	"testing"
 	"time"
 )
 
-// TestWithAllowPrivateNetworkBackchannel drives the option against a fresh
+// TestWithAllowPrivateNetwork_Backchannel drives the option against a fresh
 // config and confirms the accessor reads back the value. The SSRF behaviour itself is exercised by
 // internal/backchannel/deliverer_ssrf_test.go.
-func TestWithAllowPrivateNetworkBackchannel(t *testing.T) {
+func TestWithAllowPrivateNetwork_Backchannel(t *testing.T) {
 	t.Parallel()
 
 	cases := []struct {
@@ -20,7 +21,7 @@ func TestWithAllowPrivateNetworkBackchannel(t *testing.T) {
 		opt  Option
 		want bool
 	}{
-		{"opt-in", WithAllowPrivateNetworkBackchannel(), true},
+		{"opt-in", WithAllowPrivateNetwork(OutboundBackchannel), true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -47,17 +48,17 @@ func TestBackchannelAllowsPrivateNetwork_Unconfigured(t *testing.T) {
 	}
 }
 
-// TestWithAllowPrivateNetworkBackchannel_PerConfig confirms the flag
+// TestWithAllowPrivateNetwork_Backchannel_PerConfig confirms the flag
 // lives on the config it was applied to and nowhere else. The gate is
 // a plain config field rather than a package-level registry, so a
 // config that fails validation is collected with everything it
 // references — its keyset, ClientStore and substores included —
 // instead of being pinned for the process lifetime.
-func TestWithAllowPrivateNetworkBackchannel_PerConfig(t *testing.T) {
+func TestWithAllowPrivateNetwork_Backchannel_PerConfig(t *testing.T) {
 	t.Parallel()
 
 	permissive := &config{}
-	if err := WithAllowPrivateNetworkBackchannel().apply(permissive); err != nil {
+	if err := WithAllowPrivateNetwork(OutboundBackchannel).apply(permissive); err != nil {
 		t.Fatalf("apply: %v", err)
 	}
 	strict := &config{}
@@ -70,42 +71,64 @@ func TestWithAllowPrivateNetworkBackchannel_PerConfig(t *testing.T) {
 	}
 }
 
-// TestWithBackchannelFanOutBudget_AcceptsPositive confirms a usable
-// budget reaches the config field the coordinator builder reads.
-func TestWithBackchannelFanOutBudget_AcceptsPositive(t *testing.T) {
+// TestWithBackchannelLogout_RecordsFields confirms every field reaches the
+// config field the coordinator builder reads.
+func TestWithBackchannelLogout_RecordsFields(t *testing.T) {
 	t.Parallel()
 
+	rt := http.DefaultTransport
 	c := &config{}
-	if err := WithBackchannelFanOutBudget(90 * time.Second).apply(c); err != nil {
+	err := WithBackchannelLogout(BackchannelLogout{Transport: rt, Timeout: 2 * time.Second, FanOutBudget: 90 * time.Second}).apply(c)
+	if err != nil {
 		t.Fatalf("apply: %v", err)
+	}
+	if c.backchannelLogoutTransport != rt {
+		t.Errorf("backchannelLogoutTransport = %v, want the supplied transport", c.backchannelLogoutTransport)
+	}
+	if c.backchannelLogoutTimeout != 2*time.Second {
+		t.Errorf("backchannelLogoutTimeout = %v, want 2s", c.backchannelLogoutTimeout)
 	}
 	if c.backchannelFanOutBudget != 90*time.Second {
 		t.Errorf("backchannelFanOutBudget = %v, want 90s", c.backchannelFanOutBudget)
 	}
 }
 
-// TestWithBackchannelFanOutBudget_RejectsNonPositive pins the
-// option-site validation. Zero cannot mean "unbounded" — it is the
-// sentinel the coordinator reads as "use the library default" — and a
-// negative budget would abandon every delivery before it started, so
-// both are refused where the embedder can still see the mistake.
-func TestWithBackchannelFanOutBudget_RejectsNonPositive(t *testing.T) {
+// TestWithBackchannelLogout_ZeroKeepsDefaults pins the zero value as the
+// "use the library default" sentinel: the coordinator reads it as unset,
+// so the defaults live in one place instead of a second copy in op.
+func TestWithBackchannelLogout_ZeroKeepsDefaults(t *testing.T) {
+	t.Parallel()
+
+	c := &config{}
+	if err := WithBackchannelLogout(BackchannelLogout{}).apply(c); err != nil {
+		t.Fatalf("apply: %v", err)
+	}
+	if c.backchannelLogoutTransport != nil || c.backchannelLogoutTimeout != 0 || c.backchannelFanOutBudget != 0 {
+		t.Errorf("zero BackchannelLogout recorded non-zero state: %+v", c)
+	}
+}
+
+// TestWithBackchannelLogout_RejectsNegative pins the option-site
+// validation. A negative timeout or budget would abandon every delivery
+// before it started, so both are refused where the embedder can still see
+// the mistake, and nothing reaches the config.
+func TestWithBackchannelLogout_RejectsNegative(t *testing.T) {
 	t.Parallel()
 
 	cases := []struct {
 		name string
-		give time.Duration
+		give BackchannelLogout
 	}{
-		{"zero", 0},
-		{"negative", -time.Second},
+		{"negative timeout", BackchannelLogout{Timeout: -time.Second}},
+		{"negative fan-out budget", BackchannelLogout{FanOutBudget: -time.Second}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			c := &config{}
-			err := WithBackchannelFanOutBudget(tc.give).apply(c)
+			err := WithBackchannelLogout(tc.give).apply(c)
 			if err == nil {
-				t.Fatal("apply accepted a non-positive budget")
+				t.Fatal("apply accepted a negative duration")
 			}
 			var opErr *Error
 			if !errors.As(err, &opErr) {
@@ -114,42 +137,43 @@ func TestWithBackchannelFanOutBudget_RejectsNonPositive(t *testing.T) {
 			if opErr.Code != codeConfiguration {
 				t.Errorf("Code = %q, want %q", opErr.Code, codeConfiguration)
 			}
-			if c.backchannelFanOutBudget != 0 {
-				t.Errorf("rejected budget still reached the config: %v", c.backchannelFanOutBudget)
+			if c.backchannelLogoutTimeout != 0 || c.backchannelFanOutBudget != 0 {
+				t.Errorf("rejected value still reached the config: %+v", c)
 			}
 		})
 	}
 }
 
-// TestBackchannelFanOutBudget_UnsetIsZero confirms the "option not
-// called" state stays the zero value, which is what defers the choice
-// to the coordinator's own default instead of pinning a second copy of
-// it in the op package.
-func TestBackchannelFanOutBudget_UnsetIsZero(t *testing.T) {
+// TestWithBackchannelLogout_AtMostOnce confirms a second call fails
+// rather than silently replacing the first.
+func TestWithBackchannelLogout_AtMostOnce(t *testing.T) {
 	t.Parallel()
 
 	c := &config{}
-	if c.backchannelFanOutBudget != 0 {
-		t.Errorf("unset budget = %v, want 0", c.backchannelFanOutBudget)
+	if err := WithBackchannelLogout(BackchannelLogout{Timeout: time.Second}).apply(c); err != nil {
+		t.Fatalf("first apply: %v", err)
+	}
+	if err := WithBackchannelLogout(BackchannelLogout{Timeout: 2 * time.Second}).apply(c); err == nil {
+		t.Fatal("second apply succeeded")
 	}
 }
 
-// TestWithAllowPrivateNetworkSector confirms the option flips the
+// TestWithAllowPrivateNetwork_Sector confirms the option flips the
 // underlying config field. The runtime SSRF behaviour itself is
 // covered in internal/sector/resolver_test.go; this test pins the
 // option-to-config wiring so a future refactor that drops the
 // allowPrivateNetworkSector field is caught at the option layer.
-func TestWithAllowPrivateNetworkSector(t *testing.T) {
+func TestWithAllowPrivateNetwork_Sector(t *testing.T) {
 	t.Parallel()
 
 	c := &config{}
 	if c.allowPrivateNetworkSector {
 		t.Fatal("default must be deny (false)")
 	}
-	if err := WithAllowPrivateNetworkSector().apply(c); err != nil {
+	if err := WithAllowPrivateNetwork(OutboundSector).apply(c); err != nil {
 		t.Fatalf("apply: %v", err)
 	}
 	if !c.allowPrivateNetworkSector {
-		t.Error("WithAllowPrivateNetworkSector did not flip allowPrivateNetworkSector")
+		t.Error("WithAllowPrivateNetwork(OutboundSector) did not flip allowPrivateNetworkSector")
 	}
 }

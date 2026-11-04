@@ -72,6 +72,12 @@ type Deps struct {
 	// nil value disables private_key_jwt support.
 	AssertionVerifier clientauth.AssertionVerifier
 
+	// CertificateVerifier verifies RFC 8705 §2 mTLS client
+	// authentication (tls_client_auth, self_signed_tls_client_auth). Nil
+	// when feature.MTLS is off, which rejects a client registered for
+	// either method as invalid_client.
+	CertificateVerifier clientauth.CertificateVerifier
+
 	// AllowedClientAuthMethods optionally restricts which client
 	// authentication methods the endpoint accepts. Empty means
 	// "no restriction"; non-empty means the chosen method must
@@ -88,6 +94,12 @@ type Deps struct {
 	// DPoPNonces is the RFC 9449 §8 nonce issuer consulted on
 	// the `use_dpop_nonce` challenge response.
 	DPoPNonces dpop.NonceIssuer
+
+	// DPoPHTU is the set of absolute URLs a DPoP proof's "htu" must name
+	// at this endpoint: what discovery advertises for it, plus its RFC
+	// 8705 mtls_endpoint_aliases URL when one is configured. Empty falls
+	// back to the request-derived URL ([dpop.Gate.HTU]).
+	DPoPHTU []string
 
 	// MTLS, when non-nil, makes /bc-authorize stamp the SHA-256
 	// thumbprint of the inbound mTLS leaf certificate onto the
@@ -247,7 +259,7 @@ func serve(w http.ResponseWriter, r *http.Request, deps Deps) {
 	if !ok {
 		return
 	}
-	mtlsThumbprint, ok := endpointsupport.ExtractMTLSThumbprint(w, r, deps.MTLS)
+	mtlsThumbprint, ok := endpointsupport.ExtractMTLSThumbprint(w, r, deps.MTLS.ForClient(client.TokenEndpointAuthMethod))
 	if !ok {
 		return
 	}

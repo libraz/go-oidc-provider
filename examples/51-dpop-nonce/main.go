@@ -47,11 +47,12 @@
 //
 //   - WithProfile(FAPI2Baseline) caps client-auth at private_key_jwt
 //     and forces sender-constrained access tokens. The profile
-//     requires the embedder to choose DPoP or mTLS for the binding;
-//     this example picks DPoP via WithFeature. The baseline profile
-//     does NOT mandate WithDPoPNonceSource (only the FAPI 2.0 Message
-//     Signing profile does), so this example opts in explicitly to
-//     surface the nonce loop.
+//     enables DPoP itself when neither feature.DPoP nor feature.MTLS
+//     is configured; WithFeature(feature.DPoP) restates that default.
+//     Baseline does not require WithDPoPNonceSource. The FAPI 2.0
+//     Message Signing preset does, as a library choice rather than a
+//     FAPI 2.0 Security Profile MUST, so this example opts in
+//     explicitly to surface the nonce loop.
 //   - WithDPoPNonceSource installs the issuance / validation halves.
 //     The constructor takes a context: when the supplied context is
 //     canceled the rotation goroutine exits cleanly. main here passes
@@ -64,7 +65,7 @@
 //   - Store: in-memory; use op/storeadapter/sql or composite.
 //   - Listener: plain HTTP; front behind TLS-terminating ingress.
 //   - User seed: the demo username / password are hard-coded; production embedders enrol users through their own management plane.
-//   - DPoPNonceSource: process-local in-memory ring (forgets all values on restart) — unsuitable for horizontally scaled OPs because two replicas issue from independent rings and reject each other's nonces. Production multi-replica deployments supply a source backed by a shared cache (Redis / memcached); a built-in distributed implementation is on the v1.x roadmap.
+//   - DPoPNonceSource: process-local in-memory ring (forgets all values on restart) — unsuitable for horizontally scaled OPs because two replicas issue from independent rings and reject each other's nonces. A multi-replica deployment uses op/storeadapter/redis Store.DPoPNonceSource, which keeps the nonces in a Redis every replica shares.
 //   - rpkit: the RP code in examples/internal/rpkit is a demo wrapper, not a library. Production FAPI 2.0 RPs use a tested client framework rather than copy-pasting the proof.
 package main
 

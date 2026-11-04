@@ -69,7 +69,7 @@ func newCIMDProvider(t *testing.T, extra ...op.Option) *testkit.Provider {
 	t.Helper()
 	opts := append([]op.Option{
 		op.WithClientIDMetadataDocuments(op.ClientIDMetadataDocuments{}),
-		op.WithAllowPrivateNetworkClientIDMetadata(),
+		op.WithAllowPrivateNetwork(op.OutboundClientIDMetadata),
 	}, extra...)
 	return testkit.NewProvider(t, testkit.WithOptions(opts...))
 }

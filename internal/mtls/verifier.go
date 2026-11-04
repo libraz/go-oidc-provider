@@ -72,6 +72,53 @@ func (v *Verifier) CertificateFromRequest(r *http.Request) (*x509.Certificate, e
 	return cert, nil
 }
 
+// ForClient returns the verifier that applies to a client registered with
+// method. A self_signed_tls_client_auth client proves its certificate by
+// registered key (RFC 8705 §2.2), so its view drops [VerifierConfig.RootCAs]:
+// the certificate is read from the same sources, the trusted-proxy rule
+// included, and authenticates and binds without a chain check. Every other
+// method gets v unchanged. Every certificate read for a request goes through
+// the view of its resolved client, so the trust rule is decided once.
+func (v *Verifier) ForClient(method string) *Verifier {
+	if v == nil || v.rootCAs == nil || method != MethodSelfSignedTLSClientAuth {
+		return v
+	}
+	return &Verifier{proxy: v.proxy}
+}
+
+// VerifiesChains reports whether v validates certificate chains against
+// [VerifierConfig.RootCAs], the one setting [Verifier.ForClient] varies.
+func (v *Verifier) VerifiesChains() bool {
+	return v != nil && v.rootCAs != nil
+}
+
+// ClientAuthCertificate returns the certificate RFC 8705 §2 client
+// authentication judges for a client registered with method, and whether
+// its chain is verified. It reads through [Verifier.ForClient] and
+// [Verifier.CertificateFromRequest], the same selection the binding helpers
+// use, so a client cannot authenticate with one certificate and bind its
+// tokens to another.
+//
+// The chain counts as verified when [VerifierConfig.RootCAs] validated it
+// (any source), or when the leaf came from the TLS handshake and the
+// server's handshake verification produced [crypto/tls.ConnectionState.VerifiedChains].
+// A forwarded certificate without RootCAs is never verified: the OP cannot
+// see the proxy's validation.
+func (v *Verifier) ClientAuthCertificate(r *http.Request, method string) (*x509.Certificate, bool, error) {
+	v = v.ForClient(method)
+	cert, err := v.CertificateFromRequest(r)
+	if err != nil {
+		return nil, false, err
+	}
+	if v.rootCAs != nil {
+		return cert, true, nil
+	}
+	if headerPathActive(r, v.proxy) {
+		return cert, false, nil
+	}
+	return cert, r.TLS != nil && len(r.TLS.VerifiedChains) > 0, nil
+}
+
 // ThumbprintFromRequest returns the RFC 8705 §3.1 thumbprint of the
 // request's client cert. It is the high-level entry point the token
 // endpoint uses at issuance: the thumbprint goes into cnf.x5t#S256 on

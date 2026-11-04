@@ -34,6 +34,20 @@ func staticSeedForAuthMethod(tb testing.TB, method, id string) op.Option {
 			RedirectURIs: []string{redirect},
 			Scopes:       []string{"openid"},
 		})
+	case op.AuthTLSClientAuth:
+		return op.WithStaticClients(op.TLSClientAuthClient{
+			ID:           id,
+			SubjectDN:    "CN=" + id,
+			RedirectURIs: []string{redirect},
+			Scopes:       []string{"openid"},
+		})
+	case op.AuthSelfSignedTLSClientAuth:
+		return op.WithStaticClients(op.SelfSignedTLSClientAuthClient{
+			ID:           id,
+			JWKS:         validStaticJWKS(tb),
+			RedirectURIs: []string{redirect},
+			Scopes:       []string{"openid"},
+		})
 	case op.AuthNone:
 		return op.WithStaticClients(op.PublicClient{
 			ID:           id,
@@ -93,6 +107,9 @@ func TestAllowedClientAuthMethods_SeedsConstructThroughNew(t *testing.T) {
 					t.Parallel()
 
 					opts := append(validBaseOptsWithInmem(t), tc.wiring...)
+					if method == op.AuthTLSClientAuth.String() || method == op.AuthSelfSignedTLSClientAuth.String() {
+						opts = append(opts, op.WithFeature(feature.MTLS))
+					}
 					opts = append(opts, staticSeedForAuthMethod(t, method, "seed-"+method))
 					if _, err := op.New(opts...); err != nil {
 						t.Fatalf("op.New rejected a client seeded with %q, which %s advertises: %v",

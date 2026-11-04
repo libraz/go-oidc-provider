@@ -18,11 +18,12 @@ github.com/libraz/go-oidc-provider/op	ClientIDMetadataDocuments.Allow
 github.com/libraz/go-oidc-provider/op	CredentialCompromise
 github.com/libraz/go-oidc-provider/op	ErrIDJAGDenied
 github.com/libraz/go-oidc-provider/op	ErrIDJAGUnknownAudience
+github.com/libraz/go-oidc-provider/op	GrantManagement
 github.com/libraz/go-oidc-provider/op	GrantManagementAction
 github.com/libraz/go-oidc-provider/op	IDJAGDecision
 github.com/libraz/go-oidc-provider/op	IDJAGIssuancePolicy
 github.com/libraz/go-oidc-provider/op	IDJAGRequest
-github.com/libraz/go-oidc-provider/op	WithAllowPrivateNetworkClientIDMetadata
+github.com/libraz/go-oidc-provider/op	OutboundClientIDMetadata
 github.com/libraz/go-oidc-provider/op	WithClientIDMetadataDocuments
 github.com/libraz/go-oidc-provider/op	WithGrantManagement
 github.com/libraz/go-oidc-provider/op	WithIDJAGIssuance

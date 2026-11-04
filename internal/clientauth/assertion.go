@@ -100,6 +100,13 @@ type PrivateKeyJWTVerifier struct {
 	// either dialect. Empty disables the extra acceptance.
 	AuxAudiences []string
 
+	// SingleStringAudience accepts only an assertion whose "aud" is one
+	// JSON string equal to [Audience]; an array is refused even when it
+	// holds that value alone, and [AuxAudiences] is ignored. The op layer
+	// sets it, with Audience set to the issuer, under the profiles that
+	// FAPI 2.0 Security Profile §5.3.2.1 binds.
+	SingleStringAudience bool
+
 	// Clock returns the current wall-clock time. Required so tests can
 	// pin the verification window.
 	Clock func() time.Time
@@ -142,13 +149,12 @@ func (v *PrivateKeyJWTVerifier) Verify(ctx context.Context, clientID, assertion 
 	if err != nil {
 		return err
 	}
-	claims, err := decodeAssertionClaims(payload)
+	claims, audIsString, err := decodeAssertionClaims(payload)
 	if err != nil {
 		return fmt.Errorf("%w: %w", ErrAssertionMalformed, err)
 	}
-	accepted := append([]string{v.Audience}, v.AuxAudiences...)
 	now := v.Clock()
-	if err := validateAssertionClaims(claims, clientID, accepted, now, leeway); err != nil {
+	if err := validateAssertionClaims(claims, clientID, v.acceptedAudiences(audIsString), now, leeway); err != nil {
 		return err
 	}
 	replayKey, err := assertionReplayKey(clientID, claims.JTI)
@@ -163,6 +169,19 @@ func (v *PrivateKeyJWTVerifier) Verify(ctx context.Context, clientID, assertion 
 		return fmt.Errorf("authn: jti store: %w", err)
 	}
 	return nil
+}
+
+// acceptedAudiences returns the "aud" values the assertion may match.
+// Under [PrivateKeyJWTVerifier.SingleStringAudience] an array-encoded
+// aud gets nil, which nothing matches.
+func (v *PrivateKeyJWTVerifier) acceptedAudiences(audIsString bool) []string {
+	if v.SingleStringAudience {
+		if !audIsString {
+			return nil
+		}
+		return []string{v.Audience}
+	}
+	return append([]string{v.Audience}, v.AuxAudiences...)
 }
 
 // resolveAndVerify resolves the client's keyset and verifies the
@@ -303,8 +322,9 @@ func checkAssertionAlgPin(ctx context.Context, resolver JWKSResolver, clientID s
 }
 
 // decodeAssertionClaims unmarshals the JWS payload onto AssertionClaims,
-// reconciling the "aud" claim's polymorphic shape.
-func decodeAssertionClaims(payload []byte) (AssertionClaims, error) {
+// reconciling the "aud" claim's polymorphic shape. audIsString reports
+// whether "aud" was encoded as a single JSON string rather than an array.
+func decodeAssertionClaims(payload []byte) (claims AssertionClaims, audIsString bool, err error) {
 	var raw struct {
 		Iss string          `json:"iss"`
 		Sub string          `json:"sub"`
@@ -315,12 +335,14 @@ func decodeAssertionClaims(payload []byte) (AssertionClaims, error) {
 		Exp int64           `json:"exp"`
 	}
 	if err := json.Unmarshal(payload, &raw); err != nil {
-		return AssertionClaims{}, err
+		return AssertionClaims{}, false, err
 	}
 	aud, err := jose.DecodeAudience(raw.Aud)
 	if err != nil {
-		return AssertionClaims{}, err
+		return AssertionClaims{}, false, err
 	}
+	var single string
+	audIsString = json.Unmarshal(raw.Aud, &single) == nil
 	return AssertionClaims{
 		Issuer:    raw.Iss,
 		Subject:   raw.Sub,
@@ -329,7 +351,7 @@ func decodeAssertionClaims(payload []byte) (AssertionClaims, error) {
 		IssuedAt:  raw.Iat,
 		NotBefore: raw.Nbf,
 		ExpiresAt: raw.Exp,
-	}, nil
+	}, audIsString, nil
 }
 
 // validateAssertionClaims enforces the standard claim invariants

@@ -106,6 +106,63 @@ var clientRegistryCases = []subtest{
 	{"UpdateRoundTrip", clientUpdateRoundTrip},
 	{"UpdateUnchanged", clientUpdateUnchanged},
 	{"PreviousSecretRoundTrip", clientPreviousSecretRoundTrip},
+	{"TLSClientAuthMatcherRoundTrip", clientTLSClientAuthMatcherRoundTrip},
+}
+
+// clientTLSClientAuthMatcherRoundTrip pins that the five RFC 8705 §2.1.2
+// tls_client_auth matcher fields survive a write and a read verbatim on
+// every backend, and that an update can replace one with another.
+func clientTLSClientAuthMatcherRoundTrip(t *testing.T, f Factory) {
+	b := f(t)
+	registry := requireRegistry(t, b.Store)
+	ctx := context.Background()
+	c := &store.Client{ //nolint:gosec // G101 false positive: "tls_client_auth" is an auth-method name, not a credential.
+		ID:                      "mtls-pki",
+		RedirectURIs:            []string{"https://rp.example.com/cb"},
+		GrantTypes:              []string{"authorization_code"},
+		Scopes:                  []string{"openid"},
+		TokenEndpointAuthMethod: "tls_client_auth",
+		TLSClientAuthSubjectDN:  "CN=mtls-pki,O=Example,C=JP",
+		TLSClientAuthSANDNS:     "client.example.com",
+		TLSClientAuthSANURI:     "spiffe://example.com/client",
+		TLSClientAuthSANIP:      "2001:db8::1",
+		TLSClientAuthSANEmail:   "client@example.com",
+	}
+	if err := registry.RegisterClient(ctx, c); err != nil {
+		t.Fatalf("RegisterClient: %v", err)
+	}
+	got, err := b.Store.Clients().GetClient(ctx, c.ID)
+	if err != nil {
+		t.Fatalf("GetClient: %v", err)
+	}
+	for _, field := range []struct{ name, got, want string }{
+		{"TLSClientAuthSubjectDN", got.TLSClientAuthSubjectDN, c.TLSClientAuthSubjectDN},
+		{"TLSClientAuthSANDNS", got.TLSClientAuthSANDNS, c.TLSClientAuthSANDNS},
+		{"TLSClientAuthSANURI", got.TLSClientAuthSANURI, c.TLSClientAuthSANURI},
+		{"TLSClientAuthSANIP", got.TLSClientAuthSANIP, c.TLSClientAuthSANIP},
+		{"TLSClientAuthSANEmail", got.TLSClientAuthSANEmail, c.TLSClientAuthSANEmail},
+	} {
+		if field.got != field.want {
+			t.Fatalf("%s = %q, want %q", field.name, field.got, field.want)
+		}
+	}
+
+	got.TLSClientAuthSubjectDN = ""
+	got.TLSClientAuthSANDNS = "other.example.com"
+	got.TLSClientAuthSANURI, got.TLSClientAuthSANIP, got.TLSClientAuthSANEmail = "", "", ""
+	if err := registry.UpdateClient(ctx, got); err != nil {
+		t.Fatalf("UpdateClient: %v", err)
+	}
+	updated, err := b.Store.Clients().GetClient(ctx, c.ID)
+	if err != nil {
+		t.Fatalf("GetClient after update: %v", err)
+	}
+	if updated.TLSClientAuthSubjectDN != "" || updated.TLSClientAuthSANDNS != "other.example.com" ||
+		updated.TLSClientAuthSANURI != "" || updated.TLSClientAuthSANIP != "" || updated.TLSClientAuthSANEmail != "" {
+		t.Fatalf("matchers after update = %q/%q/%q/%q/%q, want only SANDNS other.example.com",
+			updated.TLSClientAuthSubjectDN, updated.TLSClientAuthSANDNS, updated.TLSClientAuthSANURI,
+			updated.TLSClientAuthSANIP, updated.TLSClientAuthSANEmail)
+	}
 }
 
 // clientPreviousSecretRoundTrip pins that the rotation overlap survives a

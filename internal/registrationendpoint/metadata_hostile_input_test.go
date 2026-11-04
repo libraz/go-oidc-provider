@@ -21,7 +21,7 @@ import (
 // it: an outbound fetch, a rendered page, or a capability the client
 // was never granted.
 //
-// Tracks: CVE-2026-22752 (Spring Authorization Server) — the Dynamic
+// Tracks: CVE-2026-22752 (another OP) — the Dynamic
 // Client Registration endpoints performed insufficient validation of
 // client metadata, so a caller holding only a valid initial access
 // token could register a client whose metadata produced stored XSS,

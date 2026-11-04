@@ -808,7 +808,7 @@ func TestNewWorker_RequiresDeps(t *testing.T) {
 
 func TestWorkerFetchClient_PrivateRefusalNamesOptIn(t *testing.T) {
 	t.Parallel()
-	const optIn = "op.WithAllowPrivateNetworkSharedSignals()"
+	const optIn = "op.WithAllowPrivateNetwork(op.OutboundSharedSignals)"
 	c := workerFetchClient(false, optIn, false, time.Second)
 	err := c.AssertSafeURL(context.Background(), "https://10.0.0.1/push")
 	if !errors.Is(err, netsec.ErrPrivateNetworkBlocked) || !strings.Contains(err.Error(), optIn) {

@@ -17,7 +17,7 @@ import (
 // the configured issuer, never from the request Host or forwarding
 // headers.
 //
-// Tracks: GHSA-mchc-246r-6m76 (ZITADEL) — links were built from client-supplied Host / X-Forwarded-Host.
+// Tracks: GHSA-mchc-246r-6m76 (another OP) — links were built from client-supplied Host / X-Forwarded-Host.
 func TestAdvisory_EmittedURLsIgnoreHostHeaders(t *testing.T) {
 	t.Parallel()
 

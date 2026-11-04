@@ -39,7 +39,7 @@ func TestProviderRoutes_MatchesRouter(t *testing.T) {
 			t.Parallel()
 
 			opts := append(validBaseOptsWithInmem(t),
-				op.WithGrantManagement([]op.GrantManagementAction{op.GrantActionQuery, op.GrantActionRevoke}, false),
+				op.WithGrantManagement(op.GrantManagement{Actions: []op.GrantManagementAction{op.GrantActionQuery, op.GrantActionRevoke}}),
 			)
 			if tc.prefix != "" {
 				opts = append(opts, op.WithMountPrefix(tc.prefix))

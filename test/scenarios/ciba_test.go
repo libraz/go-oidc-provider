@@ -351,7 +351,7 @@ func (f *cibaFAPIFixture) dpopProof(t *testing.T) string {
 	if _, err := rand.Read(jtiBytes[:]); err != nil {
 		t.Fatalf("dpopProof: rand.Read: %v", err)
 	}
-	htu := f.tk.Server.URL + "/oidc/bc-authorize"
+	htu := f.tk.Issuer + "/oidc/bc-authorize" // the advertised URL, not the test server's
 	claims := map[string]any{
 		"htm":   http.MethodPost,
 		"htu":   htu,

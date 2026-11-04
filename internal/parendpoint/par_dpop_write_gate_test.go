@@ -144,7 +144,7 @@ func (f *dpopWriteGateFixture) proof(tb testing.TB, jti string) string {
 	}
 	token, err := jwt.Signed(signer).Claims(map[string]any{
 		"htm": http.MethodPost,
-		"htu": f.endpoint,
+		"htu": f.prov.Issuer + "/oidc/par", // the advertised URL, not the test server's
 		"iat": f.clock.now.Unix(),
 		"jti": jti,
 	}).Serialize()

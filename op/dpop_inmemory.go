@@ -25,9 +25,8 @@ import (
 // different processes would each accept only their own ring and reject
 // the other's, generating a thrash of use_dpop_nonce challenges. A
 // production deployment that needs more than one replica MUST supply a
-// distributed nonce source backed by a shared cache (Redis, memcached,
-// in-memory KV with replication); a built-in distributed implementation
-// is on the v1.x roadmap.
+// distributed nonce source backed by a shared cache; the Redis adapter
+// ships one as Store.DPoPNonceSource in op/storeadapter/redis.
 //
 // rotate MUST be strictly positive. A zero or negative value returns
 // an error rather than silently substituting a default; the choice of

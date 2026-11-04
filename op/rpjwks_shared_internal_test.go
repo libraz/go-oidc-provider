@@ -91,7 +91,7 @@ func TestRelyingPartyJWKS_OneFetchAcrossSurfaces(t *testing.T) {
 	if _, err := buildClientEncryptionResolver(fx.cfg).ResolveRecipient(ctx, fx.client, "RSA-OAEP-256", "A256GCM"); err != nil {
 		t.Fatalf("ResolveRecipient: %v", err)
 	}
-	assertions, err := buildAssertionVerifiers(fx.cfg)
+	assertions, err := testAssertionVerifiers(fx.cfg)
 	if err != nil {
 		t.Fatalf("buildAssertionVerifiers: %v", err)
 	}
@@ -148,7 +148,7 @@ func TestRelyingPartyJWKS_RefusesBothSourcesEverywhere(t *testing.T) {
 	if _, err := buildClientEncryptionResolver(fx.cfg).ResolveRecipient(ctx, &both, "RSA-OAEP-256", "A256GCM"); !errors.Is(err, clientencjwks.ErrJWKSConfigured) {
 		t.Errorf("encryption: err = %v, want ErrJWKSConfigured", err)
 	}
-	assertions, err := buildAssertionVerifiers(fx.cfg)
+	assertions, err := testAssertionVerifiers(fx.cfg)
 	if err != nil {
 		t.Fatalf("buildAssertionVerifiers: %v", err)
 	}

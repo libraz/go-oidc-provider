@@ -123,7 +123,7 @@ func acceptJWTBearerRequest(
 	if !applyJWTBearerRequestScope(ctx, w, r, deps, req) {
 		return nil, false
 	}
-	binding, _, ok := bindRequest(w, r, deps, dpopOut)
+	binding, _, ok := bindRequest(w, r, deps, client, dpopOut)
 	if !ok {
 		emitJWTBearerRejected(ctx, deps, client.ID, issuer, jwtBearerReasonBinding)
 		return nil, false

@@ -16,7 +16,7 @@ import (
 // claims, under both access-token formats: the bearer lookup resolves
 // access tokens only and never falls through to the refresh substore.
 //
-// Tracks: CVE-2025-7043 (ForgeRock — a refresh token was accepted as an access token at the userinfo endpoint)
+// Tracks: CVE-2025-7043 (another OP — a refresh token was accepted as an access token at the userinfo endpoint)
 func TestHandler_RefreshTokenAsBearerRefused(t *testing.T) {
 	t.Parallel()
 

@@ -34,10 +34,10 @@ func newGMEnv(t *testing.T, actionRequired bool) *gmEnv {
 	}
 	tk := testkit.NewProvider(t, testkit.WithOptions(
 		op.WithFeature(feature.Introspect),
-		op.WithGrantManagement([]op.GrantManagementAction{
+		op.WithGrantManagement(op.GrantManagement{Actions: []op.GrantManagementAction{
 			op.GrantActionCreate, op.GrantActionReplace, op.GrantActionMerge,
 			op.GrantActionQuery, op.GrantActionRevoke,
-		}, actionRequired),
+		}, ActionRequired: actionRequired}),
 	))
 	tk.RegisterClient(t, testkit.ClientFixture{
 		ID:                      gmClientID,

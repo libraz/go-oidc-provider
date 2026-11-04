@@ -387,7 +387,7 @@ func TestValidate_SentinelTable(t *testing.T) {
 // Tracks: CVE-2024-10318 (NGINX OIDC reference module, late 2024) —
 // ID-token nonce was not validated, allowing session-fixation /
 // ID-token-replay against any RP that accepted an attacker-supplied
-// fresh-looking token. CVE-2026-7571 (Keycloak) is the sibling class:
+// fresh-looking token. CVE-2026-7571 (another OP) is the sibling class:
 // client-state manipulation bypassed the disabled implicit-flow
 // control and exposed access tokens on front-channel / log surfaces.
 // The structural defence here is one layer further out: an OP that
@@ -594,16 +594,16 @@ func TestRequest_Validate_DuplicateResourceParametersRejected(t *testing.T) {
 // surfaces immediately.
 //
 // Tracks:
-//   - CVE-2024-8883 (Keycloak; wildcard / suffix bypass of an earlier
+//   - CVE-2024-8883 (another OP; wildcard / suffix bypass of an earlier
 //     redirect-URI patch via crafted variants).
-//   - CVE-2020-15234 (ory/fosite; case-variant redirect_uri matched a
+//   - CVE-2020-15234 (another OAuth library; case-variant redirect_uri matched a
 //     case-different registration).
-//   - ory/fosite GHSA-rfq3-w54c-f9q5 (loopback redirect rule allowed
+//   - GHSA-rfq3-w54c-f9q5 (loopback redirect rule allowed
 //     host/query override; the fix narrows runtime variation to the
 //     port only — exact-string match here is even stricter).
-//   - CVE-2026-3872 (Keycloak; wildcard redirect URI path traversal
+//   - CVE-2026-3872 (another OP; wildcard redirect URI path traversal
 //     via `..;/` in the OIDC auth endpoint).
-//   - CVE-2026-7504 (Keycloak; wildcard redirect URI parser confusion
+//   - CVE-2026-7504 (another OP; wildcard redirect URI parser confusion
 //     through multiple `@` bytes in the userinfo / authority segment).
 //   - RFC 6749 §3.1.2.3 / RFC 9700 §4.1 which mandate "complete client
 //     redirection URI matching" for non-loopback URIs.
@@ -1034,7 +1034,7 @@ func TestRequest_Validate_NoncePolicyConditional(t *testing.T) {
 // the response builder and being reflected as a duplicated response
 // parameter.
 //
-// Tracks: CVE-2026-9689 (Keycloak) — HTTP parameter pollution on the OIDC
+// Tracks: CVE-2026-9689 (another OP) — HTTP parameter pollution on the OIDC
 // redirect_uri let a repeated request parameter be reflected into the
 // authorization response as a duplicated response parameter. The
 // structural property is that a repeated single-valued request parameter

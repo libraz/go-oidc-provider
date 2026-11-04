@@ -84,7 +84,7 @@ func TestWithSharedSignals_NewRejections(t *testing.T) {
 			return ssfOptions(t, inmem.New(), true, op.WithScope(op.Scope{Name: "ssf.read"}))
 		}, "scope prefix is reserved"},
 		{"insecure push on a public issuer", func(t *testing.T) []op.Option {
-			opts := ssfOptions(t, inmem.New(), true, op.WithAllowInsecureSharedSignalsPushForDev())
+			opts := ssfOptions(t, inmem.New(), true, op.WithAllowInsecureOutboundForDev(op.OutboundSharedSignals))
 			opts[0] = op.WithIssuer("https://op.example.com")
 			return opts
 		}, "requires a development issuer"},

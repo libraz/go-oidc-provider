@@ -3,6 +3,7 @@ package clientauth
 import (
 	"context"
 	"errors"
+	"net/http"
 	"slices"
 	"sync/atomic"
 	"time"
@@ -33,12 +34,18 @@ type VerifyOpts struct {
 	//
 	// The list is the OP-level intersection of every active
 	// [profile.Profile]'s allowed-methods set, translated into the
-	// [Method] enum: profile-only values such as "tls_client_auth" do
-	// not appear because they are handled outside this package.
-	// Encoding the policy here lets every endpoint that calls
+	// [Method] enum. Encoding the policy here lets every endpoint that calls
 	// [VerifyClient] enforce FAPI 2.0 §3.1.3 without duplicating the
 	// switch.
 	AllowedMethods []Method
+
+	// CertificateVerifier verifies the RFC 8705 §2 methods against
+	// Request. Nil rejects both methods.
+	CertificateVerifier CertificateVerifier
+
+	// Request is the inbound request whose client certificate
+	// CertificateVerifier judges.
+	Request *http.Request
 
 	// Now is the wall-clock reading that bounds the previous secret's
 	// acceptance window. The zero value never accepts the previous
@@ -61,32 +68,20 @@ type Verified struct {
 // whether the previous secret matched; on failure it returns one of the
 // package's sentinel errors. creds is never written.
 //
+// A request with no body credential from a client registered for an
+// RFC 8705 §2 method is judged under that method (see [EffectiveMethod]).
+//
 // The verifier always evaluates the entire credential pathway (even on
 // known-bad inputs) so the timing channel does not reveal whether the
 // client_id exists, whether the registered method matches, or whether
 // the secret was wrong.
 func VerifyClient(ctx context.Context, creds *Credentials, client *store.Client, opts VerifyOpts) (Verified, error) {
-	if creds == nil {
-		return Verified{}, ErrNoCredentials
-	}
-	if client == nil {
-		runDummyVerify(creds, opts)
-		return Verified{}, ErrCredentialsInvalid
-	}
-	if creds.ClientID != client.ID {
-		runDummyVerify(creds, opts)
-		return Verified{}, ErrClientMismatch
-	}
-	if !methodAllowedForClient(creds.Method, client) {
-		runDummyVerify(creds, opts)
-		return Verified{}, ErrCredentialsInvalid
-	}
-	if !methodAllowedByPolicy(creds.Method, opts.AllowedMethods) {
-		runDummyVerify(creds, opts)
-		return Verified{}, ErrCredentialsInvalid
+	method, err := admitMethod(creds, client, opts)
+	if err != nil {
+		return Verified{}, err
 	}
 
-	switch creds.Method {
+	switch method {
 	case MethodNone:
 		// "none" requires the client be registered as public. Method
 		// matching is already enforced above; nothing else to do.
@@ -115,9 +110,47 @@ func VerifyClient(ctx context.Context, creds *Credentials, client *store.Client,
 		}
 		return Verified{Method: MethodPrivateKeyJWT}, nil
 
+	case MethodTLSClientAuth, MethodSelfSignedTLSClientAuth:
+		if err := verifyCertificateMethod(ctx, method, client, opts); err != nil {
+			return Verified{}, err
+		}
+		return Verified{Method: method}, nil
+
 	default:
 		return Verified{}, ErrUnsupportedMethod
 	}
+}
+
+// admitMethod runs the structural checks that precede verification and
+// returns the method the credentials authenticate with. Every rejection
+// except missing credentials burns the dummy verify first.
+func admitMethod(creds *Credentials, client *store.Client, opts VerifyOpts) (Method, error) {
+	if creds == nil {
+		return "", ErrNoCredentials
+	}
+	if client == nil {
+		runDummyVerify(creds, opts)
+		return "", ErrCredentialsInvalid
+	}
+	if creds.ClientID != client.ID {
+		runDummyVerify(creds, opts)
+		return "", ErrClientMismatch
+	}
+	method := EffectiveMethod(creds, client)
+	if !methodAllowedForClient(method, client) || !methodAllowedByPolicy(method, opts.AllowedMethods) {
+		runDummyVerify(creds, opts)
+		return "", ErrCredentialsInvalid
+	}
+	return method, nil
+}
+
+// verifyCertificateMethod runs the RFC 8705 §2 check for method, failing
+// closed when no certificate verifier or request is wired.
+func verifyCertificateMethod(ctx context.Context, method Method, client *store.Client, opts VerifyOpts) error {
+	if opts.CertificateVerifier == nil || opts.Request == nil {
+		return ErrCredentialsInvalid
+	}
+	return opts.CertificateVerifier.VerifyCertificate(ctx, opts.Request, method, client)
 }
 
 // verifyClientSecret checks presented against the current secret and,

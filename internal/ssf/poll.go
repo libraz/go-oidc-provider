@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"net/url"
 	"strconv"
 	"time"
 
@@ -58,7 +59,7 @@ func (h *Handlers) Poll() http.Handler {
 }
 
 func (h *Handlers) poll(w http.ResponseWriter, r *http.Request) {
-	clientID, ok := h.authorize(w, r, authRead)
+	clientID, ok := h.authorize(w, r, authRead, []string{h.pollEndpoint + "/" + url.PathEscape(r.PathValue(PollPathValue))})
 	if !ok {
 		return
 	}

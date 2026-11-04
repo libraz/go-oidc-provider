@@ -13,6 +13,7 @@ import (
 	"github.com/libraz/go-oidc-provider/internal/audit"
 	"github.com/libraz/go-oidc-provider/internal/clientauth"
 	"github.com/libraz/go-oidc-provider/internal/endpointsupport"
+	"github.com/libraz/go-oidc-provider/internal/mtls"
 	"github.com/libraz/go-oidc-provider/internal/rpjwks"
 	"github.com/libraz/go-oidc-provider/op/store"
 )
@@ -92,6 +93,10 @@ func TestReasonForAuthnError(t *testing.T) {
 		{clientauth.ErrCredentialsInvalid, "invalid_client_credentials"},
 		{clientauth.ErrAssertionMalformed, "assertion_malformed"},
 		{clientauth.ErrAssertionReplayed, "assertion_replayed"},
+		{fmt.Errorf("%w: %w", clientauth.ErrCredentialsInvalid, mtls.ErrNoClientCert), "client_certificate_missing"},
+		{fmt.Errorf("%w: %w", clientauth.ErrCredentialsInvalid, mtls.ErrCertChainUnverified), "client_certificate_untrusted"},
+		{fmt.Errorf("%w: %w", clientauth.ErrCredentialsInvalid, mtls.ErrSANMismatch), "client_certificate_mismatch"},
+		{fmt.Errorf("%w: %w", clientauth.ErrCredentialsInvalid, mtls.ErrNoMatchingJWK), "client_certificate_mismatch"},
 		{errors.New("unknown"), "server_error"},
 	}
 	for _, tc := range cases {

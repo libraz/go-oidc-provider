@@ -120,7 +120,7 @@ func TestFeatureFlag_AcceptedWithItsConfiguringOption(t *testing.T) {
 		t.Parallel()
 
 		if _, err := op.New(append(validBaseOpts(t),
-			op.WithGrantManagement([]op.GrantManagementAction{op.GrantActionQuery, op.GrantActionRevoke}, false),
+			op.WithGrantManagement(op.GrantManagement{Actions: []op.GrantManagementAction{op.GrantActionQuery, op.GrantActionRevoke}}),
 		)...); err != nil {
 			t.Fatalf("op.New with WithGrantManagement: %v", err)
 		}
@@ -134,8 +134,8 @@ func TestWithGrantManagement_RejectsDouble(t *testing.T) {
 	t.Parallel()
 
 	_, err := op.New(append(validBaseOpts(t),
-		op.WithGrantManagement([]op.GrantManagementAction{op.GrantActionQuery}, true),
-		op.WithGrantManagement([]op.GrantManagementAction{op.GrantActionRevoke}, false),
+		op.WithGrantManagement(op.GrantManagement{Actions: []op.GrantManagementAction{op.GrantActionQuery}, ActionRequired: true}),
+		op.WithGrantManagement(op.GrantManagement{Actions: []op.GrantManagementAction{op.GrantActionRevoke}}),
 	)...)
 	if err == nil {
 		t.Fatal("expected error for two WithGrantManagement calls, got nil")

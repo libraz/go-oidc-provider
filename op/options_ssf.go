@@ -44,48 +44,13 @@ func WithSharedSignals() Option {
 	})
 }
 
-// WithAllowPrivateNetworkSharedSignals admits RFC 1918 / IPv6 ULA push
-// endpoints for SSF receivers, the counterpart of
-// [WithAllowPrivateNetworkBackchannel]. The default refuses them so a
-// receiver cannot aim signed SETs at an internal service. Cloud metadata
-// addresses stay refused whatever the value.
-//
-// This is network reach for deployments whose relying parties live on a
-// private network; it is legitimate in production, not a development-only
-// option, and [New] logs one INFO line naming what it widens. Repeating
-// the option is a no-op.
-//
-// Stable since v1.5.
-func WithAllowPrivateNetworkSharedSignals() Option {
-	return optionFunc(func(c *config) error {
-		c.sharedSignalsAllowPrivateNetwork = true
-		return nil
-	})
-}
-
-// WithAllowInsecureSharedSignalsPushForDev admits http:// and loopback
-// push endpoints for SSF receivers, the counterpart of
-// [WithAllowInsecureBackchannelLogoutForDev]. Production push endpoints
-// MUST be https on a public address. [New] refuses the option unless the
-// issuer is a development host: a loopback IP literal, "localhost", or a
-// name under the RFC 6761 special-use TLDs .localhost, .test, .invalid
-// or .example.
-//
-// Stable since v1.5.
-func WithAllowInsecureSharedSignalsPushForDev() Option {
-	return optionFunc(func(c *config) error {
-		c.allowInsecureSharedSignalsPushForDev = true
-		return nil
-	})
-}
-
 // validateSharedSignals enforces the [WithSharedSignals] construction
 // contract. The ssf. scope prefix is refused only while the transmitter
 // is on, so a deployment that never enables it keeps its scope names.
 func (c *config) validateSharedSignals() error {
 	if c.allowInsecureSharedSignalsPushForDev && !isDevelopmentIssuer(c.issuer) {
 		return newConfigurationError(
-			"WithAllowInsecureSharedSignalsPushForDev requires a development issuer (loopback, localhost, or a .localhost/.test/.invalid/.example host)", nil,
+			"WithAllowInsecureOutboundForDev(op.OutboundSharedSignals) requires a development issuer (loopback, localhost, or a .localhost/.test/.invalid/.example host)", nil,
 		)
 	}
 	if !c.sharedSignals {

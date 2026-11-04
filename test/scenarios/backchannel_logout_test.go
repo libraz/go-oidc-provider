@@ -78,7 +78,7 @@ func (r *bclStubRP) received() []string {
 func newBCLProvider(t *testing.T, capture *scenariokit.AuditCapture, tk ...testkit.Option) *testkit.Provider {
 	t.Helper()
 	opts := append([]testkit.Option{testkit.WithOptions(
-		op.WithAllowInsecureBackchannelLogoutForDev(),
+		op.WithAllowInsecureOutboundForDev(op.OutboundBackchannel),
 		op.WithAuditLogger(capture.Logger()),
 	)}, tk...)
 	return testkit.NewProvider(t, opts...)

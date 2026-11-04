@@ -122,7 +122,7 @@ func main() {
 		op.WithKeyset(keys.Keyset()),
 		op.WithCookieKeys(keys.CookieKey),
 		// Admit "localhost" as a redirect_uri host alongside 127.0.0.1.
-		op.WithAllowLocalhostLoopback(),
+		op.WithAllowLocalhostRedirectURIs(),
 		// Consent is the second half of an authorization request: the
 		// user has to be signed in before the OP has anyone to ask. A
 		// primary factor is what gets the browser that far.

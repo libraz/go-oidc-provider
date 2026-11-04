@@ -22,7 +22,7 @@ func TestRegister_NarrowedEncryptionAlgs_RejectsExcludedAlg(t *testing.T) {
 			t.Parallel()
 
 			f := newFixture(t, op.RegistrationOption{},
-				op.WithSupportedEncryptionAlgs([]string{"ECDH-ES"}, nil))
+				op.WithSupportedEncryptionAlgs(op.EncryptionAlgs{KeyManagement: []string{"ECDH-ES"}}))
 			_, iat := f.issueIAT(t, op.InitialAccessTokenSpec{})
 			body := minimalMetadata()
 			body[fam.algKey] = "RSA-OAEP-256"
@@ -48,7 +48,7 @@ func TestRegister_NarrowedEncryptionEncs_RejectsExcludedEnc(t *testing.T) {
 	t.Parallel()
 
 	f := newFixture(t, op.RegistrationOption{},
-		op.WithSupportedEncryptionAlgs(nil, []string{"A256GCM"}))
+		op.WithSupportedEncryptionAlgs(op.EncryptionAlgs{ContentEncryption: []string{"A256GCM"}}))
 	_, iat := f.issueIAT(t, op.InitialAccessTokenSpec{})
 	body := minimalMetadata()
 	body["id_token_encrypted_response_alg"] = "RSA-OAEP-256"
@@ -69,7 +69,7 @@ func TestRegister_NarrowedEncryptionAlgs_AdmitsRetainedAlg(t *testing.T) {
 	t.Parallel()
 
 	f := newFixture(t, op.RegistrationOption{},
-		op.WithSupportedEncryptionAlgs([]string{"ECDH-ES"}, []string{"A256GCM"}))
+		op.WithSupportedEncryptionAlgs(op.EncryptionAlgs{KeyManagement: []string{"ECDH-ES"}, ContentEncryption: []string{"A256GCM"}}))
 	_, iat := f.issueIAT(t, op.InitialAccessTokenSpec{})
 	body := minimalMetadata()
 	body["id_token_encrypted_response_alg"] = "ECDH-ES"

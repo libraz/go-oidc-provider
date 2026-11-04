@@ -38,7 +38,7 @@ rows:
       TTL function is invoked once with the DeviceCode token instance
       and the issuing Client.
     status: out-of-scope
-    out_of_scope_reason: "The OP exposes no per-token-kind dynamic TTL callback API: lifetimes are global static options (op.WithAccessTokenTTL, op.WithRefreshTokenTTL, op.WithRefreshTokenOfflineTTL), and the device flow's own lifetime is the fixed op.WithDeviceCodeExpiry rather than a function invoked per issuance with the token instance and client. The device authorization grant itself is shipped and routable, so the grant is not the obstacle — the callback contract is."
+    out_of_scope_reason: "The OP exposes no per-token-kind dynamic TTL callback API: lifetimes are global static options (op.WithAccessTokenTTL, op.WithRefreshTokenTTL, op.WithRefreshTokenOfflineTTL), and the device flow's own lifetime is the fixed op.WithDeviceCodeTTL rather than a function invoked per issuance with the token instance and client. The device authorization grant itself is shipped and routable, so the grant is not the obstacle — the callback contract is."
 
   - id: DTT-003
     severity: P1

@@ -31,7 +31,7 @@ import (
 // trust introspection would then keep honouring it for the rest of its
 // lifetime, which is exactly the window revocation exists to close.
 //
-// Tracks: CVE-2026-8922 (Keycloak) — introspection consulted the
+// Tracks: CVE-2026-8922 (another OP) — introspection consulted the
 // client-level not-before and ignored the realm-level one, so a token
 // inside the revoked window still introspected as active.
 func TestEndToEnd_ActiveHonoursEveryRevocationInput(t *testing.T) {

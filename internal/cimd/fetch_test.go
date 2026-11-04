@@ -353,7 +353,7 @@ func TestDocumentTTL(t *testing.T) {
 
 func TestFetchPolicy_PrivateRefusalNamesOptIn(t *testing.T) {
 	t.Parallel()
-	const optIn = "op.WithAllowPrivateNetworkClientIDMetadata()"
+	const optIn = "op.WithAllowPrivateNetwork(op.OutboundClientIDMetadata)"
 	c := securefetch.NewClient(fetchPolicy(false, optIn, time.Second, nil))
 	err := c.AssertSafeURL(context.Background(), "https://10.0.0.1/client.json")
 	if !errors.Is(err, netsec.ErrPrivateNetworkBlocked) || !strings.Contains(err.Error(), optIn) {

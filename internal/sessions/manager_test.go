@@ -380,7 +380,7 @@ func TestManager_Logout_Idempotent(t *testing.T) {
 // changes.
 //
 // Tracks:
-//   - GHSA-xhpr-465j-7p9q (Keycloak, 2024) — first-login phishing
+//   - GHSA-xhpr-465j-7p9q (another OP, 2024) — first-login phishing
 //     via email verification: a session that pre-existed the trust
 //     transition continued to be authoritative after verification,
 //     letting an attacker who planted the cookie ride the

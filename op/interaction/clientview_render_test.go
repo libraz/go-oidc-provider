@@ -26,7 +26,7 @@ import (
 // ampersands and non-Latin scripts are all legitimate — so the
 // containment has to live at the render, not the write.
 //
-// Tracks: CVE-2026-22752 (Spring Authorization Server) — client
+// Tracks: CVE-2026-22752 (another OP) — client
 // metadata accepted at the DCR endpoint without sufficient validation
 // produced stored XSS, among other impacts, when it was replayed.
 func TestHTMLDriver_ClientDisplayNameCannotBecomeMarkup(t *testing.T) {

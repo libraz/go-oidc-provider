@@ -61,7 +61,7 @@ func TestClientSigningAlgs_ReachEveryVerifier(t *testing.T) {
 					t.Errorf("%s JAR verifier algs = %v, want %v", name, got, tc.wantJAR)
 				}
 			}
-			verifiers, err := buildAssertionVerifiers(cfg)
+			verifiers, err := testAssertionVerifiers(cfg)
 			if err != nil {
 				t.Fatalf("buildAssertionVerifiers: %v", err)
 			}

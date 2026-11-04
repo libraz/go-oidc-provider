@@ -1,0 +1,63 @@
+# Local databases for example 53-production-sql.
+#
+# The example runs on the host (it reads a key directory and takes
+# subcommands), so this stack is the database servers only, published on
+# the loopback interface. Start the one you want:
+#
+#   docker compose -f examples/53-production-sql/compose.yaml up -d --wait postgres
+#   (cd examples/53-production-sql && EXAMPLE53_DIALECT=postgres \
+#     EXAMPLE53_DSN='postgres://oidc:oidc@127.0.0.1:5432/oidc?sslmode=disable' \
+#     EXAMPLE53_MIGRATE=1 GOWORK=off go run -tags example .)
+#
+#   docker compose -f examples/53-production-sql/compose.yaml up -d --wait mysql
+#   (cd examples/53-production-sql && EXAMPLE53_DIALECT=mysql \
+#     EXAMPLE53_DSN='oidc:oidc@tcp(127.0.0.1:3306)/oidc?parseTime=true&charset=utf8mb4&loc=UTC' \
+#     EXAMPLE53_MIGRATE=1 GOWORK=off go run -tags example .)
+#
+#   docker compose -f examples/53-production-sql/compose.yaml down -v
+#
+# The databases publish the engines' usual ports, 3306 and 5432. When
+# another container already holds one, change the host side of that
+# service's "ports" entry (for example "127.0.0.1:53306:3306") and use the
+# same port in EXAMPLE53_DSN.
+#
+# Engine versions (mysql:8.4, postgres:16-alpine) are pinned and aligned with the
+# testcontainers contract harness (op/storeadapter/sql).
+
+services:
+  mysql:
+    image: mysql:8.4
+    environment:
+      MYSQL_ROOT_PASSWORD: rootpw
+      MYSQL_DATABASE: oidc
+      MYSQL_USER: oidc
+      MYSQL_PASSWORD: oidc
+    ports:
+      - "127.0.0.1:3306:3306"
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-uroot", "-prootpw"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    volumes:
+      - mysql-data:/var/lib/mysql
+
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: oidc
+      POSTGRES_PASSWORD: oidc
+      POSTGRES_DB: oidc
+    ports:
+      - "127.0.0.1:5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U oidc -d oidc"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+
+volumes:
+  mysql-data:
+  postgres-data:

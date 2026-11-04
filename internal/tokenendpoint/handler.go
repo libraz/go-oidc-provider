@@ -239,6 +239,14 @@ type Deps struct {
 	// consumed token is treated as a replay.
 	RefreshTokenGraceTTL time.Duration
 
+	// RefreshTokenRotationDisabled makes the refresh_token grant leave
+	// the presented refresh token in place: the response carries no
+	// refresh_token, and the presented one stays redeemable until it
+	// expires or is revoked. RefreshTokenGraceTTL is then unused. The op
+	// layer sets it under the profiles FAPI 2.0 Security Profile
+	// §5.3.2.1 binds.
+	RefreshTokenRotationDisabled bool
+
 	// RefreshRetryEncryptionKeys contains the active and retiring 32-byte
 	// cookie-key materials used (after domain separation) to encrypt durable
 	// refresh response-loss caches. The op router wires its cookie-key ring
@@ -306,6 +314,12 @@ type Deps struct {
 	// support the asymmetric authentication path.
 	AssertionVerifier clientauth.AssertionVerifier
 
+	// CertificateVerifier verifies RFC 8705 §2 mTLS client
+	// authentication (tls_client_auth, self_signed_tls_client_auth). Nil
+	// when feature.MTLS is off, which rejects a client registered for
+	// either method as invalid_client.
+	CertificateVerifier clientauth.CertificateVerifier
+
 	// AllowedClientAuthMethods optionally restricts which client
 	// authentication methods the endpoint accepts, regardless of the
 	// registered client's stored TokenEndpointAuthMethod. Empty means
@@ -344,6 +358,12 @@ type Deps struct {
 	// and [dpop.NonceIssuer] (this field) so issuance and validation
 	// share a rotation pipeline.
 	DPoPNonces dpop.NonceIssuer
+
+	// DPoPHTU is the set of absolute URLs a DPoP proof's "htu" must name
+	// at this endpoint: what discovery advertises for it, plus its RFC
+	// 8705 mtls_endpoint_aliases URL when one is configured. Empty falls
+	// back to the request-derived URL ([dpop.Gate.HTU]).
+	DPoPHTU []string
 
 	// MTLS is the RFC 8705 client-certificate verifier. A nil value
 	// disables mTLS binding entirely: the handler ignores any
@@ -682,12 +702,13 @@ func authenticate(
 ) (*store.Client, *clientauth.Credentials, bool) {
 	return endpointsupport.AuthenticateClient(ctx, w, r,
 		endpointsupport.AuthenticateOpts{
-			Clients:           deps.Clients,
-			SecretVerifier:    deps.SecretVerifier,
-			AssertionVerifier: deps.AssertionVerifier,
-			AllowedMethods:    deps.AllowedClientAuthMethods,
-			Now:               deps.now(),
-			Audit:             deps.audit(),
+			Clients:             deps.Clients,
+			SecretVerifier:      deps.SecretVerifier,
+			AssertionVerifier:   deps.AssertionVerifier,
+			CertificateVerifier: deps.CertificateVerifier,
+			AllowedMethods:      deps.AllowedClientAuthMethods,
+			Now:                 deps.now(),
+			Audit:               deps.audit(),
 		},
 		endpointsupport.AuditAuthnFailure(ctx, deps.audit(), endpointsupport.EventClientAuthnFailure,
 			"client authentication failed at token endpoint"),

@@ -114,6 +114,9 @@ linters:
             - "!**/internal/testutil/**"
             - "!**/test/scenarios/internal/scenariokit/**"
             - "!**/op/dpop_inmemory.go"
+            # The Redis adapter is its own module and cannot reach
+            # internal/keys; the nonce it mints needs crypto/rand entropy.
+            - "!**/op/storeadapter/redis/dpop_nonce.go"
             - "!**/cmd/op-demo/**"
             - "!**/examples/**"
             - "!**/*_test.go"
@@ -212,6 +215,7 @@ linters:
         - github.com/libraz/go-oidc-provider/op/grant\..*
         - github.com/libraz/go-oidc-provider/op/feature\..*
         - github.com/libraz/go-oidc-provider/op/profile\..*
+        - github.com/libraz/go-oidc-provider/op/authn\..*
         - github.com/libraz/go-oidc-provider/internal/log\.Logger
         - github.com/libraz/go-oidc-provider/internal/timex\.Clock
         - github.com/libraz/go-oidc-provider/internal/audit\.Emitter

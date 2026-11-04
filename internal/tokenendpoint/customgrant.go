@@ -31,7 +31,7 @@ func handleCustomGrant(w http.ResponseWriter, r *http.Request, deps Deps, grantT
 	if !ok {
 		return
 	}
-	binding, mtlsOut, ok := bindRequest(w, r, deps, dpopOut)
+	binding, mtlsOut, ok := bindRequest(w, r, deps, client, dpopOut)
 	if !ok {
 		return
 	}

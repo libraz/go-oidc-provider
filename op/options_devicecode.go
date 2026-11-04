@@ -43,7 +43,7 @@ import (
 // shape [WithCIBA] takes:
 //
 //	op.WithDeviceCodeGrant(
-//		op.WithDeviceCodeExpiry(15*time.Minute),
+//		op.WithDeviceCodeTTL(15*time.Minute),
 //		op.WithDeviceCodePollInterval(5*time.Second),
 //	)
 //
@@ -76,7 +76,7 @@ func WithDeviceCodeGrant(opts ...DeviceCodeOption) Option {
 
 // DeviceCodeOption configures the device-authorization grant beyond the
 // bare [WithDeviceCodeGrant] opt-in. Pass values produced by
-// [WithDeviceVerificationURI], [WithDeviceCodeExpiry] and
+// [WithDeviceVerificationURI], [WithDeviceCodeTTL] and
 // [WithDeviceCodePollInterval] to [WithDeviceCodeGrant].
 //
 // Stable since v1.5.
@@ -126,7 +126,7 @@ func WithDeviceVerificationURI(uri string) DeviceCodeOption {
 	})
 }
 
-// WithDeviceCodeExpiry overrides the lifetime advertised to the
+// WithDeviceCodeTTL overrides the lifetime advertised to the
 // device as `expires_in` on the RFC 8628 §3.2 device-authorization
 // response, and stamped on the persisted device_code record.
 //
@@ -143,14 +143,14 @@ func WithDeviceVerificationURI(uri string) DeviceCodeOption {
 //
 // Pass it to [WithDeviceCodeGrant].
 //
-// Stable since v1.0.
-func WithDeviceCodeExpiry(ttl time.Duration) DeviceCodeOption {
+// Stable since v1.5.
+func WithDeviceCodeTTL(ttl time.Duration) DeviceCodeOption {
 	return deviceCodeOptionFunc(func(c *config) error {
-		if err := c.claimOnce("WithDeviceCodeExpiry"); err != nil {
+		if err := c.claimOnce("WithDeviceCodeTTL"); err != nil {
 			return err
 		}
 		if ttl <= 0 {
-			return newConfigurationError("WithDeviceCodeExpiry requires a positive duration", nil)
+			return newConfigurationError("WithDeviceCodeTTL requires a positive duration", nil)
 		}
 		c.deviceCodeExpiry = ttl
 		return nil
@@ -185,7 +185,7 @@ func WithDeviceCodePollInterval(interval time.Duration) DeviceCodeOption {
 // effectiveDeviceCodeExpiry returns the device_code lifetime the
 // /device_authorization handler advertises, resolved against the
 // library default when the embedder has not called
-// [WithDeviceCodeExpiry].
+// [WithDeviceCodeTTL].
 func (c *config) effectiveDeviceCodeExpiry() time.Duration {
 	if c.deviceCodeExpiry <= 0 {
 		return devicecode.DefaultExpiresIn

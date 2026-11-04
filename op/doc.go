@@ -115,8 +115,8 @@
 //     [WithSubjectGenerator], [WithPairwiseSubject].
 //   - Grants and flows: [WithGrants], [WithFeature], [WithCIBA],
 //     [WithDeviceCodeGrant], [WithJWTBearerGrant], [WithIDJAGIssuance],
-//     [WithCustomGrant], [WithAuthorizationDetailTypes], [WithGrantManagement],
-//     [WithPARLifetime].
+//     [WithCustomGrant], [WithTokenExchange], [WithAuthorizationDetailTypes],
+//     [WithGrantManagement], [WithPARTTL].
 //   - Tokens and hardening: [WithProfile], [WithSigningAlgorithm],
 //     [WithAccessTokenTTL], [WithRefreshTokenTTL], [WithRefreshTokenOfflineTTL],
 //     [WithRefreshGracePeriod], [WithStrictOfflineAccess],
@@ -126,20 +126,18 @@
 //     [WithMTLSRootCAs], [WithEncryptionKeyset], [WithSupportedEncryptionAlgs],
 //     [WithJWKSHTTPTransport].
 //   - Logout and sessions: [WithSessionDurabilityPosture],
-//     [WithBackchannelLogoutHTTPClient], [WithBackchannelLogoutTimeout],
-//     [WithBackchannelFanOutBudget], [WithSharedSignals].
+//     [WithBackchannelLogout], [WithSharedSignals].
 //   - Network reach (for relying parties on a private network; legitimate in
-//     production): [WithAllowPrivateNetworkJWKS], [WithAllowPrivateNetworkJAR],
-//     [WithAllowPrivateNetworkSector], [WithAllowPrivateNetworkClientIDMetadata],
-//     [WithAllowPrivateNetworkBackchannel], [WithAllowPrivateNetworkSharedSignals].
-//   - Development only: [WithAllowLocalhostLoopback],
-//     [WithAllowInsecureBackchannelLogoutForDev],
-//     [WithAllowInsecureSharedSignalsPushForDev].
+//     production): [WithAllowPrivateNetwork] with one or more [OutboundTarget]
+//     values, and [WithAllowLocalhostRedirectURIs] for native clients that
+//     listen on localhost.
+//   - Development only: [WithAllowLocalhostIssuerForDev],
+//     [WithAllowInsecureOutboundForDev].
 //   - Operations and observability: [WithLogger], [WithAuditLogger],
 //     [WithPrometheus], [WithClock], [WithMountPrefix], [WithEndpoints],
 //     [WithTrustedProxies], [WithTrustedProxyHosts], [WithCORSOrigins],
 //     [WithJWKSRotationActive], [WithDiscoveryMetadata], [WithClaimsSupported],
-//     [WithACRValuesSupported], [WithClaimsParameterSupported],
+//     [WithACRValuesSupported], [WithClaimsParameterDisabled],
 //     [WithACRPolicy], [WithDefaults].
 //
 // Grant types are enabled three ways. [WithGrants] selects the core set
@@ -155,22 +153,26 @@
 // Three opt-in options widen the gates for demos and CI fixtures bound to
 // the loopback interface:
 //
-//   - [WithAllowLocalhostLoopback] admits the textual "localhost" host in
-//     redirect_uri values and in the issuer (the IP literals 127.0.0.1 and
-//     [::1] are always admitted on the http loopback carve-out). A local
-//     WebAuthn deployment needs the issuer half: a Relying Party ID must
-//     be a domain, so an http issuer on an IP literal has none to pair
-//     with.
-//   - [WithAllowInsecureBackchannelLogoutForDev] admits http:// loopback
-//     URLs for backchannel_logout_uri at registration time and narrows the
-//     deliverer's SSRF gate to loopback so a stub RP on 127.0.0.1 can
-//     receive the logout token POST. Every other private range stays
-//     refused; reaching one is [WithAllowPrivateNetworkBackchannel].
-//   - [WithAllowInsecureSharedSignalsPushForDev] admits http:// and loopback
-//     push endpoints for shared-signals streams, and requires a development
-//     issuer like the back-channel option above.
+//   - [WithAllowLocalhostRedirectURIs] admits the textual "localhost" host
+//     in redirect_uri and post_logout_redirect_uris values (the IP literals
+//     127.0.0.1 and [::1] are always admitted on the http loopback
+//     carve-out).
+//   - [WithAllowLocalhostIssuerForDev] admits the textual "localhost" host in
+//     an http issuer. A local WebAuthn deployment needs it: a Relying Party
+//     ID must be a domain, so an http issuer on an IP literal has none to
+//     pair with. [New] refuses it unless the issuer is http://localhost.
+//   - [WithAllowInsecureOutboundForDev] with [OutboundBackchannel] admits
+//     http:// loopback URLs for backchannel_logout_uri at registration time
+//     and narrows the deliverer's SSRF gate to loopback so a stub RP on
+//     127.0.0.1 can receive the logout token POST. Every other private range
+//     stays refused; reaching one is [WithAllowPrivateNetwork] with
+//     [OutboundBackchannel]. With [OutboundSharedSignals] it admits http://
+//     and loopback push endpoints for shared-signals streams. Both require a
+//     development issuer.
 //
-// Production embedders leave all three off and front their RPs over TLS.
+// Production embedders leave the development options off and front their RPs
+// over TLS; [WithAllowLocalhostRedirectURIs] is the one that can be legitimate
+// there, for native clients that bind a loopback listener to "localhost".
 //
 // # Standards
 //

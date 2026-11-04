@@ -26,7 +26,7 @@ import (
 // convenience — take the first, take the last, coalesce to "" — turns
 // a malformed request into a well-formed one for a different subject.
 //
-// Tracks: CVE-2026-9704 (Keycloak) — the token-exchange endpoint
+// Tracks: CVE-2026-9704 (another OP) — the token-exchange endpoint
 // dropped the subject_token parameter under certain conditions instead
 // of rejecting the request, letting an attacker obtain tokens with
 // elevated privileges without valid credentials for the target

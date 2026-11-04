@@ -451,7 +451,7 @@ func TestHandler_JWTAccessToken_WrongIssuer(t *testing.T) {
 // the authenticated client_id does not match the JWT's client_id.
 // Same-client-only is the v1.0 authorization posture.
 //
-// Tracks: CVE-2026-37979 (Keycloak; OIDC token introspection audience
+// Tracks: CVE-2026-37979 (another OP; OIDC token introspection audience
 // bypass) — a confidential client must not be able to retrieve claims
 // from another client's token merely because it has valid introspection
 // credentials.
@@ -823,7 +823,7 @@ func TestHandler_OpaqueAccessToken_Expired(t *testing.T) {
 // the authenticated client_id does not match the record's ClientID.
 // Same-client-only is the v1.0 authorization posture.
 //
-// Tracks: CVE-2026-37979 (Keycloak; OIDC token introspection audience
+// Tracks: CVE-2026-37979 (another OP; OIDC token introspection audience
 // bypass). Opaque access-token introspection follows the same inactive
 // collapse as JWT access tokens so cross-client callers learn neither
 // token existence nor projected claims.

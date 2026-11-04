@@ -109,14 +109,14 @@ func WithACRValuesSupported(values ...string) Option {
 	})
 }
 
-// WithClaimsParameterSupported toggles the OP's handling of the OIDC
+// WithClaimsParameterDisabled turns off the OP's handling of the OIDC
 // Core 1.0 §5.5 "claims" request parameter. The library default is
-// true: the parser is always wired; the discovery document advertises
+// on: the parser is always wired; the discovery document advertises
 // claims_parameter_supported: true; the authorize / par endpoints
 // honour any incoming payload by persisting it on the originating
 // grant; the userinfo and id_token issuance paths project the
-// requested claims when the user store has matching values. Passing
-// false flips the discovery advertisement off, makes the authorize /
+// requested claims when the user store has matching values. This option
+// flips the discovery advertisement off, makes the authorize /
 // par parsers silently drop the parameter (no invalid_request), and
 // disables the userinfo / id_token projection.
 //
@@ -129,23 +129,18 @@ func WithACRValuesSupported(values ...string) Option {
 // is left on the grant as the record of what the user consented to, so
 // turning the parameter back on restores the projection.
 //
-// The toggle is provided so an embedder that does not want to expose
+// The switch is provided so an embedder that does not want to expose
 // per-claim consent (e.g. a deployment whose RPs already negotiate
-// claims out-of-band) can match the ory/hydra posture without losing
-// scope-driven release. It does not affect the parser's malformed-
+// claims out-of-band) can run scope-driven release only. It does not affect the parser's malformed-
 // JSON rejection: a payload that is genuinely malformed is still
-// rejected at the wire boundary irrespective of the toggle, because
+// rejected at the wire boundary irrespective of the switch, because
 // the parser also services the FAPI 2.0 conformance flow which
 // expects a uniform invalid_request shape.
 //
-// Stable since v1.0.
-func WithClaimsParameterSupported(enabled bool) Option {
+// Stable since v1.5.
+func WithClaimsParameterDisabled() Option {
 	return optionFunc(func(c *config) error {
-		if err := c.claimOnce("WithClaimsParameterSupported"); err != nil {
-			return err
-		}
-		c.claimsParameterSupportedSet = true
-		c.claimsParameterSupportedOff = !enabled
+		c.claimsParameterDisabled = true
 		return nil
 	})
 }

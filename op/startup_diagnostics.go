@@ -111,29 +111,29 @@ type privateNetworkReach struct {
 // The public options that lift each fetch's private-network deny-list, as
 // spelled in the refusal error so the operator knows what to set.
 const (
-	optInJWKS             = "op.WithAllowPrivateNetworkJWKS()"
-	optInSector           = "op.WithAllowPrivateNetworkSector()"
-	optInClientIDMetadata = "op.WithAllowPrivateNetworkClientIDMetadata()"
-	optInBackchannel      = "op.WithAllowPrivateNetworkBackchannel()"
-	optInSharedSignals    = "op.WithAllowPrivateNetworkSharedSignals()"
+	optInJWKS             = "op.WithAllowPrivateNetwork(op.OutboundJWKS)"
+	optInSector           = "op.WithAllowPrivateNetwork(op.OutboundSector)"
+	optInClientIDMetadata = "op.WithAllowPrivateNetwork(op.OutboundClientIDMetadata)"
+	optInBackchannel      = "op.WithAllowPrivateNetwork(op.OutboundBackchannel)"
+	optInSharedSignals    = "op.WithAllowPrivateNetwork(op.OutboundSharedSignals)"
 )
 
 // privateNetworkReaches lists the private-network options with their state.
 func (c *config) privateNetworkReaches() []privateNetworkReach {
 	return []privateNetworkReach{
-		{c.allowPrivateNetworkJWKS, "WithAllowPrivateNetworkJWKS", "the fetch of a relying party's jwks_uri", true},
-		{c.allowPrivateNetworkJAR, "WithAllowPrivateNetworkJAR", "the fetch of a request_uri request object", true},
-		{c.allowPrivateNetworkSector, "WithAllowPrivateNetworkSector", "the fetch of a sector_identifier_uri document", true},
+		{c.allowPrivateNetworkJWKS, privateNetworkOption(OutboundJWKS), "the fetch of a relying party's jwks_uri", true},
+		{c.allowPrivateNetworkJAR, privateNetworkOption(OutboundJAR), "the fetch of a request_uri request object", true},
+		{c.allowPrivateNetworkSector, privateNetworkOption(OutboundSector), "the fetch of a sector_identifier_uri document", true},
 		{
-			c.allowPrivateNetworkCIMD, "WithAllowPrivateNetworkClientIDMetadata",
+			c.allowPrivateNetworkCIMD, privateNetworkOption(OutboundClientIDMetadata),
 			"the fetch of a client ID metadata document (and admits plain http for client_id URLs)", true,
 		},
 		{
-			c.backchannelAllowPrivateNetwork, "WithAllowPrivateNetworkBackchannel",
+			c.backchannelAllowPrivateNetwork, privateNetworkOption(OutboundBackchannel),
 			"back-channel logout delivery to a relying party's backchannel_logout_uri", true,
 		},
 		{
-			c.sharedSignalsAllowPrivateNetwork, "WithAllowPrivateNetworkSharedSignals",
+			c.sharedSignalsAllowPrivateNetwork, privateNetworkOption(OutboundSharedSignals),
 			"push delivery of security event tokens to shared-signals receiver endpoints", false,
 		},
 	}

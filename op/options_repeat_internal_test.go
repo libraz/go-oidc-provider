@@ -10,8 +10,8 @@ func TestZeroArgPrivateNetworkOptions_AreIdempotent(t *testing.T) {
 	t.Parallel()
 
 	c, err := newConfig([]Option{
-		WithAllowPrivateNetworkSharedSignals(), WithAllowPrivateNetworkSharedSignals(),
-		WithAllowPrivateNetworkBackchannel(), WithAllowPrivateNetworkBackchannel(),
+		WithAllowPrivateNetwork(OutboundSharedSignals), WithAllowPrivateNetwork(OutboundSharedSignals),
+		WithAllowPrivateNetwork(OutboundBackchannel), WithAllowPrivateNetwork(OutboundBackchannel),
 	})
 	if err != nil {
 		t.Fatalf("repeating a zero-argument option failed: %v", err)

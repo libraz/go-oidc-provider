@@ -14,7 +14,7 @@ func TestStartupProfile_RecordsInsecureBackchannelLogoutForDev(t *testing.T) {
 
 	const key = "insecure_backchannel_logout_for_dev"
 
-	on := captureStartupProfile(t, op.WithIssuer(devIssuer), op.WithAllowInsecureBackchannelLogoutForDev())
+	on := captureStartupProfile(t, op.WithIssuer(devIssuer), op.WithAllowInsecureOutboundForDev(op.OutboundBackchannel))
 	if got, ok := on.Extras[key]; !ok || got != true {
 		t.Fatalf("%s = %v (present=%v) with the option set, want true", key, got, ok)
 	}

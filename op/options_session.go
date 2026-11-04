@@ -27,7 +27,9 @@ import (
 //
 // CIDRs may be IPv4 or IPv6; both notations are accepted. The option is
 // additive: repeated calls accumulate CIDRs, as [WithTrustedProxyHosts]
-// accumulates hosts.
+// accumulates hosts. [WithMTLSProxy] uses these CIDRs as the sources it
+// honours a forwarded client certificate from when its own TrustedProxies
+// list is empty.
 // Stable since v1.0.
 func WithTrustedProxies(cidrs ...string) Option {
 	return optionFunc(func(c *config) error {
@@ -121,71 +123,6 @@ func WithCORSOrigins(origins ...string) Option {
 			}
 		}
 		c.corsOrigins = append(c.corsOrigins, origins...)
-		return nil
-	})
-}
-
-// WithBackchannelLogoutHTTPClient supplies the outbound Transport the
-// back-channel logout coordinator uses when POSTing Logout Tokens to
-// relying parties. Most embedders do not need this — the package
-// default is correct for the spec posture.
-//
-// The coordinator copies only [http.Client.Transport]. It always applies
-// [WithBackchannelLogoutTimeout], rejects redirects, and checks every
-// request URL against the SSRF deny-list. A client whose Transport is nil
-// or an [*http.Transport] also gets the dial-time check: the transport is
-// cloned and its DialContext, DialTLSContext and DialTLS are replaced by
-// the OP's gated dialer, so the proxy, TLS and pool settings carry over
-// but a custom dial function does not. Through a proxy the dial-time
-// check covers the proxy's address; the target URL is checked once
-// before the hand-off and the proxy resolves it independently. Any
-// other [http.RoundTripper] (an otelhttp wrap, for instance) is gated
-// on the request URL only, which does not stop a DNS-rebinding peer
-// that resolves public when the URL is checked and private when it is
-// dialled.
-// Stable since v1.0.
-func WithBackchannelLogoutHTTPClient(client *http.Client) Option {
-	return optionFunc(func(c *config) error {
-		if err := c.claimOnce("WithBackchannelLogoutHTTPClient"); err != nil {
-			return err
-		}
-		c.backchannelLogoutHTTPClient = client
-		return nil
-	})
-}
-
-// WithBackchannelLogoutTimeout caps the time the OP spends waiting
-// for a single relying party to acknowledge a Logout Token POST. The
-// budget applies per RP; the coordinator dispatches in parallel, so a
-// slow RP does not delay deliveries to its peers.
-// A zero or negative duration substitutes the package default
-// (5 seconds). Embedders SHOULD keep the value low — back-channel
-// logout is best-effort, and a long timeout merely keeps the OP
-// holding state on a likely-broken RP.
-//
-// # Delivery integrity
-//
-// Back-channel logout fan-out walks the active grants the OP
-// remembers for the terminating subject. The walk's coverage is
-// bounded by the durability of the [op/store.SessionStore] and the
-// [op/store.GrantStore] backing the OP: under volatile placement
-// (Redis without persistence, Memcached, in-memory under maxmemory
-// eviction) a session evicted between establishment and logout
-// silently removes the rows the coordinator would walk, narrowing
-// OIDC Back-Channel Logout 1.0 §2.7's best-effort floor to zero.
-// Embedders who require at-least-once delivery for every initiated
-// logout MUST route SessionStore to a durable backend; the
-// `bcl.no_sessions_for_subject` audit event ([AuditBCLNoSessionsForSubject])
-// surfaces the gap when it actually fires. Declare the chosen
-// posture through [WithSessionDurabilityPosture] so the audit
-// signal carries the embedder's intent.
-// Stable since v1.0.
-func WithBackchannelLogoutTimeout(d time.Duration) Option {
-	return optionFunc(func(c *config) error {
-		if err := c.claimOnce("WithBackchannelLogoutTimeout"); err != nil {
-			return err
-		}
-		c.backchannelLogoutTimeout = d
 		return nil
 	})
 }
@@ -336,13 +273,9 @@ func WithDPoPNonceSource(source DPoPNonceSource) Option {
 // stricter posture passes a smaller positive duration. Pass zero to
 // disable the window entirely so any replay revokes immediately.
 //
-// Under FAPI2Baseline / FAPI2MessageSigning the window is capped at
-// that same library default rather than forced to zero. Those
-// profiles resolve to the 60-second default when the option is
-// absent (see [config.effectiveRefreshGrace]), so anything from zero
-// up to it — including the strict no-grace posture FAPI 2.0 §3.1.7
-// argues for — is accepted verbatim, and only a value WIDER than the
-// default is a construction error.
+// FAPI2Baseline and FAPI2MessageSigning do not rotate refresh tokens
+// (FAPI 2.0 Security Profile §5.3.2.1), so there is no window to set:
+// [New] rejects the option under either profile.
 //
 // Negative values are rejected at the option site; the API treats
 // "no grace" as the explicit zero so accidental sign-flip cannot
@@ -368,19 +301,8 @@ func WithRefreshGracePeriod(d time.Duration) Option {
 // [WithRefreshGracePeriod] when called, else returns 0 so the internal
 // exchanger falls back to its [refresh.GraceTTLDefault].
 //
-// A FAPI 2.0 profile does not narrow the default to a strict zero. The
-// grace window is what makes a rotation survive the client's network
-// retry, and the FAPI 2.0 conformance suite tests for exactly that: its
-// refresh-token module redeems the rotated predecessor a second time and
-// requires a 200. A deployment that declares the profile and configures
-// nothing else has to inherit that window, or it cannot be certified.
-// RFC 9700 §2.2.2 permits the window; the replay defence it coexists
-// with is the chain-wide cascade, which is unconditional.
-//
-// [New] caps an explicit window at the same default under this
-// profile, so the resolved value is never wider than what an
-// unconfigured FAPI 2.0 deployment already runs — but a stricter
-// explicit value, zero included, passes through untouched.
+// The window only matters when the token endpoint rotates; under
+// [config.refreshTokenRotationDisabled] the exchanger never consults it.
 func (c *config) effectiveRefreshGrace() time.Duration {
 	if !c.refreshGracePeriodSet {
 		return 0
@@ -393,72 +315,7 @@ func (c *config) effectiveRefreshGrace() time.Duration {
 	return c.refreshGracePeriod
 }
 
-// WithAllowPrivateNetworkJWKS suppresses the SSRF deny-list the
-// internal JWKS fetcher applies to RP-controlled JWKS URIs. The
-// default posture rejects URLs whose host is a literal "localhost",
-// resolves to a loopback / link-local / RFC 1918 / ULA address, or
-// uses a non-http(s) scheme; the OP does this so an attacker-
-// controlled jwks_uri value cannot pivot the OP onto an internal
-// service.
-//
-// This is network reach for deployments whose relying parties live on a
-// private network (on-prem, service mesh, internal RPs); it is legitimate
-// in production, not a development-only option. [New] logs one line naming
-// what it widens: INFO, or WARN when open dynamic registration or Client
-// ID Metadata Documents is enabled too, since an unauthenticated caller
-// can then aim the fetch at internal services (SSRF exposure). The
-// opt-in is JWKS-specific so the analogous JAR request_uri fetcher
-// remains independently gated by [WithAllowPrivateNetworkJAR].
-// Stable since v1.0.
-func WithAllowPrivateNetworkJWKS() Option {
-	return optionFunc(func(c *config) error {
-		c.allowPrivateNetworkJWKS = true
-		return nil
-	})
-}
-
-// WithAllowPrivateNetworkJAR is the JAR request_uri counterpart of
-// [WithAllowPrivateNetworkJWKS]. It suppresses the SSRF deny-list
-// applied to RP-controlled request_uri values when /authorize fetches
-// the request object. The option is independent of the JWKS opt-in so
-// embedders can grant private-network access to one fetcher without
-// widening the other.
-//
-// This is network reach for deployments whose relying parties live on a
-// private network; it is legitimate in production, not a development-only
-// option. [New] logs one line naming what it widens: INFO, or WARN when
-// open dynamic registration or Client ID Metadata Documents is enabled
-// too (SSRF exposure).
-// Stable since v1.0.
-func WithAllowPrivateNetworkJAR() Option {
-	return optionFunc(func(c *config) error {
-		c.allowPrivateNetworkJAR = true
-		return nil
-	})
-}
-
-// WithAllowPrivateNetworkSector is the sector_identifier_uri
-// counterpart of [WithAllowPrivateNetworkJWKS]. It suppresses the
-// SSRF deny-list applied to the RP-controlled URI the OP fetches at
-// dynamic client registration to validate the OIDC Core 1.0 §8.1
-// pairwise subject sector. The option is independent of the JWKS and
-// JAR opt-ins so an embedder can host the sector document on a
-// private network without widening the other two fetchers.
-//
-// This is network reach for deployments whose relying parties live on a
-// private network; it is legitimate in production, not a development-only
-// option. [New] logs one line naming what it widens: INFO, or WARN when
-// open dynamic registration or Client ID Metadata Documents is enabled
-// too (SSRF exposure).
-// Stable since v1.0.
-func WithAllowPrivateNetworkSector() Option {
-	return optionFunc(func(c *config) error {
-		c.allowPrivateNetworkSector = true
-		return nil
-	})
-}
-
-// WithAllowLocalhostLoopback widens the RFC 8252 §7.3 native-app
+// WithAllowLocalhostRedirectURIs widens the RFC 8252 §7.3 native-app
 // loopback redirect_uri carve-out to admit the textual "localhost"
 // host. The default posture only admits the IP literals 127.0.0.1 and
 // [::1] over plain http; localhost is rejected so a DNS-rebinding
@@ -468,60 +325,46 @@ func WithAllowPrivateNetworkSector() Option {
 // to the textual "localhost" hostname (the most common default) opt
 // in via this option.
 //
-// The option also admits "localhost" in the issuer itself. That half
-// exists for WebAuthn: a Relying Party ID must be a domain and browsers
-// reject an IP literal for it, so an http issuer on 127.0.0.1 has no
-// valid RP ID to pair with and a local passkey deployment has nowhere to
-// stand. The DNS-rebinding reasoning above does not stop applying — the
-// carve-out is acceptable on a developer's machine and nowhere else.
+// The option applies to redirect_uri and post_logout_redirect_uris, for
+// static clients and dynamic registration alike. It does not touch the
+// issuer; a local deployment that serves its issuer on http://localhost
+// needs [WithAllowLocalhostIssuerForDev] as well.
 //
-// Many of the example demos under examples/ serve their issuer on, or
-// register redirect URIs under, http://localhost and refuse to start
-// without this opt-in; production embedders typically leave it off and
-// instead front their RPs over https.
-// Stable since v1.0.
-func WithAllowLocalhostLoopback() Option {
+// The opt-in is legitimate in production for deployments whose native
+// clients really do listen on "localhost"; [New] logs a warning naming
+// the residual DNS-rebinding exposure. Many of the example demos under
+// examples/ register redirect URIs under http://localhost and refuse to
+// start without this opt-in.
+// Stable since v1.5.
+func WithAllowLocalhostRedirectURIs() Option {
 	return optionFunc(func(c *config) error {
-		c.allowLocalhostLoopback = true
+		c.allowLocalhostRedirectURIs = true
 		return nil
 	})
 }
 
-// WithAllowInsecureBackchannelLogoutForDev is a dev / CI-only
-// opt-out that admits plain-http loopback URLs for the
-// `backchannel_logout_uri` client metadata field. The default
-// posture rejects every non-https value at registration time
-// (OpenID Connect Back-Channel Logout 1.0 §2.2), and the runtime
-// SSRF gate refuses to POST a logout token at a loopback / private-
-// network destination — both correct for production where the OP
-// MUST reach RPs over the public Internet on TLS.
+// WithAllowLocalhostIssuerForDev admits the textual host "localhost" in
+// the issuer, so an http issuer such as http://localhost:8080 is
+// accepted. The default posture admits only loopback IP literals over
+// plain http, because the resolution of "localhost" can be hijacked
+// (RFC 8252 §7.3).
 //
-// The opt-in flips both gates ONLY for the loopback hosts
-// 127.0.0.1, [::1], and "localhost". Public IP literals and
-// non-loopback DNS names continue to require https; the SSRF
-// gate's link-local / RFC 1918 / IPv6 ULA deny-list keeps every
-// other private destination blocked, at the URL check, the DNS
-// lookup, the dial and every redirect hop alike. A registered
-// "localhost" is admitted only while it resolves to a loopback
-// address, so a split-horizon resolver cannot widen the opt-in.
-// Reaching an RP on a private LAN is a different decision with a
-// different option: [WithAllowPrivateNetworkBackchannel]. [New]
-// records the opt-in on the audit stream, as
-// insecure_backchannel_logout_for_dev on the [AuditStartupProfile]
-// event, and logs a warning on the operational logger, so a
-// deployment cannot silently leave it on after promoting from CI to
-// production.
+// That half exists for WebAuthn: a Relying Party ID must be a domain and
+// browsers reject an IP literal for it, so an http issuer on 127.0.0.1
+// has no valid RP ID to pair with and a local passkey deployment has
+// nowhere to stand. The DNS-rebinding reasoning above does not stop
+// applying — the carve-out is acceptable on a developer's machine and
+// nowhere else.
 //
-// Use this option for the in-process demos under examples/ and for
-// CI fixtures that bind a stub RP on a loopback port. [New] refuses it
-// unless the issuer is a development host: a loopback IP literal,
-// "localhost", or a name under the RFC 6761 special-use TLDs .localhost,
-// .test, .invalid or .example.
-//
-// Stable since v1.0.
-func WithAllowInsecureBackchannelLogoutForDev() Option {
+// [New] refuses the option unless the issuer is an http URL whose host is
+// exactly "localhost", so a development flag cannot ride along into a
+// deployment with a real issuer. It logs a warning on the operational
+// logger. The redirect_uri half is a separate decision:
+// [WithAllowLocalhostRedirectURIs].
+// Stable since v1.5.
+func WithAllowLocalhostIssuerForDev() Option {
 	return optionFunc(func(c *config) error {
-		c.allowInsecureBackchannelLogoutForDev = true
+		c.allowLocalhostIssuer = true
 		return nil
 	})
 }
@@ -552,8 +395,8 @@ func WithAllowInsecureBackchannelLogoutForDev() Option {
 // redirect hop only, which does not stop a DNS-rebinding peer that
 // resolves public when the URL is checked and private when it is
 // dialled. The option is
-// independent of [WithAllowPrivateNetworkJWKS] and
-// [WithAllowPrivateNetworkJAR]; embedders typically pair it with one
+// independent of [WithAllowPrivateNetwork] ([OutboundJWKS]) and
+// [WithAllowPrivateNetwork] ([OutboundJAR]); embedders typically pair it with one
 // of those when their RP runs on a private network behind the
 // internal CA.
 //

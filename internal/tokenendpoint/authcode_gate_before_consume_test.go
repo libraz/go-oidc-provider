@@ -57,7 +57,7 @@ func TestAuthCode_DPoPJKTMismatchLeavesCodeRedeemable(t *testing.T) {
 	})
 
 	form := authCodeForm(codeID, redirect, verifier)
-	wrong := makeDPoPProof(t, other, "POST", f.endpoint, f.clock.now, "jti-jkt-gate-1", "")
+	wrong := makeDPoPProof(t, other, "POST", f.htu(), f.clock.now, "jti-jkt-gate-1", "")
 	resp := postWithDPoP(t, f.prov.HTTPClient(nil), f.endpoint, form, client.ID, secret, wrong)
 	body := decodeJSON(t, resp)
 	resp.Body.Close()
@@ -66,7 +66,7 @@ func TestAuthCode_DPoPJKTMismatchLeavesCodeRedeemable(t *testing.T) {
 	}
 	assertCodeUnconsumed(t, f, codeID)
 
-	right := makeDPoPProof(t, committed, "POST", f.endpoint, f.clock.now, "jti-jkt-gate-2", "")
+	right := makeDPoPProof(t, committed, "POST", f.htu(), f.clock.now, "jti-jkt-gate-2", "")
 	resp = postWithDPoP(t, f.prov.HTTPClient(nil), f.endpoint, form, client.ID, secret, right)
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {

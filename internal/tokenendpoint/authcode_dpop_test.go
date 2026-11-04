@@ -44,7 +44,7 @@ func TestAuthCode_DPoP_BindsCnfJkt(t *testing.T) {
 
 	key := newDPoPKey(t)
 	form := authCodeForm(codeID, redirect, verifier)
-	proof := makeDPoPProof(t, key, "POST", f.endpoint, f.clock.now, "jti-authcode-1", "")
+	proof := makeDPoPProof(t, key, "POST", f.htu(), f.clock.now, "jti-authcode-1", "")
 	resp := postWithDPoP(t, f.prov.HTTPClient(nil), f.endpoint, form, client.ID, secret, proof)
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
@@ -186,7 +186,7 @@ func TestAuthCode_DPoP_Replay(t *testing.T) {
 		Nonce:               "n2",
 	})
 
-	proof := makeDPoPProof(t, key, "POST", f.endpoint, f.clock.now, "jti-replay-shared", "")
+	proof := makeDPoPProof(t, key, "POST", f.htu(), f.clock.now, "jti-replay-shared", "")
 
 	first := postWithDPoP(t, f.prov.HTTPClient(nil), f.endpoint, authCodeForm(codeID1, redirect, verifier1), client.ID, secret, proof)
 	if first.StatusCode != http.StatusOK {

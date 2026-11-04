@@ -7,7 +7,7 @@ import (
 )
 
 // batchSize is the number of codes minted in a single batch. Ten is the
-// industry default (GitHub, Google, Auth0, AWS) and is intentionally not
+// industry default (GitHub, Google, AWS) and is intentionally not
 // configurable in v1.0 to keep the user-facing UX consistent across
 // embedders.
 const batchSize = 10

@@ -95,7 +95,7 @@ func TestRefresh_OpaqueFormat_SenderConstrainedGraceRetryRevokesPriorAT(t *testi
 	keyA := newDPoPKey(t)
 	keyB := newDPoPKey(t)
 
-	firstProof := makeDPoPProof(t, keyA, "POST", f.endpoint, cur, "jti-opaque-grace-A", "")
+	firstProof := makeDPoPProof(t, keyA, "POST", f.htu(), cur, "jti-opaque-grace-A", "")
 	first := postWithDPoP(t, f.prov.HTTPClient(nil), f.endpoint, refreshForm(refreshID, ""), client.ID, secret, firstProof)
 	defer first.Body.Close()
 	if first.StatusCode != http.StatusOK {
@@ -114,7 +114,7 @@ func TestRefresh_OpaqueFormat_SenderConstrainedGraceRetryRevokesPriorAT(t *testi
 	// with a different DPoP key, the shape RFC 9700 §2.2.2 recovery exists
 	// for: the client never saw the first response.
 	cur = cur.Add(5 * time.Second)
-	retryProof := makeDPoPProof(t, keyB, "POST", f.endpoint, cur, "jti-opaque-grace-B", "")
+	retryProof := makeDPoPProof(t, keyB, "POST", f.htu(), cur, "jti-opaque-grace-B", "")
 	second := postWithDPoP(t, f.prov.HTTPClient(nil), f.endpoint, refreshForm(refreshID, ""), client.ID, secret, retryProof)
 	defer second.Body.Close()
 	if second.StatusCode != http.StatusOK {

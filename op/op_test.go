@@ -364,7 +364,7 @@ func (stubGrantStore) HasAny(context.Context) (bool, error) { return false, nil 
 
 const validIssuer = "https://idp.example.com"
 
-// devIssuer is an issuer [op.WithAllowInsecureBackchannelLogoutForDev]
+// devIssuer is an issuer [op.WithAllowInsecureOutboundForDev] ([op.OutboundBackchannel])
 // accepts: a host under the special-use .test TLD.
 const devIssuer = "https://idp.example.test"
 
@@ -741,7 +741,7 @@ func TestWithIssuer_AcceptsLoopbackHTTP(t *testing.T) {
 // TestWithIssuer_LocalhostNeedsTheOptIn pins both sides of the textual
 // "localhost" carve-out. The default posture refuses it — the host can be
 // DNS-hijacked where an IP literal cannot — and
-// [op.WithAllowLocalhostLoopback] admits it, which is the only way to run
+// [op.WithAllowLocalhostIssuerForDev] admits it, which is the only way to run
 // a local WebAuthn deployment without TLS: a Relying Party ID must be a
 // domain, so an http issuer on an IP literal has none to pair with.
 //
@@ -769,13 +769,13 @@ func TestWithIssuer_LocalhostNeedsTheOptIn(t *testing.T) {
 		{
 			name: "opt-in-after-issuer",
 			opts: func(t *testing.T) []op.Option {
-				return append(validBaseOpts(t), op.WithIssuer(issuer), op.WithAllowLocalhostLoopback())
+				return append(validBaseOpts(t), op.WithIssuer(issuer), op.WithAllowLocalhostIssuerForDev())
 			},
 		},
 		{
 			name: "opt-in-before-issuer",
 			opts: func(t *testing.T) []op.Option {
-				return append(validBaseOpts(t), op.WithAllowLocalhostLoopback(), op.WithIssuer(issuer))
+				return append(validBaseOpts(t), op.WithAllowLocalhostIssuerForDev(), op.WithIssuer(issuer))
 			},
 		},
 	} {
@@ -806,7 +806,7 @@ func TestWithIssuer_OptInDoesNotAdmitPublicHosts(t *testing.T) {
 	} {
 		t.Run(issuer, func(t *testing.T) {
 			t.Parallel()
-			_, err := op.New(append(validBaseOpts(t), op.WithIssuer(issuer), op.WithAllowLocalhostLoopback())...)
+			_, err := op.New(append(validBaseOpts(t), op.WithIssuer(issuer), op.WithAllowLocalhostIssuerForDev())...)
 			if !errors.Is(err, op.ErrIssuerInvalid) {
 				t.Fatalf("op.New(%q): want ErrIssuerInvalid, got %v", issuer, err)
 			}

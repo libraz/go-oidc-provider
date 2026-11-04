@@ -1,11 +1,13 @@
 // Package clientauth implements OAuth 2.0 / OpenID Connect client
-// authentication at the token endpoint. It covers the four methods the
-// library accepts in v1.0:
+// authentication at the token endpoint. It covers the methods the
+// library accepts:
 //
-//   - client_secret_basic (RFC 6749 §2.3.1)
-//   - client_secret_post  (RFC 6749 §2.3.1)
-//   - private_key_jwt     (OIDC Core §9, RFC 7521 + RFC 7523)
-//   - none                (public clients with PKCE)
+//   - client_secret_basic          (RFC 6749 §2.3.1)
+//   - client_secret_post           (RFC 6749 §2.3.1)
+//   - private_key_jwt              (OIDC Core §9, RFC 7521 + RFC 7523)
+//   - tls_client_auth              (RFC 8705 §2.1, with feature.MTLS)
+//   - self_signed_tls_client_auth  (RFC 8705 §2.2, with feature.MTLS)
+//   - none                         (public clients with PKCE)
 //
 // client_secret_jwt (HS256-shared-secret JWT) is intentionally NOT
 // supported: shared-secret JWTs broaden the
@@ -60,6 +62,16 @@ const (
 	// client_assertion_type=urn:ietf:params:oauth:client-assertion-type:jwt-bearer
 	// + client_assertion=<JWT signed with the client's private key>.
 	MethodPrivateKeyJWT Method = "private_key_jwt"
+
+	// MethodTLSClientAuth is RFC 8705 §2.1 PKI mutual-TLS
+	// authentication: a chain-verified client certificate whose subject
+	// DN or SAN matches the client's registered matcher.
+	MethodTLSClientAuth Method = "tls_client_auth"
+
+	// MethodSelfSignedTLSClientAuth is RFC 8705 §2.2 self-signed
+	// mutual-TLS authentication: a client certificate whose public key
+	// is in the client's registered JWKS.
+	MethodSelfSignedTLSClientAuth Method = "self_signed_tls_client_auth"
 )
 
 // AssertionType is the literal value the OAuth specs assign to the

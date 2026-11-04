@@ -77,31 +77,31 @@ func TestWithDeviceCodeGrant_RejectsNilOption(t *testing.T) {
 	t.Parallel()
 
 	_, err := op.New(append(validBaseOptsWithInmem(t),
-		op.WithDeviceCodeGrant(op.WithDeviceCodeExpiry(time.Minute), nil),
+		op.WithDeviceCodeGrant(op.WithDeviceCodeTTL(time.Minute), nil),
 	)...)
 	if err == nil || !strings.Contains(err.Error(), "position 1") {
 		t.Fatalf("err = %v, want the nil DeviceCodeOption at position 1 named", err)
 	}
 }
 
-// TestWithDeviceCodeExpiry_RejectsNonPositive pins the option-site
+// TestWithDeviceCodeTTL_RejectsNonPositive pins the option-site
 // validation: zero and negative durations are rejected so a
 // misconfiguration surfaces at construction time.
-func TestWithDeviceCodeExpiry_RejectsNonPositive(t *testing.T) {
+func TestWithDeviceCodeTTL_RejectsNonPositive(t *testing.T) {
 	t.Parallel()
 
 	for _, ttl := range []time.Duration{0, -1 * time.Second} {
 		_, err := op.New(append(validBaseOptsWithInmem(t),
-			op.WithDeviceCodeGrant(op.WithDeviceCodeExpiry(ttl)),
+			op.WithDeviceCodeGrant(op.WithDeviceCodeTTL(ttl)),
 		)...)
 		if err == nil {
-			t.Fatalf("WithDeviceCodeExpiry(%v): expected error", ttl)
+			t.Fatalf("WithDeviceCodeTTL(%v): expected error", ttl)
 		}
 	}
 }
 
 // TestWithDeviceCodePollInterval_RejectsNonPositive mirrors
-// [TestWithDeviceCodeExpiry_RejectsNonPositive] for the poll-interval
+// [TestWithDeviceCodeTTL_RejectsNonPositive] for the poll-interval
 // knob.
 func TestWithDeviceCodePollInterval_RejectsNonPositive(t *testing.T) {
 	t.Parallel()
@@ -116,16 +116,16 @@ func TestWithDeviceCodePollInterval_RejectsNonPositive(t *testing.T) {
 	}
 }
 
-// TestWithDeviceCodeExpiry_IndependentOfShortAccessTokenTTL pins the
+// TestWithDeviceCodeTTL_IndependentOfShortAccessTokenTTL pins the
 // defect fix: the device_code `expires_in` advertised at
-// /device_authorization must be driven by [op.WithDeviceCodeExpiry],
+// /device_authorization must be driven by [op.WithDeviceCodeTTL],
 // NOT derived from [op.WithAccessTokenTTL]. Before the fix, a
 // deployment running a short access-token TTL (seconds) made the
 // device flow impractical because expires_in silently inherited that
 // short lifetime. The fixture pins a 90-second access-token TTL
 // alongside an explicit 20-minute device_code expiry and asserts the
 // wire expires_in reflects the latter.
-func TestWithDeviceCodeExpiry_IndependentOfShortAccessTokenTTL(t *testing.T) {
+func TestWithDeviceCodeTTL_IndependentOfShortAccessTokenTTL(t *testing.T) {
 	t.Parallel()
 
 	s := inmem.New()
@@ -155,7 +155,7 @@ func TestWithDeviceCodeExpiry_IndependentOfShortAccessTokenTTL(t *testing.T) {
 		op.WithKeyset(validKeyset(t)),
 		op.WithCookieKeys(newRandomCookieKey(t)),
 		fixtureAuthenticator(),
-		op.WithDeviceCodeGrant(op.WithDeviceCodeExpiry(deviceCodeExpiry)),
+		op.WithDeviceCodeGrant(op.WithDeviceCodeTTL(deviceCodeExpiry)),
 		op.WithAccessTokenTTL(shortAccessTokenTTL),
 	)
 	if err != nil {

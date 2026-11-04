@@ -56,6 +56,16 @@ type HandlerDeps struct {
 	// Required.
 	PollEndpoint string
 
+	// ConfigurationEndpoint, StatusEndpoint and VerificationEndpoint are
+	// the absolute URLs the SSF metadata advertises for the stream
+	// configuration, status and verification endpoints. Each is the DPoP
+	// "htu" its endpoint expects, as PollEndpoint + "/" + stream_id is the
+	// poll endpoint's; the request's own scheme and host are never used.
+	// Required.
+	ConfigurationEndpoint string
+	StatusEndpoint        string
+	VerificationEndpoint  string
+
 	// ActiveKey returns the key a polled SET is signed with. It is
 	// called per poll response so a rotation takes effect at once.
 	// Required.
@@ -91,6 +101,9 @@ type Handlers struct {
 	tx            *Transmitter
 	sealer        *Sealer
 	pollEndpoint  string
+	configHTU     []string
+	statusHTU     []string
+	verifyHTU     []string
 	activeKey     func() (SigningKey, error)
 	allowInsecure bool
 	allowPrivate  bool
@@ -117,6 +130,8 @@ func NewHandlers(d HandlerDeps) (*Handlers, error) {
 		return nil, errors.New("ssf: HandlerDeps.Sealer is required")
 	case d.PollEndpoint == "":
 		return nil, errors.New("ssf: HandlerDeps.PollEndpoint is empty")
+	case d.ConfigurationEndpoint == "", d.StatusEndpoint == "", d.VerificationEndpoint == "":
+		return nil, errors.New("ssf: HandlerDeps.ConfigurationEndpoint, StatusEndpoint and VerificationEndpoint are required")
 	case d.ActiveKey == nil:
 		return nil, errors.New("ssf: HandlerDeps.ActiveKey is required")
 	}
@@ -129,6 +144,9 @@ func NewHandlers(d HandlerDeps) (*Handlers, error) {
 		tx:            d.Transmitter,
 		sealer:        d.Sealer,
 		pollEndpoint:  strings.TrimSuffix(d.PollEndpoint, "/"),
+		configHTU:     []string{d.ConfigurationEndpoint},
+		statusHTU:     []string{d.StatusEndpoint},
+		verifyHTU:     []string{d.VerificationEndpoint},
 		activeKey:     d.ActiveKey,
 		allowInsecure: d.AllowInsecureForDev,
 		allowPrivate:  d.AllowPrivateNetwork,
@@ -227,7 +245,7 @@ func mgmtNonNil(v []string) []string {
 }
 
 func (h *Handlers) createStream(w http.ResponseWriter, r *http.Request) {
-	clientID, ok := h.authorize(w, r, authManage)
+	clientID, ok := h.authorize(w, r, authManage, h.configHTU)
 	if !ok {
 		return
 	}
@@ -272,7 +290,7 @@ func (h *Handlers) createStream(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handlers) readStream(w http.ResponseWriter, r *http.Request) {
-	clientID, ok := h.authorize(w, r, authRead)
+	clientID, ok := h.authorize(w, r, authRead, h.configHTU)
 	if !ok {
 		return
 	}
@@ -299,7 +317,7 @@ func (h *Handlers) readStream(w http.ResponseWriter, r *http.Request) {
 
 // updateStream serves PATCH (replace false) and PUT (replace true).
 func (h *Handlers) updateStream(w http.ResponseWriter, r *http.Request, replace bool) {
-	clientID, ok := h.authorize(w, r, authManage)
+	clientID, ok := h.authorize(w, r, authManage, h.configHTU)
 	if !ok {
 		return
 	}
@@ -336,7 +354,7 @@ func (h *Handlers) updateStream(w http.ResponseWriter, r *http.Request, replace 
 }
 
 func (h *Handlers) deleteStream(w http.ResponseWriter, r *http.Request) {
-	clientID, ok := h.authorize(w, r, authManage)
+	clientID, ok := h.authorize(w, r, authManage, h.configHTU)
 	if !ok {
 		return
 	}
@@ -367,7 +385,7 @@ type statusJSON struct {
 }
 
 func (h *Handlers) readStatus(w http.ResponseWriter, r *http.Request) {
-	clientID, ok := h.authorize(w, r, authRead)
+	clientID, ok := h.authorize(w, r, authRead, h.statusHTU)
 	if !ok {
 		return
 	}
@@ -388,7 +406,7 @@ func (h *Handlers) readStatus(w http.ResponseWriter, r *http.Request) {
 // operation: paused holds them, enabled releases them, disabled drops
 // them. Control events survive every transition.
 func (h *Handlers) setStatus(w http.ResponseWriter, r *http.Request) {
-	clientID, ok := h.authorize(w, r, authManage)
+	clientID, ok := h.authorize(w, r, authManage, h.statusHTU)
 	if !ok {
 		return
 	}
@@ -434,7 +452,7 @@ func (h *Handlers) setStatus(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handlers) verify(w http.ResponseWriter, r *http.Request) {
-	clientID, ok := h.authorize(w, r, authManage)
+	clientID, ok := h.authorize(w, r, authManage, h.verifyHTU)
 	if !ok {
 		return
 	}

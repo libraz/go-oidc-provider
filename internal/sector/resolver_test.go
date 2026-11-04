@@ -570,7 +570,7 @@ func TestResolve_NegativeCacheRecoversAfterTTL(t *testing.T) {
 
 func TestResolve_PrivateRefusalNamesOptIn(t *testing.T) {
 	t.Parallel()
-	const optIn = "op.WithAllowPrivateNetworkSector()"
+	const optIn = "op.WithAllowPrivateNetwork(op.OutboundSector)"
 	r := New(WithOptIn(optIn))
 	_, err := r.Resolve(context.Background(), "https://10.0.0.1/sector.json", nil)
 	if !errors.Is(err, ErrSectorPrivateAddress) || !strings.Contains(err.Error(), optIn) {

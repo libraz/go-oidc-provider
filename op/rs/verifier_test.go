@@ -10,7 +10,6 @@ import (
 	"encoding/pem"
 	"log/slog"
 	"net/http"
-	"net/netip"
 	"net/url"
 	"slices"
 	"strings"
@@ -45,6 +44,9 @@ func TestVerifier_NewRejectsInvalidConfig(t *testing.T) {
 		}},
 		{"mtls proxy header without trusted proxies", func(c *rs.Config) {
 			c.MTLSProxy = &op.MTLSProxy{HeaderName: "X-Client-Cert"}
+		}},
+		{"mtls proxy with an unparsable trusted proxy", func(c *rs.Config) {
+			c.MTLSProxy = &op.MTLSProxy{HeaderName: "X-Client-Cert", TrustedProxies: []string{"not-a-cidr"}}
 		}},
 		{"plain http issuer used for discovery", func(c *rs.Config) {
 			c.Issuer = "http://issuer.example.com"
@@ -514,7 +516,7 @@ func TestVerifier_CertificateBoundToken(t *testing.T) {
 	f := newFixture(t)
 	raw := f.token(t, func(c map[string]any) { c["cnf"] = map[string]string{"x5t#S256": thumbprint(bound.cert)} })
 	headerValue := url.QueryEscape(string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: bound.cert.Raw})))
-	proxy := &op.MTLSProxy{HeaderName: "X-Client-Cert", TrustedProxies: []netip.Prefix{netip.MustParsePrefix("192.0.2.0/24")}}
+	proxy := &op.MTLSProxy{HeaderName: "X-Client-Cert", TrustedProxies: []string{"192.0.2.0/24"}}
 
 	withTLS := func(cert *x509.Certificate) func(*http.Request) {
 		return func(r *http.Request) { r.TLS = &tls.ConnectionState{PeerCertificates: []*x509.Certificate{cert}} }

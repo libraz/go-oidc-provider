@@ -79,7 +79,7 @@ func TestNew_RequiresLoginFlow(t *testing.T) {
 }
 
 // TestNew_WarnsOnDevAndNoopOptions pins the start-up warnings for
-// WithFeature(feature.PKCE) and WithAllowLocalhostLoopback.
+// WithFeature(feature.PKCE) and WithAllowLocalhostRedirectURIs.
 func TestNew_WarnsOnDevAndNoopOptions(t *testing.T) {
 	t.Parallel()
 
@@ -89,7 +89,7 @@ func TestNew_WarnsOnDevAndNoopOptions(t *testing.T) {
 		msg  string
 	}{
 		{"pkce feature", op.WithFeature(feature.PKCE), "WithFeature(feature.PKCE) has no effect"},
-		{"localhost loopback", op.WithAllowLocalhostLoopback(), "WithAllowLocalhostLoopback is a development option"},
+		{"localhost redirect uris", op.WithAllowLocalhostRedirectURIs(), "WithAllowLocalhostRedirectURIs admits the textual"},
 	} {
 		for _, on := range []bool{true, false} {
 			name := tc.name + " absent"

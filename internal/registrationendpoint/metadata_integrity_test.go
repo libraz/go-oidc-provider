@@ -10,12 +10,14 @@ import (
 	"io"
 	"net/http"
 	"reflect"
+	"strings"
 	"testing"
 
 	josev4 "github.com/go-jose/go-jose/v4"
 
 	"github.com/libraz/go-oidc-provider/internal/clientauth"
 	"github.com/libraz/go-oidc-provider/op"
+	"github.com/libraz/go-oidc-provider/op/feature"
 	"github.com/libraz/go-oidc-provider/op/store"
 )
 
@@ -25,7 +27,7 @@ import (
 // none of the injected values: provenance, client-type, secret material,
 // identity and the resource allow-list are assigned by the OP alone.
 //
-// Tracks: CVE-2026-105306 (Keycloak — dynamic client registration did not filter security-sensitive client attributes)
+// Tracks: CVE-2026-105306 (another OP — dynamic client registration did not filter security-sensitive client attributes)
 func TestRegister_InternalClientAttributesNotWritable(t *testing.T) {
 	t.Parallel()
 
@@ -169,6 +171,16 @@ func metadataWithInlineJWKS(tb testing.TB) map[string]any {
 	return body
 }
 
+// tlsClientAuthMatcherMembers pairs each RFC 8705 §2.1.2 matcher member
+// with its store.Client field and a value the validator accepts.
+var tlsClientAuthMatcherMembers = []struct{ member, field, value string }{
+	{"tls_client_auth_subject_dn", "TLSClientAuthSubjectDN", "CN=rp,O=Example"},
+	{"tls_client_auth_san_dns", "TLSClientAuthSANDNS", "rp.example.com"},
+	{"tls_client_auth_san_uri", "TLSClientAuthSANURI", "spiffe://example.com/rp"},
+	{"tls_client_auth_san_ip", "TLSClientAuthSANIP", "192.0.2.10"},
+	{"tls_client_auth_san_email", "TLSClientAuthSANEmail", "rp@example.com"},
+}
+
 // TestManage_ReadModifyWriteIsLossless registers a client with every
 // persisted metadata member set to a non-default value, then reads it,
 // writes the read body back (reserved members stripped as RFC 7592 §2.2
@@ -176,7 +188,7 @@ func metadataWithInlineJWKS(tb testing.TB) map[string]any {
 // unchanged: a member omitted from the read response would be cleared by
 // the write-back, silently disabling a setting.
 //
-// Tracks: CVE-2026-107623 (Keycloak — the registration response omitted a setting, so a read-modify-write silently disabled it)
+// Tracks: CVE-2026-107623 (another OP — the registration response omitted a setting, so a read-modify-write silently disabled it)
 func TestManage_ReadModifyWriteIsLossless(t *testing.T) {
 	t.Parallel()
 
@@ -184,12 +196,25 @@ func TestManage_ReadModifyWriteIsLossless(t *testing.T) {
 		"jwks_uri":    func(testing.TB) map[string]any { return roundTripMetadata() },
 		"inline_jwks": metadataWithInlineJWKS,
 	}
+	for _, matcher := range tlsClientAuthMatcherMembers {
+		variants["tls_client_auth/"+matcher.member] = func(testing.TB) map[string]any {
+			body := roundTripMetadata()
+			body["token_endpoint_auth_method"] = "tls_client_auth"
+			body[matcher.member] = matcher.value
+			return body
+		}
+	}
+	variants["self_signed_tls_client_auth"] = func(testing.TB) map[string]any {
+		body := roundTripMetadata()
+		body["token_endpoint_auth_method"] = "self_signed_tls_client_auth"
+		return body
+	}
 	for name, build := range variants {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 
 			ctx := context.Background()
-			f := newFixture(t, op.RegistrationOption{})
+			f := newFixture(t, op.RegistrationOption{}, op.WithFeature(feature.MTLS))
 			created := f.register(t, build(t))
 			stored0, err := f.prov.Store.GetClient(ctx, created.clientID)
 			if err != nil {
@@ -266,10 +291,18 @@ func assertEveryMetadataFieldSet(t *testing.T, c *store.Client, variant string) 
 		"PreviousSecretHash":               "set by secret rotation, not by registration",
 		"PreviousSecretExpiresAt":          "set by secret rotation, not by registration",
 	}
-	if variant == "jwks_uri" {
-		exempt["JWKs"] = "mutually exclusive with jwks_uri"
-	} else {
+	if variant == "inline_jwks" {
 		exempt["JWKsURI"] = "mutually exclusive with jwks"
+	} else {
+		exempt["JWKs"] = "mutually exclusive with jwks_uri"
+	}
+	if strings.Contains(variant, "tls_client_auth") {
+		exempt["SecretHash"] = "an mTLS method carries no client secret"
+	}
+	for _, matcher := range tlsClientAuthMatcherMembers {
+		if variant != "tls_client_auth/"+matcher.member {
+			exempt[matcher.field] = "a tls_client_auth client registers exactly one matcher; other methods none"
+		}
 	}
 	v := reflect.ValueOf(c).Elem()
 	for i := range v.NumField() {

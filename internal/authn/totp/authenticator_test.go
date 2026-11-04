@@ -118,11 +118,11 @@ func TestAuthenticator_BeginEmitsPromptWithFullAttempts(t *testing.T) {
 // that no caller can drive the TOTP factor from a fresh chain.
 //
 // Tracks:
-//   - GHSA-9r3w-4j8q-pw98 (cal.com, 2024-04, CVSS 9.8) — TRPC
+//   - GHSA-9r3w-4j8q-pw98 (another OP, 2024-04, CVSS 9.8) — TRPC
 //     verifyTwoFactor accepted (email, password, totpCode) and
 //     returned a session without verifying the password. Same class
 //     as CWE-287 "Improper Authentication".
-//   - GHSA-5jfq-x6xp-7rw2 (Keycloak, 2024-09, CVSS 6.8) — two-factor
+//   - GHSA-5jfq-x6xp-7rw2 (another OP, 2024-09, CVSS 6.8) — two-factor
 //     authentication bypass via direct OTP submission. Same
 //     structural property: every TOTP path needs primary-factor proof.
 //
@@ -318,8 +318,8 @@ func TestAuthenticator_ContinueRequiresCodeField(t *testing.T) {
 // caller fabricated a TOTP submission, the adapter rejects it without
 // a bound subject. Combined with the orchestrator's StateRef-tagging
 // invariant (a TOTP-tagged StateRef is only emitted after Primary
-// completes) this gives two layers of defence against the cal.com /
-// Keycloak primary-skip class.
+// completes) this gives two layers of defence against the another OP /
+// primary-skip class.
 //
 // Tracks: GHSA-9r3w-4j8q-pw98, GHSA-5jfq-x6xp-7rw2 — see
 // TestAuthenticator_BeginRequiresSubject for the threat model.

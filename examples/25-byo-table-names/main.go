@@ -2,39 +2,50 @@
 
 // Example 25-byo-table-names shows how to graft the OP onto a database
 // whose table names follow an existing application's convention instead
-// of the adapter's bundled oidc_* defaults. oidcsql.WithNaming takes a
-// map of logical record kind -> physical table name; the adapter
-// validates every physical name against the SQL standard identifier
-// grammar, rewrites the embedded DDL, and builds every query against the
-// renamed tables. Column names stay fixed — the adapter owns the column
-// layout, and an embedder that also needs custom columns implements the
-// store interfaces directly (see example 26-byo-store-from-scratch).
+// of the adapter's bundled oidc_* defaults. Two options do it:
+//
+//   - oidcsql.WithTablePrefix("auth_") replaces the oidc_ prefix on every
+//     table at once, including the migration version table
+//     (auth_schema_migrations). It is the option to reach for first: one
+//     value, no list to keep in step with the adapter's tables.
+//   - oidcsql.WithNaming takes a map of logical record kind -> physical
+//     table name and overrides single tables outright, on top of the
+//     prefix. Here it renames only "users", to auth_accounts, the way an
+//     embedder fits one table to a naming convention the prefix cannot
+//     express. The "schema_migrations" key would rename the version table
+//     the same way.
+//
+// The adapter validates every physical name against the SQL standard
+// identifier grammar, rewrites the embedded DDL, and builds every query
+// against the renamed tables. Column names stay fixed; an embedder that
+// also needs custom columns implements the store interfaces directly (see
+// example 24-byo-userstore and 26-byo-store-from-scratch).
 //
 // Run with:
 //
 //	(cd examples/25-byo-table-names && GOWORK=off go run -tags example .)
 //
-// The example renames every OP-internal table under an
-// "auth_" prefix, applies the rewritten schema, logs the physical tables the
-// adapter actually created, seeds one password user into the renamed
-// users table, and serves the OP on :8080.
+// The example applies the rewritten schema, logs the physical tables the
+// adapter actually created, seeds one password user into the renamed users
+// table, and serves the OP on :8080.
 //
 // Manual verification:
 //
-//  1. Start the example and read the "created tables:" log line — every
-//     table carries the auth_ prefix, none carry the bundled oidc_
-//     prefix.
+//  1. Start the example and read the "created tables:" log line. Every
+//     table carries the auth_ prefix, none carries the bundled oidc_
+//     prefix, the users table is auth_accounts rather than auth_users,
+//     and auth_schema_migrations is the version table Migrate keeps.
 //  2. Open http://127.0.0.1:8080/.well-known/openid-configuration to
 //     confirm the OP serves normally from the renamed store.
 //  3. Point a relying party at the OP and sign in as username "demo" /
-//     password "demo". The credential is read back out of auth_users,
+//     password "demo". The credential is read back out of auth_accounts,
 //     which is the rename taking effect on the read path rather than
 //     only on the DDL.
 //
 // PRODUCTION CAVEATS:
 //   - Keys: key derivation uses a hardcoded ephemeral value for the demo; production must derive the signing key from a vault / KMS.
 //   - Store: the sqlite DSN here uses a local file; production uses Postgres / MySQL via op/storeadapter/sql, runs the rewritten schema through the embedder's migration tooling, and persists the database where it belongs.
-//   - Naming: physical names are hard-coded here for clarity; production sources them from the embedder's schema convention.
+//   - Naming: the prefix and the override are hard-coded here for clarity; production sources them from the embedder's schema convention.
 //   - Listener: plain HTTP; front behind TLS-terminating ingress.
 //   - User seed: the demo username / password are hard-coded; production embedders enrol users through their own management plane.
 package main
@@ -64,46 +75,19 @@ const (
 	opAddr = ":8080"
 	issuer = "http://127.0.0.1" + opAddr
 
+	tablePrefix = "auth_"
+
 	demoUsername = "demo"
 	demoPassword = "demo"
 	demoSubject  = "demo-user"
 )
 
-// naming maps every logical record kind WithNaming accepts onto a
-// physical table name under this embedder's "auth_" convention. Listing
-// every key makes it explicit that the rename covers the
-// whole OP-internal surface — the authentication-factor tables at the
-// bottom as much as the clients table at the top. A key left out is not
-// an error: the adapter keeps its bundled oidc_ default for it, so the
-// omission surfaces as a stray oidc_ table in a schema review rather
-// than at construction. Unknown keys do make oidcsql.New fail fast, so
-// a typo here is caught immediately.
+// naming overrides one table on top of the "auth_" prefix. Every table
+// not listed keeps its prefixed default (auth_clients, auth_sessions, ...),
+// and so does the version table. Unknown keys make oidcsql.New fail fast,
+// so a typo here is caught at construction.
 var naming = map[string]string{
-	"clients":                    "auth_clients",
-	"authorization_codes":        "auth_codes",
-	"refresh_tokens":             "auth_refresh_tokens",
-	"access_tokens":              "auth_access_tokens",
-	"opaque_access_tokens":       "auth_opaque_access_tokens",
-	"grant_revocations":          "auth_grant_revocations",
-	"revoked_jtis":               "auth_revoked_jtis",
-	"grants":                     "auth_grants",
-	"sessions":                   "auth_sessions",
-	"par_records":                "auth_par_records",
-	"interactions":               "auth_interactions",
-	"consumed_jtis":              "auth_consumed_jtis",
-	"users":                      "auth_users",
-	"initial_access_tokens":      "auth_initial_access_tokens",
-	"registration_access_tokens": "auth_registration_access_tokens",
-	"op_metadata":                "auth_op_metadata",
-	"device_codes":               "auth_device_codes",
-	"ciba_requests":              "auth_ciba_requests",
-	"totp_secrets":               "auth_totp_secrets",
-	"passkeys":                   "auth_passkeys",
-	"recovery_codes":             "auth_recovery_codes",
-	"email_otps":                 "auth_email_otps",
-	"authn_lockouts":             "auth_authn_lockouts",
-	"ssf_streams":                "auth_ssf_streams",
-	"ssf_events":                 "auth_ssf_events",
+	"users": "auth_accounts",
 }
 
 func main() {
@@ -127,12 +111,12 @@ func run() error {
 	}
 	defer func() { _ = db.Close() }()
 
-	storage, err := oidcsql.New(db, oidcsql.SQLite(), oidcsql.WithNaming(naming))
+	storage, err := oidcsql.New(db, oidcsql.SQLite(), oidcsql.WithTablePrefix(tablePrefix), oidcsql.WithNaming(naming))
 	if err != nil {
 		return fmt.Errorf("oidcsql.New: %w", err)
 	}
-	// Migrate applies the migration files with the renames above already
-	// substituted; storage.Migrations() returns those same files for
+	// Migrate applies the migration files with the prefix and the override
+	// already substituted; storage.Migrations() returns those same files for
 	// embedders who drive migrations from their own tooling.
 	if err := storage.Migrate(context.Background()); err != nil {
 		return fmt.Errorf("migrate: %w", err)
@@ -153,9 +137,9 @@ func run() error {
 		op.WithStore(storage),
 		op.WithKeyset(keys.Keyset()),
 		op.WithCookieKeys(keys.CookieKey),
-		// The password prompt reads the renamed auth_users table through
+		// The password prompt reads the renamed auth_accounts table through
 		// the adapter's store interface; the rename is invisible above
-		// this line, which is the whole point of WithNaming.
+		// this line, which is the whole point of the naming options.
 		op.WithProfile(profile.OAuth21),
 		op.WithLoginFlow(op.LoginFlow{Primary: op.PrimaryPassword{Store: storage.UserPasswords()}}),
 		op.WithStaticClients(op.PublicClient{
@@ -172,7 +156,7 @@ func run() error {
 	mux.Handle("/", provider)
 
 	log.Printf("OP backed by renamed SQLite tables listening on %s (issuer %s)", opAddr, issuer)
-	log.Printf("demo user: username=%q password=%q (row lives in auth_users)", demoUsername, demoPassword)
+	log.Printf("demo user: username=%q password=%q (row lives in auth_accounts)", demoUsername, demoPassword)
 	if err := serve.Listen(opAddr, mux, provider); err != nil {
 		return fmt.Errorf("listen: %w", err)
 	}
@@ -180,7 +164,7 @@ func run() error {
 }
 
 // seedUser writes the demo credential through the adapter, which
-// resolves the logical "users" kind to the physical auth_users table
+// resolves the logical "users" kind to the physical auth_accounts table
 // declared in the naming map above.
 func seedUser(storage *oidcsql.Store) error {
 	hash, err := op.HashPassword(demoPassword)

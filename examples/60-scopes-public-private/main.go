@@ -82,7 +82,7 @@ func main() {
 		op.WithKeyset(keys.Keyset()),
 		op.WithCookieKeys(keys.CookieKey),
 		// Admit "localhost" as a redirect_uri host alongside 127.0.0.1.
-		op.WithAllowLocalhostLoopback(),
+		op.WithAllowLocalhostRedirectURIs(),
 		// Consent is where the visibility flag does its second job, and
 		// consent only happens after a login. One password step is the
 		// smallest flow that gets an authorization request that far.

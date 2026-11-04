@@ -52,34 +52,46 @@ func (a GrantManagementAction) valid() bool {
 	}
 }
 
+// GrantManagement configures [WithGrantManagement].
+//
+// Experimental: tracks an IETF draft, so the surface MAY change in a
+// minor release on a wire-incompatible draft bump.
+type GrantManagement struct {
+	// Actions is the closed set the OP accepts, advertised as
+	// grant_management_actions_supported. At least one action is required
+	// and each MUST be one of the defined values, without repeats.
+	Actions []GrantManagementAction
+
+	// ActionRequired maps to discovery's grant_management_action_required:
+	// when true an authorization request that omits
+	// grant_management_action is rejected.
+	ActionRequired bool
+}
+
 // WithGrantManagement enables the OAuth 2.0 Grant Management draft: the
 // grant_management_action / grant_id authorization parameters are honoured,
 // the grant management endpoint (query / revoke) is mounted, the token
 // response carries grant_id, and discovery advertises the feature.
 //
-// actions is the closed set the OP accepts (advertised as
-// grant_management_actions_supported). At least one action is required and
-// each MUST be one of the defined values. actionRequired maps to discovery's
-// grant_management_action_required: when true an authorization request that
-// omits grant_management_action is rejected.
-//
+// See [GrantManagement] for the accepted actions and the required flag.
 // Enabling this implicitly turns on [feature.GrantManagement]. The
 // option may be supplied at most once; a repeat fails [New].
 //
 // Experimental: tracks an IETF draft, so the surface MAY change in a
 // minor release on a wire-incompatible draft bump.
-func WithGrantManagement(actions []GrantManagementAction, actionRequired bool) Option {
+func WithGrantManagement(g GrantManagement) Option {
 	return optionFunc(func(c *config) error {
 		if err := c.claimOnce("WithGrantManagement"); err != nil {
 			return err
 		}
+		actions := g.Actions
 		if len(actions) == 0 {
 			return newConfigurationError("WithGrantManagement requires at least one GrantManagementAction", nil)
 		}
 		seen := make(map[GrantManagementAction]struct{}, len(actions))
 		for i, a := range actions {
 			if !a.valid() {
-				return newConfigurationError("WithGrantManagement["+strconv.Itoa(i)+"]: unknown action "+strconv.Quote(string(a)), nil)
+				return newConfigurationError("WithGrantManagement.Actions["+strconv.Itoa(i)+"]: unknown action "+strconv.Quote(string(a)), nil)
 			}
 			if _, dup := seen[a]; dup {
 				return newConfigurationError("WithGrantManagement: duplicate action "+strconv.Quote(string(a)), nil)
@@ -87,7 +99,7 @@ func WithGrantManagement(actions []GrantManagementAction, actionRequired bool) O
 			seen[a] = struct{}{}
 		}
 		c.grantManagementActions = append([]GrantManagementAction(nil), actions...)
-		c.grantManagementActionRequired = actionRequired
+		c.grantManagementActionRequired = g.ActionRequired
 		c.grantManagementEnabled = true
 		if !featureEnabled(c.features, feature.GrantManagement) {
 			c.features = append(c.features, feature.GrantManagement)

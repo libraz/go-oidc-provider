@@ -57,6 +57,7 @@ func (c *config) startupProfileExtras() map[string]any {
 		"access_token_format":          c.accessTokenFormat.String(),
 		"refresh_token_ttl_seconds":    int64(c.refreshTokenTTL.Seconds()),
 		"refresh_grace_period_seconds": int64(c.resolvedRefreshGrace().Seconds()),
+		"refresh_rotation":             !c.refreshTokenRotationDisabled(),
 
 		"dpop_nonce_required":                 c.startupDPoPNonceRequired(),
 		"signed_request_object_required":      c.requireSignedRequestObject(),
@@ -147,8 +148,12 @@ func (c *config) senderConstraintLabel() string {
 // will apply, in wall-clock terms. [config.effectiveRefreshGrace]
 // speaks the exchanger's sentinel dialect (0 = "use the default",
 // negative = "explicit zero"), which is the wrong shape for an
-// operator reading a duration out of an audit record.
+// operator reading a duration out of an audit record. A deployment that
+// does not rotate refresh tokens applies no window and reports zero.
 func (c *config) resolvedRefreshGrace() time.Duration {
+	if c.refreshTokenRotationDisabled() {
+		return 0
+	}
 	switch grace := c.effectiveRefreshGrace(); {
 	case grace < 0:
 		return 0

@@ -168,7 +168,7 @@ func TestIssue_AndExchange_NoPKCE_RoundTrip(t *testing.T) {
 // provide.
 //
 // Tracks:
-//   - CVE-2024-23647 (authentik ≤2023.10.6, CVSS 6.1) — token
+//   - CVE-2024-23647 (an OP up to 2023.10.6, CVSS 6.1) — token
 //     endpoint accepted code_verifier on codes issued without a
 //     challenge, enabling code-injection attacks.
 //   - CVE-2025-4144 (Cloudflare workers-oauth-provider <0.0.5,
@@ -344,7 +344,7 @@ func TestReplayErrorPreservesSentinelAndGrantID(t *testing.T) {
 // client MUST NOT be exchangeable by another client, regardless of
 // who else holds the value.
 //
-// Tracks: GHSA-vh7g-p26c-j2cw (dexidp/dex, 2024) — the back-channel
+// Tracks: GHSA-vh7g-p26c-j2cw (2024) — the back-channel
 // ID-token retrieval path did not re-check the authorization-code's
 // bound client_id, so an attacker who intercepted a code at the front
 // channel could redeem it under a different client_id and obtain

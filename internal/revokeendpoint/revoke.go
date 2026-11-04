@@ -327,7 +327,7 @@ func emitRevoked(ctx context.Context, deps Deps, ev revokedEvent) {
 //
 // The event keeps the wire response 200 per RFC 7009 §2.2 ("invalid
 // tokens do not cause an error response") while still surfacing the
-// fosite GHSA-7mqr-2v3q-v2wm class to operators: a token is recorded
+// GHSA-7mqr-2v3q-v2wm class to operators: a token is recorded
 // as "revocation requested but not committed" rather than silently
 // disappearing.
 func emitRevokeFailed(ctx context.Context, deps Deps, clientID, surface string, err error) {

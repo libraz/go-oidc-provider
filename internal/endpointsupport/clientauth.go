@@ -8,8 +8,8 @@
 // behaviour depends on a half-dozen flags.
 //
 // The package only depends on net/http, internal/audit, internal/auditevent,
-// internal/clientauth, internal/httpx, and op/store so it can be imported from any endpoint
-// package without an import cycle.
+// internal/clientauth, internal/httpx, internal/mtls, and op/store so it can be
+// imported from any endpoint package without an import cycle.
 package endpointsupport
 
 import (
@@ -22,6 +22,7 @@ import (
 	"github.com/libraz/go-oidc-provider/internal/audit"
 	"github.com/libraz/go-oidc-provider/internal/auditevent"
 	"github.com/libraz/go-oidc-provider/internal/clientauth"
+	"github.com/libraz/go-oidc-provider/internal/mtls"
 	"github.com/libraz/go-oidc-provider/op/store"
 )
 
@@ -43,6 +44,11 @@ type AuthenticateOpts struct {
 	// disables private_key_jwt support: requests that arrive with a
 	// "client_assertion" parameter are rejected as invalid_client.
 	AssertionVerifier clientauth.AssertionVerifier
+
+	// CertificateVerifier verifies the RFC 8705 §2 methods
+	// (tls_client_auth, self_signed_tls_client_auth). Nil rejects a
+	// client registered for either as invalid_client.
+	CertificateVerifier clientauth.CertificateVerifier
 
 	// AllowedMethods optionally restricts which client authentication
 	// methods the endpoint accepts. An empty slice admits every method
@@ -100,7 +106,7 @@ func AuthenticateClient(
 		WriteInvalidClient(w, usedBasic, "private_key_jwt is not enabled")
 		return nil, nil, false
 	}
-	client, verified, err := resolveAndVerifyClient(ctx, creds, opts)
+	client, verified, err := resolveAndVerifyClient(ctx, r, creds, opts)
 	if err != nil {
 		if onFailure != nil {
 			onFailure(creds, err)
@@ -145,8 +151,13 @@ func emitPreviousSecretUsed(ctx context.Context, emitter audit.Emitter, clientID
 // answers with a different status entirely, so there is nothing to
 // hide, and padding it would hand a broken backend a memory-cost
 // amplifier on every request arriving during the outage.
+//
+// A request with no body credential from a client registered for an
+// RFC 8705 §2 method is relabelled with that method once the client is
+// known, so the failure audit and the returned credentials name it.
 func resolveAndVerifyClient(
 	ctx context.Context,
+	r *http.Request,
 	creds *clientauth.Credentials,
 	opts AuthenticateOpts,
 ) (*store.Client, clientauth.Verified, error) {
@@ -155,10 +166,12 @@ func resolveAndVerifyClient(
 		verifier = &clientauth.Argon2id{}
 	}
 	verifyOpts := clientauth.VerifyOpts{
-		SecretVerifier:    verifier,
-		AssertionVerifier: opts.AssertionVerifier,
-		AllowedMethods:    opts.AllowedMethods,
-		Now:               opts.Now,
+		SecretVerifier:      verifier,
+		AssertionVerifier:   opts.AssertionVerifier,
+		CertificateVerifier: opts.CertificateVerifier,
+		Request:             r,
+		AllowedMethods:      opts.AllowedMethods,
+		Now:                 opts.Now,
 	}
 
 	client, err := LookupClient(ctx, opts.Clients, creds.ClientID)
@@ -168,6 +181,7 @@ func resolveAndVerifyClient(
 		}
 		return nil, clientauth.Verified{}, err
 	}
+	creds.Method = clientauth.EffectiveMethod(creds, client)
 	verified, err := clientauth.VerifyClient(ctx, creds, client, verifyOpts)
 	if err != nil {
 		return nil, clientauth.Verified{}, err
@@ -242,6 +256,14 @@ func ReasonForAuthnError(err error) string {
 		return "unsupported_method"
 	case errors.Is(err, clientauth.ErrClientMismatch):
 		return "client_mismatch"
+	case errors.Is(err, mtls.ErrNoClientCert):
+		return "client_certificate_missing"
+	case errors.Is(err, mtls.ErrCertMalformed):
+		return "client_certificate_malformed"
+	case errors.Is(err, mtls.ErrCertChainUnverified), errors.Is(err, mtls.ErrCertUntrusted):
+		return "client_certificate_untrusted"
+	case isCertificateMismatch(err):
+		return "client_certificate_mismatch"
 	case errors.Is(err, clientauth.ErrCredentialsInvalid):
 		return "invalid_client_credentials"
 	case errors.Is(err, clientauth.ErrAssertionMalformed):
@@ -253,6 +275,20 @@ func ReasonForAuthnError(err error) string {
 	default:
 		return "server_error"
 	}
+}
+
+// isCertificateMismatch reports whether err is an RFC 8705 §2 rejection of
+// a presented certificate against the client's registered matcher or keys.
+func isCertificateMismatch(err error) bool {
+	for _, target := range []error{
+		mtls.ErrSubjectMismatch, mtls.ErrSANMismatch, mtls.ErrNoMatchingJWK, mtls.ErrJWKSMalformed,
+		mtls.ErrNoMatcherConfigured, mtls.ErrAmbiguousMatcher, mtls.ErrMatcherMalformed,
+	} {
+		if errors.Is(err, target) {
+			return true
+		}
+	}
+	return false
 }
 
 // EmitAuthnFailure raises an audit event for a pre-authentication

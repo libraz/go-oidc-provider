@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/libraz/go-oidc-provider/op"
+	"github.com/libraz/go-oidc-provider/op/feature"
 	"github.com/libraz/go-oidc-provider/op/storeadapter/inmem"
 )
 
@@ -30,87 +31,79 @@ var enumeratedAuthMethods = []op.AuthMethod{
 	op.AuthNone,
 }
 
-// notSelectableAuthMethods is the set of method names the type
-// enumerates but no public surface admits: [op.New] refuses a static
-// client seeded with one, dynamic registration refuses it, and
-// discovery never advertises it.
-//
-// The set is declared here rather than derived so it has to be edited
-// deliberately. It is the machine-checkable half of the caveat carried
-// by the constants' godoc, and the two are meant to move together: if
-// the OP ever learns to negotiate an RFC 8705 method, the guard below
-// fails until the row is dropped, which is the prompt to drop the
-// caveat as well.
-var notSelectableAuthMethods = []op.AuthMethod{
+// mtlsAuthMethods is the set of method names that are selectable only
+// with [feature.MTLS]: without it [op.New] refuses a static client seeded
+// with one, dynamic registration refuses it, and discovery does not
+// advertise it. Declared rather than derived so the gate is edited
+// deliberately.
+var mtlsAuthMethods = []op.AuthMethod{
 	op.AuthTLSClientAuth,
 	op.AuthSelfSignedTLSClientAuth,
 }
 
-// TestAuthMethod_RecognisedSetMatchesTheAdvertisedSurface pins the two
-// sets that must not drift: the method names [op.AuthMethod.Valid]
-// accepts, and the ones the OP actually publishes in
-// token_endpoint_auth_methods_supported.
-//
-// Valid reporting true for a method no surface admits is what made the
-// enum misleading in the first place, and a review of the godoc cannot
-// hold that shut — the doc and the wiring live in different packages.
-// Anchoring the difference to an explicit set turns a silent divergence
-// into a failing test in both directions: a new constant that nothing
-// advertises fails here, and a method that becomes selectable fails
-// here too, until the declared set is corrected.
+// TestAuthMethod_RecognisedSetMatchesTheAdvertisedSurface pins the sets
+// that must not drift: the method names [op.AuthMethod.Valid] accepts,
+// and the ones the OP publishes in token_endpoint_auth_methods_supported.
+// Without feature.MTLS every recognised method except [mtlsAuthMethods]
+// is advertised; with it, every recognised method is.
 func TestAuthMethod_RecognisedSetMatchesTheAdvertisedSurface(t *testing.T) {
 	t.Parallel()
 
-	advertised := advertisedAuthMethods(t)
-	if len(advertised) == 0 {
-		t.Fatal("discovery advertised no token_endpoint_auth_methods_supported; the probe is broken, not the enum")
-	}
+	for _, tc := range []struct {
+		name  string
+		extra []op.Option
+		gated []op.AuthMethod
+	}{
+		{"without feature.MTLS", nil, mtlsAuthMethods},
+		{"with feature.MTLS", []op.Option{op.WithFeature(feature.MTLS)}, nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 
-	// Everything the OP advertises must be a name the enum knows, or an
-	// embedder cannot express the OP's own configuration in the type.
-	for _, name := range advertised {
-		if !op.AuthMethod(name).Valid() {
-			t.Errorf("discovery advertises %q but AuthMethod(%q).Valid() is false: "+
-				"the OP accepts a method the exported enum does not name", name, name)
-		}
-	}
-
-	for _, m := range enumeratedAuthMethods {
-		if !m.Valid() {
-			t.Errorf("AuthMethod(%q).Valid() is false but the constant is exported", m)
-			continue
-		}
-		listed := slices.Contains(advertised, m.String())
-		excluded := slices.Contains(notSelectableAuthMethods, m)
-		switch {
-		case listed && excluded:
-			t.Errorf("%q is declared not-selectable but discovery advertises it; "+
-				"drop it from notSelectableAuthMethods and from the godoc caveat", m)
-		case !listed && !excluded:
-			t.Errorf("%q is recognised by Valid() but discovery does not advertise it and it "+
-				"is not declared not-selectable; either wire it through or document it as unreachable", m)
-		}
+			advertised := advertisedAuthMethods(t, tc.extra...)
+			if len(advertised) == 0 {
+				t.Fatal("discovery advertised no token_endpoint_auth_methods_supported; the probe is broken, not the enum")
+			}
+			for _, name := range advertised {
+				if !op.AuthMethod(name).Valid() {
+					t.Errorf("discovery advertises %q but AuthMethod(%q).Valid() is false: "+
+						"the OP accepts a method the exported enum does not name", name, name)
+				}
+			}
+			for _, m := range enumeratedAuthMethods {
+				if !m.Valid() {
+					t.Errorf("AuthMethod(%q).Valid() is false but the constant is exported", m)
+					continue
+				}
+				listed := slices.Contains(advertised, m.String())
+				gated := slices.Contains(tc.gated, m)
+				switch {
+				case listed && gated:
+					t.Errorf("%q is advertised although its feature is off", m)
+				case !listed && !gated:
+					t.Errorf("%q is recognised by Valid() but discovery does not advertise it", m)
+				}
+			}
+		})
 	}
 }
 
-// TestNew_RejectsAStaticClientSeededWithAnUnselectableAuthMethod is the
-// seed half of the same property. Discovery says what the OP is willing
-// to publish; this says what it is willing to persist, and the invariant
-// only holds if the two agree.
-func TestNew_RejectsAStaticClientSeededWithAnUnselectableAuthMethod(t *testing.T) {
+// TestNew_RejectsAStaticClientSeededWithAnMTLSMethodWithoutTheFeature is
+// the seed half of the same property: without feature.MTLS the OP neither
+// publishes nor persists an mTLS method.
+func TestNew_RejectsAStaticClientSeededWithAnMTLSMethodWithoutTheFeature(t *testing.T) {
 	t.Parallel()
 
-	for _, m := range notSelectableAuthMethods {
+	for _, m := range mtlsAuthMethods {
 		t.Run(m.String(), func(t *testing.T) {
 			t.Parallel()
 
 			_, err := op.New(staticClientOpts(t, m)...)
 			if err == nil {
-				t.Fatalf("op.New accepted a static client seeded with %q, "+
-					"which no runtime path can authenticate", m)
+				t.Fatalf("op.New accepted a static client seeded with %q without feature.MTLS", m)
 			}
-			if !strings.Contains(err.Error(), m.String()) {
-				t.Errorf("error does not name the offending method %q: %v", m, err)
+			if !strings.Contains(err.Error(), m.String()) || !strings.Contains(err.Error(), "WithFeature(feature.MTLS)") {
+				t.Errorf("error does not name %q and the feature it needs: %v", m, err)
 			}
 		})
 	}
@@ -153,11 +146,11 @@ func staticClientOpts(tb testing.TB, m op.AuthMethod) []op.Option {
 }
 
 // advertisedAuthMethods reads token_endpoint_auth_methods_supported off
-// a default provider's discovery document.
-func advertisedAuthMethods(tb testing.TB) []string {
+// the discovery document of a default provider plus extra.
+func advertisedAuthMethods(tb testing.TB, extra ...op.Option) []string {
 	tb.Helper()
 
-	provider, err := op.New(validBaseOpts(tb)...)
+	provider, err := op.New(append(validBaseOpts(tb), extra...)...)
 	if err != nil {
 		tb.Fatalf("op.New: %v", err)
 	}

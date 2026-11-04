@@ -56,6 +56,22 @@ var (
 	// the caller, which surfaces invalid_client.
 	ErrNoMatcherConfigured = errors.New("mtls: client has no tls_client_auth matcher configured")
 
+	// ErrAmbiguousMatcher signals that more than one tls_client_auth
+	// matcher field is set. RFC 8705 §2.1.2 requires exactly one, so the
+	// registration is refused and a stored record carrying several fails
+	// closed at the token endpoint.
+	ErrAmbiguousMatcher = errors.New("mtls: more than one tls_client_auth matcher configured")
+
+	// ErrMatcherMalformed signals a matcher value that cannot be compared,
+	// such as a tls_client_auth_san_ip that is not an IP literal.
+	ErrMatcherMalformed = errors.New("mtls: tls_client_auth matcher malformed")
+
+	// ErrCertChainUnverified signals that a certificate presented for
+	// tls_client_auth was not chain-validated: neither the TLS handshake
+	// nor [VerifierConfig.RootCAs] verified it. RFC 8705 §2.1 PKI
+	// authentication never admits such a certificate.
+	ErrCertChainUnverified = errors.New("mtls: client certificate chain was not verified")
+
 	// ErrNoMatchingJWK signals that the self-signed client cert's
 	// public-key thumbprint does not appear in the client's
 	// registered JWKS (RFC 8705 §2.2.2). The matcher only inspects

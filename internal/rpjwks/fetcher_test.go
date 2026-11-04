@@ -1312,7 +1312,7 @@ func TestResolveForKID_RefetchesOnceOnKIDMiss(t *testing.T) {
 func TestFetch_PrivateRefusalNamesOptIn(t *testing.T) {
 	t.Parallel()
 
-	const optIn = "op.WithAllowPrivateNetworkJWKS()"
+	const optIn = "op.WithAllowPrivateNetwork(op.OutboundJWKS)"
 	_, err := New(Config{FetchError: errSentinel, OptIn: optIn}).Fetch(context.Background(), "http://10.0.0.1/jwks")
 	if !errors.Is(err, errSentinel) || !strings.Contains(err.Error(), optIn) {
 		t.Fatalf("err=%v want the sentinel and a hint naming %s", err, optIn)

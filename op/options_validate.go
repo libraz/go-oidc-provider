@@ -53,6 +53,8 @@ func (c *config) validate() error {
 		c.validateSessionDurabilityPosture,
 		c.validateEncryptionKeyset,
 		c.validateStaticClients,
+		c.validateMTLSOptions,
+		c.validateMTLSClientAuth,
 		c.validateStoreCapabilities,
 		c.validateProtectedResources,
 		c.validateEndpointRouting,
@@ -82,6 +84,14 @@ func isDevelopmentIssuer(issuer string) bool {
 		}
 	}
 	return false
+}
+
+// isLocalhostHTTPIssuer reports whether issuer is an http URL on the
+// textual host "localhost", the only shape [WithAllowLocalhostIssuerForDev]
+// has any effect on. issuer has already passed issuer validation.
+func isLocalhostHTTPIssuer(issuer string) bool {
+	u, err := url.Parse(issuer)
+	return err == nil && u.Scheme == "http" && u.Hostname() == "localhost"
 }
 
 // issuerInvalid names the rule raw broke and quotes it, keeping
@@ -133,12 +143,17 @@ func (c *config) validateIssuerRequired() error {
 	}
 	// Deferred from WithIssuer: the localhost carve-out depends on an
 	// opt-in that may have been registered by a later option.
-	if err := discovery.ValidateIssuerWithLocalhostName(c.issuer, c.allowLocalhostLoopback); err != nil {
+	if err := discovery.ValidateIssuerWithLocalhostName(c.issuer, c.allowLocalhostIssuer); err != nil {
 		return issuerInvalid(c.issuer, err)
+	}
+	if c.allowLocalhostIssuer && !isLocalhostHTTPIssuer(c.issuer) {
+		return newConfigurationError(
+			"WithAllowLocalhostIssuerForDev requires an http issuer on the host localhost (for example http://localhost:8080)", nil,
+		)
 	}
 	if c.allowInsecureBackchannelLogoutForDev && !isDevelopmentIssuer(c.issuer) {
 		return newConfigurationError(
-			"WithAllowInsecureBackchannelLogoutForDev requires a development issuer (loopback, localhost, or a .localhost/.test/.invalid/.example host)", nil,
+			"WithAllowInsecureOutboundForDev(op.OutboundBackchannel) requires a development issuer (loopback, localhost, or a .localhost/.test/.invalid/.example host)", nil,
 		)
 	}
 	return nil

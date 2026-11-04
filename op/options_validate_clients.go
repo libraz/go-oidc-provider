@@ -3,9 +3,11 @@ package op
 import (
 	"slices"
 	"strconv"
+	"strings"
 
 	"github.com/libraz/go-oidc-provider/internal/clientauth"
 	"github.com/libraz/go-oidc-provider/internal/registrationendpoint"
+	"github.com/libraz/go-oidc-provider/op/profile"
 	"github.com/libraz/go-oidc-provider/op/store"
 )
 
@@ -64,12 +66,15 @@ func (c *config) validateStaticClients() error {
 		AllowedGrantTypes:                    c.staticClientAllowedGrantTypes(),
 		AllowedResponseTypes:                 c.staticClientAllowedResponseTypes(),
 		AllowedClientAuthMethods:             c.allowedClientAuthMethods(),
+		ActiveProfile:                        c.authMethodProfileNames(),
 		AllowedClientSigningAlgs:             c.clientSigningJOSEAlgs(),
 		PairwiseEnabled:                      c.pairwiseEnabled(),
-		AllowLocalhostLoopback:               c.allowLocalhostLoopback,
+		AllowLocalhostLoopback:               c.allowLocalhostRedirectURIs,
 		AllowInsecureBackchannelLogoutForDev: c.allowInsecureBackchannelLogoutForDev,
 		JWEPolicy:                            c.jwePolicy(),
 		SigningAlg:                           string(c.issuingAlg()),
+		MTLSClientAuth:                       c.mtlsClientAuthEnabled(),
+		ProfileAdmitsMTLSClientAuth:          c.profileAdmitsMTLSClientAuth(),
 	}
 	for i := range c.staticClients {
 		seed := c.staticClients[i]
@@ -158,4 +163,56 @@ func (c *config) staticClientAllowedGrantTypes() []string {
 // single value.
 func (c *config) staticClientAllowedResponseTypes() []string {
 	return []string{"code"}
+}
+
+// authMethodProfileNames renders the active profiles that narrow the
+// client-authentication methods, for example "profile.FAPI2Baseline",
+// joined with " + " when several do.
+func (c *config) authMethodProfileNames() string {
+	var names []string
+	for _, p := range c.profiles {
+		if profile.AllowedClientAuthMethods(p) != nil {
+			names = append(names, profileOptionName(p))
+		}
+	}
+	return strings.Join(names, " + ")
+}
+
+// profileAdmitsMTLSClientAuth reports whether the active profiles would
+// admit tls_client_auth once [feature.MTLS] is on.
+func (c *config) profileAdmitsMTLSClientAuth() bool {
+	allowed := c.profileIntersection(profile.AllowedClientAuthMethods)
+	return allowed != nil && slices.Contains(allowed, AuthTLSClientAuth.String())
+}
+
+// validateMTLSClientAuth refuses an OP on which a client may authenticate
+// with tls_client_auth through [WithMTLSProxy] while no [WithMTLSRootCAs]
+// is configured. RFC 8705 §2.1 PKI authentication needs a verified chain;
+// a forwarded certificate is verified only against those anchors, so every
+// such client would fail at runtime.
+//
+// tls_client_auth is reachable when [feature.MTLS] is on and either a
+// static seed registers it or dynamic registration may admit it. Direct
+// TLS is judged per request from the handshake's verified chains, which
+// construction cannot see.
+func (c *config) validateMTLSClientAuth() error {
+	if !c.mtlsClientAuthEnabled() || c.mtlsProxy.header == "" || c.mtlsRootCAs != nil {
+		return nil
+	}
+	for _, seed := range c.staticClients {
+		if seed.TokenEndpointAuthMethod == AuthTLSClientAuth.String() {
+			return newConfigurationError("WithStaticClients (client_id "+seed.ID+
+				"): tls_client_auth behind WithMTLSProxy requires WithMTLSRootCAs, "+
+				"because a forwarded certificate is chain-verified only against those anchors", nil)
+		}
+	}
+	if c.dcr != nil {
+		allowed := c.allowedClientAuthMethods()
+		if allowed == nil || slices.Contains(allowed, clientauth.MethodTLSClientAuth) {
+			return newConfigurationError("WithDynamicRegistration admits tls_client_auth, which behind "+
+				"WithMTLSProxy requires WithMTLSRootCAs: a forwarded certificate is chain-verified only "+
+				"against those anchors", nil)
+		}
+	}
+	return nil
 }

@@ -689,17 +689,17 @@ func TestCompileLoginFlowNilPrimary(t *testing.T) {
 }
 
 // TestLoginFlowTOTPRequiresPrimary pins the chain-isolation property
-// that lets the OP avoid the cal.com / Keycloak primary-skip class:
+// that lets the OP avoid the primary-skip class other deployments have shipped:
 // even with TOTP declared as a Rule, the orchestrator's first Tick
 // MUST emit Primary's prompt and tag the StateRef with Primary's
 // kind. The TOTP step is unreachable until Primary's CompletedStepKind
 // has been recorded.
 //
 // Tracks:
-//   - GHSA-9r3w-4j8q-pw98 (cal.com, 2024-04, CVSS 9.8) — TRPC
+//   - GHSA-9r3w-4j8q-pw98 (another OP, 2024-04, CVSS 9.8) — TRPC
 //     verifyTwoFactor accepted (email, password, totpCode) and
 //     returned a session without verifying the password. CWE-287.
-//   - GHSA-5jfq-x6xp-7rw2 (Keycloak, 2024-09, CVSS 6.8) — direct OTP
+//   - GHSA-5jfq-x6xp-7rw2 (another OP, 2024-09, CVSS 6.8) — direct OTP
 //     submission bypassed the primary credential. Same structural
 //     defect.
 //
@@ -767,7 +767,7 @@ func TestLoginFlowTOTPRequiresPrimary(t *testing.T) {
 		t.Fatalf("second Tick: %v", err)
 	}
 	if len(st.CompletedStepKinds) == 0 || st.CompletedStepKinds[0] != "myorg.password" {
-		t.Errorf("first completed step = %v, want first entry = myorg.password — TOTP-first would mean cal.com-class bypass", st.CompletedStepKinds)
+		t.Errorf("first completed step = %v, want first entry = myorg.password — TOTP-first would mean another OP-class bypass", st.CompletedStepKinds)
 	}
 
 	// After Primary completes, TOTP becomes reachable: the next Tick

@@ -236,7 +236,7 @@ func TestSigner_SignAbsoluteExpiry(t *testing.T) {
 // asymmetrically signed.
 //
 // Tracks:
-//   - CVE-2023-6927 (Keycloak; the response_mode=form_post.jwt
+//   - CVE-2023-6927 (another OP; the response_mode=form_post.jwt
 //     bypass of CVE-2023-6134 — when JARM was added without the
 //     same alg restrictions as the bearer flow, a downgrade was
 //     possible).

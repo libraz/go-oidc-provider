@@ -557,8 +557,8 @@ func commonOptions(cfg runConfig, opStore store.Store, users store.UserPasswordS
 		// conformance harness is the documented exception, so the
 		// demo opts in to the relaxed deny-list. A production OP MUST
 		// NOT enable this.
-		op.WithAllowPrivateNetworkJWKS(),
-		op.WithAllowPrivateNetworkJAR(),
+		op.WithAllowPrivateNetwork(op.OutboundJWKS),
+		op.WithAllowPrivateNetwork(op.OutboundJAR),
 		// Advertise the one acr the default policy satisfies at the
 		// demo's AAL1 login, so OFCS requests a value the OP can honour.
 		op.WithACRValuesSupported(op.AAL1.ACRURI()),

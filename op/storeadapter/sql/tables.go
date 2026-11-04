@@ -239,7 +239,11 @@ var schemaReleases = []schemaRelease{
 		{"grant_revocations", []string{"access_revoked_at"}},
 	}, nil},
 	{"v1.5.0", "000006_v1.5.0", []tableColumns{
-		{"clients", []string{"previous_secret_hash", "previous_secret_expires_at"}},
+		{"clients", []string{
+			"previous_secret_hash", "previous_secret_expires_at",
+			"tls_client_auth_subject_dn", "tls_client_auth_san_dns", "tls_client_auth_san_uri",
+			"tls_client_auth_san_ip", "tls_client_auth_san_email",
+		}},
 	}, []string{"ssf_streams", "ssf_events"}},
 }
 

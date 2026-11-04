@@ -162,6 +162,14 @@ func seedGrantTypesEmpty(seed ClientSeed) bool {
 		return len(value.GrantTypes) == 0
 	case *PrivateKeyJWTClient:
 		return len(value.GrantTypes) == 0
+	case TLSClientAuthClient:
+		return len(value.GrantTypes) == 0
+	case *TLSClientAuthClient:
+		return len(value.GrantTypes) == 0
+	case SelfSignedTLSClientAuthClient:
+		return len(value.GrantTypes) == 0
+	case *SelfSignedTLSClientAuthClient:
+		return len(value.GrantTypes) == 0
 	default:
 		return false
 	}

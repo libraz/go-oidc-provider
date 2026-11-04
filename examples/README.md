@@ -64,6 +64,11 @@ docker compose -f examples/18-dynamodb-store/compose.yaml up -d --build
 docker compose -f examples/18-dynamodb-store/compose.yaml down -v
 ```
 
+`53-production-sql` runs on the host and ships a database-only
+`compose.yaml` (MySQL and PostgreSQL on loopback ports); pick the engine with
+`EXAMPLE53_DIALECT=mysql|postgres` and `EXAMPLE53_DSN`, as the example's
+header shows. SQLite stays the default and needs no docker.
+
 `08-composite-hot-cold` is the no-docker counterpart of `09`: the same
 `composite.With(...)` wiring with `inmem` standing in for the volatile half, so
 it boots with
@@ -79,9 +84,9 @@ it boots with
 | run a FAPI 2.0 Baseline OP (PAR + JAR + DPoP) | [`03-fapi2`](03-fapi2/main.go), [`50-fapi-tls-jwks`](50-fapi-tls-jwks/main.go) |
 | issue tokens to backend services (no end user) | [`05-client-credentials`](05-client-credentials/main.go) |
 | serve plain OAuth 2.0 alongside OIDC | [`04-oauth2-only`](04-oauth2-only/main.go) |
-| persist on a real database (SQLite / MySQL) | [`06-sql-store`](06-sql-store/main.go), [`07-mysql-store`](07-mysql-store/main.go) |
+| persist on a real database (SQLite / MySQL), with the adapter-owned users table | [`06-sql-store`](06-sql-store/main.go), [`07-mysql-store`](07-mysql-store/main.go) |
 | run the whole OP on DynamoDB, transactions included | [`18-dynamodb-store`](18-dynamodb-store/main.go) |
-| customise SQL table names | [`25-byo-table-names`](25-byo-table-names/main.go) |
+| rename SQL tables: a prefix for all, an override for one | [`25-byo-table-names`](25-byo-table-names/main.go) |
 | implement a store from scratch | [`26-byo-store-from-scratch`](26-byo-store-from-scratch/main.go) |
 | split hot volatile state from durable state | [`08-composite-hot-cold`](08-composite-hot-cold/main.go), [`09-redis-volatile`](09-redis-volatile/main.go) |
 | run the login / consent / chooser screens with no UI configured at all | [`19-default-ui`](19-default-ui/main.go) |
@@ -96,7 +101,7 @@ it boots with
 | translate prompts (i18n) | [`15-i18n-locale`](15-i18n-locale/main.go) |
 | split public-discoverable from internal-only scopes | [`60-scopes-public-private`](60-scopes-public-private/main.go) |
 | honour the OIDC §5.5 `claims` request parameter | [`61-claims-request`](61-claims-request/main.go) |
-| project an embedder-owned users / members table onto OIDC | [`24-byo-userstore`](24-byo-userstore/main.go) |
+| project an embedder-owned users / members table onto OIDC, with an opaque `sub` column | [`24-byo-userstore`](24-byo-userstore/main.go) |
 | dispatch an embedder-defined `grant_type` at the token endpoint | [`30-custom-grant`](30-custom-grant/main.go) |
 | require password + TOTP at every login (always-on 2FA) | [`20-mfa-totp`](20-mfa-totp/main.go) |
 | require risk-based MFA / captcha | [`21-risk-based-mfa`](21-risk-based-mfa/main.go), [`22-login-captcha`](22-login-captcha/main.go) |
@@ -115,7 +120,7 @@ it boots with
 | notify RPs when a session ends (Back-Channel Logout) | [`42-back-channel-logout`](42-back-channel-logout/main.go) |
 | run the RFC 9449 §8 DPoP nonce flow | [`51-dpop-nonce`](51-dpop-nonce/main.go) |
 | expose Prometheus metrics | [`52-prometheus-metrics`](52-prometheus-metrics/main.go) |
-| wire a production OP on SQL: key files, reload, GC, schema check, static-client sync, bcrypt users | [`53-production-sql`](53-production-sql/main.go) |
+| wire a production OP on SQL (SQLite, MySQL or PostgreSQL): key files, reload, GC, schema check, static-client sync, bcrypt users | [`53-production-sql`](53-production-sql/main.go) |
 
 ## The shared SPA bundle
 

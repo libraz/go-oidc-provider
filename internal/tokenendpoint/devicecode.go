@@ -47,7 +47,7 @@ func handleDeviceCode(w http.ResponseWriter, r *http.Request, deps Deps) {
 	if !ok {
 		return
 	}
-	binding, _, ok := bindRequest(w, r, deps, dpopOut)
+	binding, _, ok := bindRequest(w, r, deps, client, dpopOut)
 	if !ok {
 		return
 	}

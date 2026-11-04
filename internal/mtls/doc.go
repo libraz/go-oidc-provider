@@ -12,10 +12,9 @@
 //     value registered against the client) and
 //     "self_signed_tls_client_auth" (a cert whose public-key JWK
 //     thumbprint matches a key in the client's registered JWKS).
-//     These are NOT reachable from the HTTP layer: the OP does not
-//     offer either as a token_endpoint_auth_method, so the §2 helpers
-//     have no production call site. See [VerifyClientAuth] for the
-//     rationale and what a deployment uses instead.
+//     Every client-authenticating endpoint reaches them through
+//     internal/clientauth, which takes the certificate from
+//     [Verifier.ClientAuthCertificate].
 //
 //   - High-level §3 binding helpers consumed by the token endpoint and
 //     the resource server (userinfo): the [Verifier] holds the proxy

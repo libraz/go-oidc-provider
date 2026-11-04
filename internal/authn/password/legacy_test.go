@@ -166,6 +166,45 @@ func TestLegacy_UnrecognizedHashIsMismatch(t *testing.T) {
 	}
 }
 
+func TestLegacy_UnrecognizedHashWarnsOnceWithoutIdentifiers(t *testing.T) {
+	t.Parallel()
+	f := newLegacyFixture(t, "$unknown$secrethashvalue", nil, true)
+	for range 3 {
+		if _, err := f.try(testPassword); !errors.Is(err, password.ErrInvalidCredentials) {
+			t.Fatalf("err = %v, want ErrInvalidCredentials", err)
+		}
+	}
+	logs := f.logs.String()
+	if n := strings.Count(logs, "level=WARN"); n != 1 {
+		t.Fatalf("WARN count = %d, want 1; logs=%q", n, logs)
+	}
+	if !strings.Contains(logs, "LegacySchemes") {
+		t.Errorf("warning does not name PrimaryPassword.LegacySchemes: %q", logs)
+	}
+	for _, secret := range []string{testSubject, testUsername, "secrethashvalue", testPassword} {
+		if strings.Contains(logs, secret) {
+			t.Errorf("log leaks %q: %q", secret, logs)
+		}
+	}
+}
+
+func TestLegacy_RecognizedAndArgon2idHashesDoNotWarn(t *testing.T) {
+	t.Parallel()
+	f := newLegacyFixture(t, "legacy:"+testPassword, nil, true)
+	if _, err := f.try(testPassword); err != nil {
+		t.Fatalf("try: %v", err)
+	}
+	g := newLegacyFixture(t, string(hashWith(t, testPassword, 64*1024, 3, 1, []byte("0123456789abcdef"))), nil, true)
+	if _, err := g.try(testPassword); err != nil {
+		t.Fatalf("try: %v", err)
+	}
+	for _, l := range []string{f.logs.String(), g.logs.String()} {
+		if strings.Contains(l, "level=WARN") {
+			t.Errorf("unexpected WARN: %q", l)
+		}
+	}
+}
+
 func TestLegacy_Argon2idBypassesSchemes(t *testing.T) {
 	t.Parallel()
 	hash := string(hashWith(t, testPassword, 64*1024, 3, 1, []byte("0123456789abcdef")))

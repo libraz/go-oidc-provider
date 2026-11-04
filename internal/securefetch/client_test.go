@@ -319,7 +319,7 @@ func TestClient_Get_DefaultsToDefaultMaxBody(t *testing.T) {
 // hosts. A future revision that loosens any policy fails this test
 // loudly rather than silently widening the surface.
 //
-// Tracks: CVE-2026-1180 (Keycloak; OIDC Dynamic Client Registration
+// Tracks: CVE-2026-1180 (another OP; OIDC Dynamic Client Registration
 // `jwks_uri` SSRF when resolving private_key_jwt keys). In this
 // codebase, registered client `jwks_uri` resolution is routed through
 // the same JAR JWKS fetcher / securefetch envelope.
@@ -461,7 +461,7 @@ func mustClient(t *testing.T, p securefetch.Policy) *securefetch.Client {
 // netsec error for the URL-time gate.
 func TestPolicy_OptInReachesRefusal(t *testing.T) {
 	t.Parallel()
-	const optIn = "op.WithAllowPrivateNetworkSector()"
+	const optIn = "op.WithAllowPrivateNetwork(op.OutboundSector)"
 	c := securefetch.NewClient(securefetch.Policy{OptIn: optIn})
 	err := c.AssertSafeURL(context.Background(), "http://10.0.0.1/x")
 	if !errors.Is(err, netsec.ErrPrivateNetworkBlocked) {

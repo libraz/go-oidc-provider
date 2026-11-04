@@ -2,7 +2,7 @@
 # Assert the two development opt-ins stay honest in both directions.
 #
 # 1. No example carries an opt-in it does not need. A dead
-#    WithAllowLocalhostLoopback() teaches by example that the option is
+#    WithAllowLocalhostRedirectURIs() teaches by example that the option is
 #    part of the boilerplate, which is the opposite of what the README
 #    says ("add neither unless the validator has actually rejected your
 #    wiring"). The option compiles and boots either way, so nothing but
@@ -29,9 +29,10 @@ cd "$REPO_ROOT"
 # helpers and verification harnesses, which are not tutorials.
 total="$(find examples -maxdepth 1 -type d -name '[0-9]*' | wc -l | tr -d ' ')"
 
-# users <option> — example directory names calling the option, one per line.
+# users <call> — example directory names calling op.<call>, one per line.
+# The call carries its arguments, e.g. WithAllowInsecureOutboundForDev(op.OutboundBackchannel).
 users() {
-  grep -rl "op.$1()" examples --include='*.go' | cut -d/ -f2 | sort -u
+  grep -rlF "op.$1" examples --include='*.go' | cut -d/ -f2 | sort -u
 }
 
 # evidence <dir> <regex> — non-comment lines in the example matching the
@@ -42,19 +43,19 @@ evidence() {
   grep -rhE "$2" "examples/$1" --include='*.go' | grep -vE '^[[:space:]]*//' || true
 }
 
-loopback_users="$(users WithAllowLocalhostLoopback)"
-bcl_users="$(users WithAllowInsecureBackchannelLogoutForDev)"
+loopback_users="$(users "WithAllowLocalhostRedirectURIs()")"
+bcl_users="$(users "WithAllowInsecureOutboundForDev(op.OutboundBackchannel)")"
 
 fail=0
 for dir in $loopback_users; do
   if [ -z "$(evidence "$dir" 'localhost')" ]; then
-    warn "examples/$dir calls WithAllowLocalhostLoopback but spells no host \"localhost\""
+    warn "examples/$dir calls WithAllowLocalhostRedirectURIs but spells no host \"localhost\""
     fail=1
   fi
 done
 for dir in $bcl_users; do
   if [ -z "$(evidence "$dir" 'BackchannelLogoutURI.*http://')" ]; then
-    warn "examples/$dir calls WithAllowInsecureBackchannelLogoutForDev but registers no plain-http backchannel_logout_uri"
+    warn "examples/$dir calls WithAllowInsecureOutboundForDev(op.OutboundBackchannel) but registers no plain-http backchannel_logout_uri"
     fail=1
   fi
 done
@@ -94,9 +95,9 @@ check_readme() {
 # two-digit count and the check would compare "3" against "43".
 en='s/.*[^0-9]([0-9]+) of the ([0-9]+) examples.*/\1 \2/p'
 ja='s/.*[^0-9]([0-9]+) 例のうち ([0-9]+) 例.*/\2 \1/p'
-check_readme README.md WithAllowLocalhostLoopback "$loopback_count" "$en"
-check_readme README.md WithAllowInsecureBackchannelLogoutForDev "$bcl_count" "$en"
-check_readme README_ja.md WithAllowLocalhostLoopback "$loopback_count" "$ja"
-check_readme README_ja.md WithAllowInsecureBackchannelLogoutForDev "$bcl_count" "$ja"
+check_readme README.md WithAllowLocalhostRedirectURIs "$loopback_count" "$en"
+check_readme README.md WithAllowInsecureOutboundForDev "$bcl_count" "$en"
+check_readme README_ja.md WithAllowLocalhostRedirectURIs "$loopback_count" "$ja"
+check_readme README_ja.md WithAllowInsecureOutboundForDev "$bcl_count" "$ja"
 
 log "example dev opt-ins OK ($loopback_count loopback, $bcl_count insecure-backchannel, of $total examples; $claims_checked README count claim(s) checked)"

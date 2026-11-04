@@ -458,7 +458,7 @@ func TestJARRequestURIPolicy_PrivateRefusalNamesOptIn(t *testing.T) {
 	t.Parallel()
 	c := securefetch.NewClient(jarRequestURIPolicy(false))
 	err := c.AssertSafeURL(context.Background(), "https://10.0.0.1/request.jwt")
-	if !errors.Is(err, netsec.ErrPrivateNetworkBlocked) || !strings.Contains(err.Error(), "op.WithAllowPrivateNetworkJAR()") {
-		t.Fatalf("err=%v want ErrPrivateNetworkBlocked naming op.WithAllowPrivateNetworkJAR()", err)
+	if !errors.Is(err, netsec.ErrPrivateNetworkBlocked) || !strings.Contains(err.Error(), "op.WithAllowPrivateNetwork(op.OutboundJAR)") {
+		t.Fatalf("err=%v want ErrPrivateNetworkBlocked naming op.WithAllowPrivateNetwork(op.OutboundJAR)", err)
 	}
 }

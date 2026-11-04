@@ -32,13 +32,20 @@ import (
 )
 
 // membersDDL is the embedder-owned schema. Column names deliberately
-// avoid the OP's bundled oidc_users layout (subject / claims /
-// updated_at / username / password_hash) to make it concrete that
-// MemberUserStore is doing the projection: nothing in the OP cares
-// about these column names.
+// avoid the OP's bundled oidc_users layout (claims / updated_at /
+// username / password_hash) to make it concrete that MemberUserStore is
+// doing the projection: nothing in the OP cares about these column names.
+//
+// member_id is the application's own key and stays internal. The
+// OIDC subject is a separate opaque column: it is random, never derived
+// from member_id, and never reused, so a sequential or guessable key is
+// not exposed as "sub" and a later change of member_id does not change
+// the account every RP has keyed on. An existing table gains the column
+// with the backfill in the byo-userstore use-case page.
 const membersDDL = `
 CREATE TABLE IF NOT EXISTS members (
     member_id      TEXT PRIMARY KEY,
+    subject        TEXT NOT NULL,
     email_address  TEXT NOT NULL,
     password_phc   BLOB NOT NULL,
     full_name      TEXT,
@@ -47,6 +54,7 @@ CREATE TABLE IF NOT EXISTS members (
     last_modified  INTEGER NOT NULL
 );
 CREATE UNIQUE INDEX IF NOT EXISTS members_email ON members (email_address);
+CREATE UNIQUE INDEX IF NOT EXISTS members_subject ON members (subject);
 `
 
 // MemberUserStore projects the members table onto store.User and
@@ -59,9 +67,9 @@ type MemberUserStore struct {
 }
 
 const (
-	memberSelectBySubject   = `SELECT member_id, email_address, full_name, locale_pref, tenant_id, last_modified FROM members WHERE member_id = ?`
-	memberSelectByEmail     = `SELECT member_id, email_address, full_name, locale_pref, tenant_id, last_modified FROM members WHERE email_address = ?`
-	memberSelectPasswordPHC = `SELECT password_phc FROM members WHERE member_id = ?`
+	memberSelectBySubject   = `SELECT subject, email_address, full_name, locale_pref, tenant_id, last_modified FROM members WHERE subject = ?`
+	memberSelectByEmail     = `SELECT subject, email_address, full_name, locale_pref, tenant_id, last_modified FROM members WHERE email_address = ?`
+	memberSelectPasswordPHC = `SELECT password_phc FROM members WHERE subject = ?`
 )
 
 // FindBySubject implements store.UserStore.FindBySubject.

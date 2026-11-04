@@ -116,6 +116,26 @@ func WithEncryptionKeyset(ks EncryptionKeyset) Option {
 	})
 }
 
+// EncryptionAlgs is the JWE algorithm subset [WithSupportedEncryptionAlgs]
+// narrows the OP to. The field names follow the registration metadata
+// vocabulary; each maps onto one JOSE header parameter.
+//
+// Stable since v1.5.
+type EncryptionAlgs struct {
+	// KeyManagement lists the key-management algorithms, the JWE `alg`
+	// header parameter (RFC 7516 §4.1.1), for example "ECDH-ES" or
+	// "RSA-OAEP-256". They back the `*_encryption_alg_values_supported`
+	// metadata. Nil means "use the default"; an empty non-nil slice means
+	// "no algs at all".
+	KeyManagement []string
+
+	// ContentEncryption lists the content-encryption algorithms, the JWE
+	// `enc` header parameter (RFC 7516 §4.1.2), for example "A256GCM". They
+	// back the `*_encryption_enc_values_supported` metadata. Nil means "use
+	// the default"; an empty non-nil slice means "no encs at all".
+	ContentEncryption []string
+}
+
 // WithSupportedEncryptionAlgs narrows the JWE algorithms the OP will
 // negotiate, below the default ([SupportedEncryptionAlgs] /
 // [SupportedEncryptionEncs]).
@@ -139,7 +159,7 @@ func WithEncryptionKeyset(ks EncryptionKeyset) Option {
 // deployments that want to mandate a stricter alg/enc subset
 // (e.g. ECDH-ES + A256GCM only) without rebuilding the library.
 //
-// Either argument may be nil; a nil slice means "use the default".
+// Either field may be nil; a nil slice means "use the default".
 // An empty (non-nil) slice means "no algs / encs at all", which
 // disables JWE negotiation outright while still publishing the
 // encryption keyset (a deliberate "advertise keys but negotiate
@@ -148,12 +168,12 @@ func WithEncryptionKeyset(ks EncryptionKeyset) Option {
 // half fails [New] rather than replacing the first.
 //
 // Stable since v1.0.
-func WithSupportedEncryptionAlgs(algs, encs []string) Option {
+func WithSupportedEncryptionAlgs(a EncryptionAlgs) Option {
 	return optionFunc(func(c *config) error {
-		if err := applyAlgNarrowing(c, algs); err != nil {
+		if err := applyAlgNarrowing(c, a.KeyManagement); err != nil {
 			return err
 		}
-		return applyEncNarrowing(c, encs)
+		return applyEncNarrowing(c, a.ContentEncryption)
 	})
 }
 

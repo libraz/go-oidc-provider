@@ -60,7 +60,7 @@ func TestClientCredentials_EmptyLeadingDPoPValueDoesNotDowngradeToBearer(t *test
 	f := dpopFixture(t)
 	client, secret := clientCredsDPoPClient(t, f.prov)
 	key := newDPoPKey(t)
-	proof := makeDPoPProof(t, key, "POST", f.endpoint, f.clock.now, "jti-cc-empty-leading", "")
+	proof := makeDPoPProof(t, key, "POST", f.htu(), f.clock.now, "jti-cc-empty-leading", "")
 
 	resp := postProofValues(t, f, clientCredsForm("read"), client.ID, secret, "", proof)
 	defer resp.Body.Close()

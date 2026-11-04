@@ -251,7 +251,7 @@ func TestWithSupportedEncryptionAlgs_RejectsUnknownAlg(t *testing.T) {
 	t.Parallel()
 
 	_, err := op.New(append(validBaseOpts(t),
-		op.WithSupportedEncryptionAlgs([]string{"RSA1_5"}, nil),
+		op.WithSupportedEncryptionAlgs(op.EncryptionAlgs{KeyManagement: []string{"RSA1_5"}}),
 	)...)
 	if err == nil {
 		t.Fatalf("expected error for RSA1_5 in narrowing list, got nil")
@@ -264,7 +264,7 @@ func TestWithSupportedEncryptionAlgs_RejectsUnknownEnc(t *testing.T) {
 	t.Parallel()
 
 	_, err := op.New(append(validBaseOpts(t),
-		op.WithSupportedEncryptionAlgs(nil, []string{"A128CBC-HS256"}),
+		op.WithSupportedEncryptionAlgs(op.EncryptionAlgs{ContentEncryption: []string{"A128CBC-HS256"}}),
 	)...)
 	if err == nil {
 		t.Fatalf("expected error for A128CBC-HS256 in narrowing list, got nil")
@@ -282,8 +282,8 @@ func TestWithSupportedEncryptionAlgs_RejectsRepeatedNarrowing(t *testing.T) {
 		name          string
 		first, second op.Option
 	}{
-		{"algs", op.WithSupportedEncryptionAlgs([]string{"ECDH-ES"}, nil), op.WithSupportedEncryptionAlgs([]string{"ECDH-ES", "RSA-OAEP-256"}, nil)},
-		{"encs", op.WithSupportedEncryptionAlgs(nil, []string{"A256GCM"}), op.WithSupportedEncryptionAlgs(nil, []string{"A128GCM", "A256GCM"})},
+		{"algs", op.WithSupportedEncryptionAlgs(op.EncryptionAlgs{KeyManagement: []string{"ECDH-ES"}}), op.WithSupportedEncryptionAlgs(op.EncryptionAlgs{KeyManagement: []string{"ECDH-ES", "RSA-OAEP-256"}})},
+		{"encs", op.WithSupportedEncryptionAlgs(op.EncryptionAlgs{ContentEncryption: []string{"A256GCM"}}), op.WithSupportedEncryptionAlgs(op.EncryptionAlgs{ContentEncryption: []string{"A128GCM", "A256GCM"}})},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
@@ -295,8 +295,8 @@ func TestWithSupportedEncryptionAlgs_RejectsRepeatedNarrowing(t *testing.T) {
 	}
 
 	if _, err := op.New(append(validBaseOpts(t),
-		op.WithSupportedEncryptionAlgs([]string{"ECDH-ES"}, nil),
-		op.WithSupportedEncryptionAlgs(nil, []string{"A256GCM"}),
+		op.WithSupportedEncryptionAlgs(op.EncryptionAlgs{KeyManagement: []string{"ECDH-ES"}}),
+		op.WithSupportedEncryptionAlgs(op.EncryptionAlgs{ContentEncryption: []string{"A256GCM"}}),
 	)...); err != nil {
 		t.Fatalf("narrowing algs and encs in separate calls: %v", err)
 	}
@@ -476,7 +476,7 @@ func TestDiscovery_InboundEncryptionAlgsIntersectNarrowing(t *testing.T) {
 		op.WithEncryptionKeyset(op.EncryptionKeyset{
 			{KeyID: "enc-ec", PrivateKey: mustECDSA(t, elliptic.P256())},
 		}),
-		op.WithSupportedEncryptionAlgs([]string{"RSA-OAEP-256", "ECDH-ES+A256KW"}, nil),
+		op.WithSupportedEncryptionAlgs(op.EncryptionAlgs{KeyManagement: []string{"RSA-OAEP-256", "ECDH-ES+A256KW"}}),
 	))
 
 	got := toStrings(t, doc["request_object_encryption_alg_values_supported"])
@@ -503,7 +503,7 @@ func TestDiscovery_NarrowedEncryptionAlgsShrinkEveryFamily(t *testing.T) {
 		op.WithEncryptionKeyset(op.EncryptionKeyset{
 			{KeyID: "enc-1", PrivateKey: mustECDSA(t, elliptic.P256())},
 		}),
-		op.WithSupportedEncryptionAlgs([]string{"ECDH-ES"}, []string{"A256GCM"}),
+		op.WithSupportedEncryptionAlgs(op.EncryptionAlgs{KeyManagement: []string{"ECDH-ES"}, ContentEncryption: []string{"A256GCM"}}),
 	))
 
 	for _, k := range []string{
@@ -588,7 +588,7 @@ func TestWithEncryptionKeyset_RejectsFamilyExcludedByNarrowing(t *testing.T) {
 
 	_, err := op.New(append(validBaseOpts(t),
 		op.WithEncryptionKeyset(op.EncryptionKeyset{{KeyID: "enc-1", PrivateKey: mustRSA(t)}}),
-		op.WithSupportedEncryptionAlgs([]string{"ECDH-ES"}, nil),
+		op.WithSupportedEncryptionAlgs(op.EncryptionAlgs{KeyManagement: []string{"ECDH-ES"}}),
 	)...)
 	if err == nil {
 		t.Fatal("New accepted an RSA encryption key under an EC-only alg narrowing")
@@ -611,7 +611,7 @@ func TestJWKS_EncryptionKeyAlgsStayWithinNarrowing(t *testing.T) {
 		op.WithEncryptionKeyset(op.EncryptionKeyset{
 			{KeyID: "enc-ec", PrivateKey: mustECDSA(t, elliptic.P256())},
 		}),
-		op.WithSupportedEncryptionAlgs(allowed, nil),
+		op.WithSupportedEncryptionAlgs(op.EncryptionAlgs{KeyManagement: allowed}),
 	)...)
 	if err != nil {
 		t.Fatalf("op.New: %v", err)
@@ -656,7 +656,7 @@ func TestDiscovery_EmptyEncryptionNarrowingOmitsEveryFamily(t *testing.T) {
 	doc := fetchDiscoveryDoc(t, append(validBaseOpts(t),
 		op.WithFeature(feature.JAR),
 		op.WithEncryptionKeyset(op.EncryptionKeyset{{KeyID: "enc-1", PrivateKey: mustRSA(t)}}),
-		op.WithSupportedEncryptionAlgs([]string{}, nil),
+		op.WithSupportedEncryptionAlgs(op.EncryptionAlgs{KeyManagement: []string{}}),
 	))
 
 	for _, k := range []string{

@@ -728,9 +728,9 @@ func TestScenario_DIS_042_AdvertisedEndpointsAreRouted(t *testing.T) {
 		op.WithFeature(feature.MTLS),
 		op.WithDynamicRegistration(op.RegistrationOption{}),
 		op.WithCIBA(op.WithCIBAHintResolver(cibaHintResolver{})),
-		op.WithGrantManagement([]op.GrantManagementAction{
+		op.WithGrantManagement(op.GrantManagement{Actions: []op.GrantManagementAction{
 			op.GrantActionCreate, op.GrantActionQuery, op.GrantActionRevoke,
-		}, false),
+		}}),
 		op.WithDiscoveryMetadata(op.DiscoveryMetadata{
 			MTLSEndpointAliases: mtlsAliases,
 		}),

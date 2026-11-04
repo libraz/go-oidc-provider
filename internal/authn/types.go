@@ -7,6 +7,7 @@ import (
 	"net/netip"
 	"time"
 
+	opauthn "github.com/libraz/go-oidc-provider/op/authn"
 	"github.com/libraz/go-oidc-provider/op/interaction"
 )
 
@@ -466,17 +467,9 @@ var (
 	// closed here instead of minting a code.
 	ErrReauthNotPerformed = errors.New("authn: fresh authentication required but no factor ran")
 
-	// ErrFactorRetry signals "the user-supplied credential was
-	// rejected; the orchestrator MUST observe the failure and
-	// re-emit the current factor's prompt rather than terminating
-	// the chain." Authenticators that cannot resolve the failure to
-	// a fresh Prompt themselves (the password adapter, for instance,
-	// has no in-flight per-attempt state to amend) wrap their
-	// soft-failure sentinel in [ErrFactorRetry] so the orchestrator
-	// can route the response uniformly. Hard errors — store outage,
-	// codec misconfiguration, lockout — MUST NOT wrap this sentinel;
-	// they continue to flow to the HTTP layer as 500 / 4xx.
-	ErrFactorRetry = errors.New("authn: factor retry")
+	// ErrFactorRetry signals a rejected credential the orchestrator
+	// re-prompts; the declaration is [opauthn.ErrFactorRetry].
+	ErrFactorRetry = opauthn.ErrFactorRetry
 
 	// ErrAAL3RequiresUV is returned by [Orchestrator.Tick] when an
 	// authenticator that reports [AAL3] completes a Continue without the
@@ -491,16 +484,12 @@ var (
 	ErrAAL3RequiresUV = fmt.Errorf("authn: AAL3 factor requires user verification: %w", ErrFactorAbort)
 
 	// ErrFactorAbort marks a terminal, user-input-driven factor failure
-	// that the HTTP layer renders as a 4xx (not a 500). Unlike
-	// [ErrFactorRetry] — a soft failure the orchestrator re-prompts — an
-	// abort means the factor cannot continue in this interaction: an
-	// expired or already-consumed one-time code, an active brute-force
-	// lockout, a required factor reset, a rejected consent or chooser
-	// submission, or a factor result the chain refuses to record.
-	// Per-factor adapters and built-in interactions wrap their terminal
-	// sentinels with it so internal/authorizeendpoint can dispatch on the
-	// authn-level class without importing each factor's sentinels.
-	ErrFactorAbort = errors.New("authn: factor aborted")
+	// that the HTTP layer renders as a 4xx (not a 500); the declaration is
+	// [opauthn.ErrFactorAbort]. Per-factor adapters and built-in
+	// interactions wrap their terminal sentinels with it so
+	// internal/authorizeendpoint can dispatch on the authn-level class
+	// without importing each factor's sentinels.
+	ErrFactorAbort = opauthn.ErrFactorAbort
 
 	// ErrSubmissionRejected is returned when a
 	// [interaction.FormSubmission] violates the

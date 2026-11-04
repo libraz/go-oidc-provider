@@ -1297,9 +1297,35 @@ func TestScenario_DCR_VAL_07_PairwiseHostHomogeneityWithoutSector(t *testing.T) 
 	})
 }
 
+// TestScenario_DCR_VAL_08_TLSClientAuthFieldExclusivity confirms that the
+// tls_client_auth_* members are accepted only with
+// token_endpoint_auth_method=tls_client_auth, which in turn requires
+// exactly one of them.
+//
+// Spec: RFC 8705 §2.1.2.
 func TestScenario_DCR_VAL_08_TLSClientAuthFieldExclusivity(t *testing.T) {
 	t.Parallel()
-	t.Skip("out-of-scope: DCR-VAL-08 (see catalog out_of_scope_reason)")
+
+	f := newMTLSDCRFixture(t)
+	for name, body := range map[string]map[string]any{
+		"matcher on private_key_jwt": { //nolint:gosec // G101 false positive: auth-method metadata, not a credential.
+			"token_endpoint_auth_method": "private_key_jwt",
+			"jwks_uri":                   "https://rp.test.invalid/jwks.json",
+			"tls_client_auth_san_uri":    "spiffe://example.com/rp",
+		},
+		"tls_client_auth without matcher": {"token_endpoint_auth_method": "tls_client_auth"}, //nolint:gosec // G101 false positive: auth-method metadata, not a credential.
+	} {
+		body["redirect_uris"] = []string{"https://rp.test.invalid/cb"}
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			mtlsAssertRegistrationRejected(t, f, body)
+		})
+	}
+	f.register(t, map[string]any{ //nolint:gosec // G101 false positive: auth-method metadata, not a credential.
+		"redirect_uris":              []string{"https://rp.test.invalid/cb"},
+		"token_endpoint_auth_method": "tls_client_auth",
+		"tls_client_auth_san_ip":     "192.0.2.10",
+	})
 }
 
 func TestScenario_DCR_VAL_09_EncryptionAlgsBoundedByEnabledJWA(t *testing.T) {

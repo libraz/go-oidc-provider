@@ -133,7 +133,7 @@ func WithRefreshTokenOfflineTTL(ttl time.Duration) Option {
 	})
 }
 
-// WithPARLifetime overrides the lifetime of a request_uri issued by the
+// WithPARTTL overrides the lifetime of a request_uri issued by the
 // PAR endpoint (RFC 9126 §2.2). Zero means "use the library default"
 // (60 seconds). A negative value is rejected at the option site so the
 // misconfiguration surfaces at startup.
@@ -149,14 +149,14 @@ func WithRefreshTokenOfflineTTL(ttl time.Duration) Option {
 // presentation window; RFC 9126 §2.2 suggests a short value (typically
 // 60 seconds). Under a FAPI profile the lifetime must stay below
 // [profile.PARLifetimeCeiling] (600 seconds); [New] rejects a longer one.
-// Stable since v1.0.
-func WithPARLifetime(ttl time.Duration) Option {
+// Stable since v1.5.
+func WithPARTTL(ttl time.Duration) Option {
 	return optionFunc(func(c *config) error {
-		if err := c.claimOnce("WithPARLifetime"); err != nil {
+		if err := c.claimOnce("WithPARTTL"); err != nil {
 			return err
 		}
 		if ttl < 0 {
-			return newConfigurationError("WithPARLifetime requires a non-negative duration", nil)
+			return newConfigurationError("WithPARTTL requires a non-negative duration", nil)
 		}
 		c.parLifetime = ttl
 		return nil

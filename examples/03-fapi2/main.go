@@ -15,8 +15,9 @@
 // Two listeners come up in the same process:
 //
 //   - :8080 — the OP, with WithProfile(FAPI2Baseline) plus
-//     WithFeature(DPoP) for the sender-constraint binding (the
-//     profile mandates DPoP or mTLS), and one client registered as
+//     WithFeature(feature.DPoP), which restates the profile default:
+//     the profile enables DPoP itself when neither feature.DPoP nor
+//     feature.MTLS is configured. One client is registered as
 //     PrivateKeyJWTClient with an inline JWKS the RP signs against.
 //   - :9090 — the FAPI 2.0 RP from examples/internal/rpkit. It
 //     exposes /, /login, /callback, /me.
@@ -119,10 +120,11 @@ func run() error {
 		op.WithLoginFlow(flow),
 		// WithProfile(FAPI2Baseline) caps client-auth methods at
 		// private_key_jwt and forces sender-constrained access tokens.
-		// The profile enables DPoP (RFC 9449) by itself; adding
-		// feature.MTLS (RFC 8705) switches the binding to mTLS. The
-		// explicit WithFeature below keeps the choice visible in the
-		// op.New call.
+		// The profile enables DPoP (RFC 9449) by itself when neither
+		// feature.DPoP nor feature.MTLS is configured; enabling only
+		// feature.MTLS (RFC 8705) makes the binding mTLS instead. The
+		// explicit WithFeature below restates the default so the choice
+		// is visible in the op.New call.
 		op.WithProfile(profile.FAPI2Baseline),
 		op.WithFeature(feature.DPoP),
 		op.WithStaticClients(op.PrivateKeyJWTClient{

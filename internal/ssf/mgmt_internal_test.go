@@ -125,14 +125,17 @@ func newMgmtFixture(t *testing.T, opts ...mgmtOption) *mgmtFixture {
 			RevocationStrategy: store.RevocationStrategyGrantTombstone,
 			DPoP:               verifier,
 		},
-		Streams:      st.SSFStreams(),
-		Events:       st.SSFEvents(),
-		Transmitter:  tx,
-		Sealer:       sealer,
-		PollEndpoint: mgmtPollBase,
-		ActiveKey:    func() (SigningKey, error) { return f.setKey, nil },
-		Audit:        rec,
-		Clock:        clock,
+		Streams:               st.SSFStreams(),
+		Events:                st.SSFEvents(),
+		Transmitter:           tx,
+		Sealer:                sealer,
+		PollEndpoint:          mgmtPollBase,
+		ConfigurationEndpoint: testIssuer + mgmtStreamsPath,
+		StatusEndpoint:        testIssuer + mgmtStatusPath,
+		VerificationEndpoint:  testIssuer + mgmtVerifyPath,
+		ActiveKey:             func() (SigningKey, error) { return f.setKey, nil },
+		Audit:                 rec,
+		Clock:                 clock,
 	}
 	for _, o := range opts {
 		o(&d)
@@ -1126,27 +1129,33 @@ func TestNewHandlersRequiresDeps(t *testing.T) {
 	t.Parallel()
 	f := newMgmtFixture(t)
 	base := HandlerDeps{
-		Issuer:       testIssuer,
-		Bearer:       endpointsupport.BearerDeps{Issuer: testIssuer},
-		Streams:      f.st.SSFStreams(),
-		Events:       f.st.SSFEvents(),
-		Transmitter:  f.tx,
-		Sealer:       f.sealer,
-		PollEndpoint: mgmtPollBase,
-		ActiveKey:    func() (SigningKey, error) { return f.setKey, nil },
+		Issuer:                testIssuer,
+		Bearer:                endpointsupport.BearerDeps{Issuer: testIssuer},
+		Streams:               f.st.SSFStreams(),
+		Events:                f.st.SSFEvents(),
+		Transmitter:           f.tx,
+		Sealer:                f.sealer,
+		PollEndpoint:          mgmtPollBase,
+		ConfigurationEndpoint: testIssuer + mgmtStreamsPath,
+		StatusEndpoint:        testIssuer + mgmtStatusPath,
+		VerificationEndpoint:  testIssuer + mgmtVerifyPath,
+		ActiveKey:             func() (SigningKey, error) { return f.setKey, nil },
 	}
 	if _, err := NewHandlers(base); err != nil {
 		t.Fatalf("complete deps: %v", err)
 	}
 	for name, edit := range map[string]func(*HandlerDeps){
-		"issuer":        func(d *HandlerDeps) { d.Issuer = "" },
-		"bearer issuer": func(d *HandlerDeps) { d.Bearer.Issuer = "https://other.example" },
-		"streams":       func(d *HandlerDeps) { d.Streams = nil },
-		"events":        func(d *HandlerDeps) { d.Events = nil },
-		"transmitter":   func(d *HandlerDeps) { d.Transmitter = nil },
-		"sealer":        func(d *HandlerDeps) { d.Sealer = nil },
-		"poll endpoint": func(d *HandlerDeps) { d.PollEndpoint = "" },
-		"active key":    func(d *HandlerDeps) { d.ActiveKey = nil },
+		"issuer":                 func(d *HandlerDeps) { d.Issuer = "" },
+		"bearer issuer":          func(d *HandlerDeps) { d.Bearer.Issuer = "https://other.example" },
+		"streams":                func(d *HandlerDeps) { d.Streams = nil },
+		"events":                 func(d *HandlerDeps) { d.Events = nil },
+		"transmitter":            func(d *HandlerDeps) { d.Transmitter = nil },
+		"sealer":                 func(d *HandlerDeps) { d.Sealer = nil },
+		"poll endpoint":          func(d *HandlerDeps) { d.PollEndpoint = "" },
+		"configuration endpoint": func(d *HandlerDeps) { d.ConfigurationEndpoint = "" },
+		"status endpoint":        func(d *HandlerDeps) { d.StatusEndpoint = "" },
+		"verification endpoint":  func(d *HandlerDeps) { d.VerificationEndpoint = "" },
+		"active key":             func(d *HandlerDeps) { d.ActiveKey = nil },
 	} {
 		d := base
 		edit(&d)

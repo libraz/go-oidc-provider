@@ -27,6 +27,11 @@ type ClientMetadata struct {
 	Scope                             string
 	TokenEndpointAuthMethod           string
 	TokenEndpointAuthSigningAlg       string
+	TLSClientAuthSubjectDN            string
+	TLSClientAuthSANDNS               string
+	TLSClientAuthSANURI               string
+	TLSClientAuthSANIP                string
+	TLSClientAuthSANEmail             string
 	ApplicationType                   string
 	SubjectType                       string
 	IDTokenSignedResponseAlg          string
@@ -72,6 +77,11 @@ type metadataWire struct {
 	Scope                             string          `json:"scope,omitempty"`
 	TokenEndpointAuthMethod           string          `json:"token_endpoint_auth_method,omitempty"`
 	TokenEndpointAuthSigningAlg       string          `json:"token_endpoint_auth_signing_alg,omitempty"`
+	TLSClientAuthSubjectDN            string          `json:"tls_client_auth_subject_dn,omitempty"`
+	TLSClientAuthSANDNS               string          `json:"tls_client_auth_san_dns,omitempty"`
+	TLSClientAuthSANURI               string          `json:"tls_client_auth_san_uri,omitempty"`
+	TLSClientAuthSANIP                string          `json:"tls_client_auth_san_ip,omitempty"`
+	TLSClientAuthSANEmail             string          `json:"tls_client_auth_san_email,omitempty"`
 	ApplicationType                   string          `json:"application_type,omitempty"`
 	SubjectType                       string          `json:"subject_type,omitempty"`
 	IDTokenSignedResponseAlg          string          `json:"id_token_signed_response_alg,omitempty"`
@@ -208,6 +218,11 @@ func parseClientMetadataWithExtras(r io.Reader) (ClientMetadata, metadataExtras,
 		Scope:                             w.Scope,
 		TokenEndpointAuthMethod:           w.TokenEndpointAuthMethod,
 		TokenEndpointAuthSigningAlg:       w.TokenEndpointAuthSigningAlg,
+		TLSClientAuthSubjectDN:            w.TLSClientAuthSubjectDN,
+		TLSClientAuthSANDNS:               w.TLSClientAuthSANDNS,
+		TLSClientAuthSANURI:               w.TLSClientAuthSANURI,
+		TLSClientAuthSANIP:                w.TLSClientAuthSANIP,
+		TLSClientAuthSANEmail:             w.TLSClientAuthSANEmail,
 		ApplicationType:                   w.ApplicationType,
 		SubjectType:                       w.SubjectType,
 		IDTokenSignedResponseAlg:          w.IDTokenSignedResponseAlg,

@@ -388,9 +388,9 @@ func TestExchange_RejectsScopeWidening(t *testing.T) {
 //
 // Tracks: RFC 6749 §6 (scope reduction is the only legal narrowing
 // operation), and the broad class of "scope upgrade" defects exemplified
-// by GHSA advisories filed against ory/fosite around 2020 (scope upgrade
-// / scope grant misinterpretation, fixed in v0.31.x — pre-CVE era for
-// fosite, but the same threat shape recurs across implementations).
+// by GHSA advisories filed against another OAuth library around 2020 (scope upgrade
+// / scope grant misinterpretation, fixed in v0.31.x — pre-CVE era, but
+// the same threat shape recurs across implementations).
 // The attack pattern is: an attacker who has captured a refresh token
 // asks /token to issue a wider access-token scope than the original
 // grant.

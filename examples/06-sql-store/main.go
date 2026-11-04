@@ -20,7 +20,12 @@
 //
 // The login flow reads its credentials straight off the SQL adapter
 // (storage.UserPasswords()), so the same database the OP stores codes
-// and grants in also answers the password prompt.
+// and grants in also answers the password prompt. That is the
+// adapter-owned oidc_users table, for a deployment with no users table
+// of its own. An application that already has one keeps it: see
+// 24-byo-userstore (projection onto an existing table) and
+// 53-production-sql (the same on SQLite, MySQL or PostgreSQL, with bcrypt
+// hashes).
 //
 // Manual verification:
 //

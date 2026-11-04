@@ -34,7 +34,7 @@ import (
 // naming another client's kid, embedding a key, pointing at a keyset
 // the attacker hosts — and each must be inert.
 //
-// Tracks: CVE-2026-11800 (Keycloak) — an attacker holding any valid
+// Tracks: CVE-2026-11800 (another OP) — an attacker holding any valid
 // client credential in the realm forged a JWT authorization-grant
 // assertion by manipulating the algorithm field, and signature
 // verification was satisfied without the registered key (CWE-347).

@@ -11,14 +11,15 @@ import (
 // (FAPI 2.0 / FAPI-CIBA) and grant-registration gates for /bc-authorize.
 func (d *Deps) initiationGate() endpointsupport.InitiationGate {
 	return endpointsupport.InitiationGate{
-		DPoP: dpop.Gate{Verifier: d.DPoP, Nonces: d.DPoPNonces},
+		DPoP: dpop.Gate{Verifier: d.DPoP, Nonces: d.DPoPNonces, HTU: d.DPoPHTU},
 		Auth: endpointsupport.AuthenticateOpts{
-			Clients:           d.Clients,
-			SecretVerifier:    d.SecretVerifier,
-			AssertionVerifier: d.AssertionVerifier,
-			AllowedMethods:    d.AllowedClientAuthMethods,
-			Now:               d.now(),
-			Audit:             d.auditEmitter(),
+			Clients:             d.Clients,
+			SecretVerifier:      d.SecretVerifier,
+			AssertionVerifier:   d.AssertionVerifier,
+			CertificateVerifier: d.CertificateVerifier,
+			AllowedMethods:      d.AllowedClientAuthMethods,
+			Now:                 d.now(),
+			Audit:               d.auditEmitter(),
 		},
 		AuthFailureMessage:      "client authentication failed at backchannel-authentication endpoint",
 		RequireSenderConstraint: d.RequireSenderConstraint,

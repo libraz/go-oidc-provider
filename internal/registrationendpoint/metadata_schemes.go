@@ -223,22 +223,22 @@ var (
 	nativeRedirectLoopback = loopbackHTTPMessages{
 		newErr:        errInvalidRedirectURI,
 		withLocalhost: "native client redirect_uri http scheme requires a loopback host (127.0.0.1, [::1], or localhost) per RFC 8252 §7.3",
-		ipOnly:        "native client redirect_uri http scheme requires a loopback IP literal (127.0.0.1, [::1]) per RFC 8252 §7.3 + §8.3; pass op.WithAllowLocalhostLoopback() to also admit the textual \"localhost\" host",
+		ipOnly:        "native client redirect_uri http scheme requires a loopback IP literal (127.0.0.1, [::1]) per RFC 8252 §7.3 + §8.3; pass op.WithAllowLocalhostRedirectURIs() to also admit the textual \"localhost\" host",
 	}
 	webRedirectLoopback = loopbackHTTPMessages{
 		newErr:        errInvalidRedirectURI,
 		withLocalhost: "redirect_uri http scheme is permitted only for loopback hosts (127.0.0.1, [::1], or localhost) per RFC 8252 §7.3",
-		ipOnly:        "redirect_uri http scheme is permitted only for loopback IP literals (127.0.0.1, [::1]) per RFC 8252 §7.3 + §8.3; pass op.WithAllowLocalhostLoopback() to also admit the textual \"localhost\" host",
+		ipOnly:        "redirect_uri http scheme is permitted only for loopback IP literals (127.0.0.1, [::1]) per RFC 8252 §7.3 + §8.3; pass op.WithAllowLocalhostRedirectURIs() to also admit the textual \"localhost\" host",
 	}
 	nativePostLogoutLoopback = loopbackHTTPMessages{
 		newErr:        errInvalidClientMetadata,
 		withLocalhost: "post_logout_redirect_uris http scheme for native clients requires a loopback host (127.0.0.1, [::1], or localhost) per RFC 8252 §7.3",
-		ipOnly:        "post_logout_redirect_uris http scheme for native clients requires a loopback IP literal (127.0.0.1, [::1]); pass op.WithAllowLocalhostLoopback() to also admit the textual \"localhost\" host",
+		ipOnly:        "post_logout_redirect_uris http scheme for native clients requires a loopback IP literal (127.0.0.1, [::1]); pass op.WithAllowLocalhostRedirectURIs() to also admit the textual \"localhost\" host",
 	}
 	webPostLogoutLoopback = loopbackHTTPMessages{
 		newErr:        errInvalidClientMetadata,
 		withLocalhost: "post_logout_redirect_uris http scheme is permitted only for loopback hosts (127.0.0.1, [::1], or localhost) per RFC 8252 §7.3",
-		ipOnly:        "post_logout_redirect_uris http scheme is permitted only for loopback IP literals (127.0.0.1, [::1]); pass op.WithAllowLocalhostLoopback() to also admit the textual \"localhost\" host",
+		ipOnly:        "post_logout_redirect_uris http scheme is permitted only for loopback IP literals (127.0.0.1, [::1]); pass op.WithAllowLocalhostRedirectURIs() to also admit the textual \"localhost\" host",
 	}
 )
 

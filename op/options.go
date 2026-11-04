@@ -166,12 +166,12 @@ type config struct {
 	// defined.
 	interactions []Interaction
 
-	// backchannelLogoutHTTPClient supplies the outbound Transport the
+	// backchannelLogoutTransport supplies the outbound Transport the
 	// back-channel logout coordinator uses to POST Logout Tokens to RPs.
-	// Nil means "use the package default". The builder intentionally
-	// ignores the supplied client's timeout and redirect policy so its
-	// hardened envelope remains mandatory.
-	backchannelLogoutHTTPClient *http.Client
+	// Nil means "use the package default". The builder applies its own
+	// timeout and redirect policy, so that hardened envelope remains
+	// mandatory. See [WithBackchannelLogout].
+	backchannelLogoutTransport http.RoundTripper
 
 	// backchannelLogoutTimeout is the per-RP request budget. Zero
 	// substitutes [backchannel.DefaultTimeout].
@@ -180,8 +180,8 @@ type config struct {
 	// backchannelFanOutBudget caps the total wall-clock time one
 	// detached back-channel logout fan-out may occupy, across every
 	// RP it notifies. Zero substitutes
-	// [backchannel.DefaultFanOutBudget]; non-positive values are
-	// rejected at the option site. See [WithBackchannelFanOutBudget].
+	// [backchannel.DefaultFanOutBudget]; negative values are
+	// rejected at the option site. See [WithBackchannelLogout].
 	backchannelFanOutBudget time.Duration
 
 	// sessionDurabilityPosture carries the embedder's declaration of
@@ -227,7 +227,7 @@ type config struct {
 	// has to present the request_uri at /authorize; once the request is
 	// resolved there, an interactive login that outlives the window
 	// still completes, because single-use — not expiry — is what the
-	// store enforces at code emission. See [WithPARLifetime].
+	// store enforces at code emission. See [WithPARTTL].
 	parLifetime time.Duration
 
 	// strictOfflineAccess flips the refresh-token issuance gate to the
@@ -235,7 +235,7 @@ type config struct {
 	// when the granted scope contains "offline_access" (in addition to
 	// the existing "openid" + GrantTypes contains refresh_token
 	// requirement). Default false reflects the lax reading that the
-	// library has shipped since v0.1, matching Auth0 / Okta / Keycloak.
+	// library has shipped since v0.1, matching the common hosted providers.
 	// See [WithStrictOfflineAccess].
 	strictOfflineAccess bool
 
@@ -261,7 +261,7 @@ type config struct {
 	// The default false rejects loopback / link-local / RFC 1918
 	// hosts so an attacker-controlled jwks_uri cannot pivot the OP
 	// onto an internal service. Embedders fronting their RPs with
-	// private DNS opt in via [WithAllowPrivateNetworkJWKS].
+	// private DNS opt in via [WithAllowPrivateNetwork] ([OutboundJWKS]).
 	allowPrivateNetworkJWKS bool
 
 	// allowPrivateNetworkJAR mirrors [allowPrivateNetworkJWKS] for
@@ -283,21 +283,26 @@ type config struct {
 	// RFC 1918 / IPv6 ULA destinations so a hostile RP cannot
 	// register a backchannel_logout_uri that aims the OP's signed
 	// logout_token at an internal service. Embedders opt in via
-	// [WithAllowPrivateNetworkBackchannel].
+	// [WithAllowPrivateNetwork] ([OutboundBackchannel]).
 	backchannelAllowPrivateNetwork bool
 
-	// allowLocalhostLoopback widens the RFC 8252 §7.3 loopback
+	// allowLocalhostRedirectURIs widens the RFC 8252 §7.3 loopback
 	// redirect_uri carve-out to admit the textual "localhost" host
 	// in addition to the IP literals 127.0.0.1 and [::1]. The
 	// default false keeps the IP-only posture so a DNS-rebinding
 	// adversary cannot pivot a registered http://localhost URI onto
 	// an attacker-controlled address (RFC 8252 §8.3). Embedders that
 	// rely on the textual host (most native-app SDKs default to
-	// http://localhost) opt in via [WithAllowLocalhostLoopback].
-	allowLocalhostLoopback bool
+	// http://localhost) opt in via [WithAllowLocalhostRedirectURIs].
+	allowLocalhostRedirectURIs bool
+
+	// allowLocalhostIssuer admits the textual host "localhost" in the
+	// issuer ([WithAllowLocalhostIssuerForDev]); it requires an
+	// http://localhost issuer.
+	allowLocalhostIssuer bool
 
 	// allowInsecureBackchannelLogoutForDev is the
-	// [WithAllowInsecureBackchannelLogoutForDev] dev-only opt-out: it
+	// [OutboundBackchannel] half of [WithAllowInsecureOutboundForDev]: it
 	// admits http:// loopback (127.0.0.1, [::1], localhost) for
 	// backchannel_logout_uri at static-client and DCR validation, and
 	// suppresses the deliverer's SSRF gate so the demo round-trip
@@ -408,28 +413,20 @@ type config struct {
 
 	// cimd and allowPrivateNetworkCIMD carry the client ID metadata
 	// document configuration from [WithClientIDMetadataDocuments] and
-	// [WithAllowPrivateNetworkClientIDMetadata]. clients is the resolved
+	// [WithAllowPrivateNetwork] ([OutboundClientIDMetadata]). clients is the resolved
 	// client store, set when the router is built.
 	cimd                    *ClientIDMetadataDocuments
 	allowPrivateNetworkCIMD bool
 	clients                 store.ClientStore
 
-	// claimsParameterSupportedSet records whether
-	// [WithClaimsParameterSupported] was invoked. When false the
-	// library defaults to true (the parser is always wired). When
-	// true the value of [claimsParameterSupportedOff] decides whether
-	// the wire is told the OP honours the parameter; the parser still
-	// runs server-side either way so a malformed payload is rejected
-	// uniformly.
-	claimsParameterSupportedSet bool
-
-	// claimsParameterSupportedOff, when true, makes
+	// claimsParameterDisabled, when true, makes
 	// [config.claimsParameterSupported] return false: the discovery
 	// document advertises the absence of §5.5 support and the
 	// authorize / par parsers ignore any incoming "claims" payload.
-	// The boolean is the negative of the option argument so the zero
-	// value keeps the library default of "supported".
-	claimsParameterSupportedOff bool
+	// The zero value keeps the library default of "supported"; the
+	// parser still runs server-side either way so a malformed payload
+	// is rejected uniformly. Set by [WithClaimsParameterDisabled].
+	claimsParameterDisabled bool
 
 	// openIDScopeOptional, when true, lifts the OIDC Core 1.0 §3.1.2.1
 	// requirement that every authorization request include the
@@ -500,8 +497,8 @@ type config struct {
 
 	// sharedSignals, sharedSignalsAllowPrivateNetwork and
 	// allowInsecureSharedSignalsPushForDev record [WithSharedSignals],
-	// [WithAllowPrivateNetworkSharedSignals] and
-	// [WithAllowInsecureSharedSignalsPushForDev].
+	// [WithAllowPrivateNetwork] and [WithAllowInsecureOutboundForDev]
+	// with [OutboundSharedSignals].
 	sharedSignals                        bool
 	sharedSignalsAllowPrivateNetwork     bool
 	allowInsecureSharedSignalsPushForDev bool
@@ -628,7 +625,7 @@ type config struct {
 	// leaves the device_code lifetime unspecified, and a deployment
 	// that runs a short access-token TTL must still give a
 	// distracted user enough time to reach a secondary device.
-	// See [WithDeviceCodeExpiry].
+	// See [WithDeviceCodeTTL].
 	deviceCodeExpiry time.Duration
 
 	// deviceCodePollInterval is the value advertised to the device
@@ -725,14 +722,11 @@ type config struct {
 // claimsParameterSupported returns the effective discovery
 // advertisement for the OIDC Core 1.0 §5.5 "claims" parameter. The
 // library default is true; embedders flip the bit via
-// [WithClaimsParameterSupported]. The function is consulted by both
+// [WithClaimsParameterDisabled]. The function is consulted by both
 // the discovery builder and the authorize parser so the wire and the
 // runtime stay in lock-step.
 func (c *config) claimsParameterSupported() bool {
-	if !c.claimsParameterSupportedSet {
-		return true
-	}
-	return !c.claimsParameterSupportedOff
+	return !c.claimsParameterDisabled
 }
 
 // acrValuesSupportedCopy returns a defensive copy of the ACR class
@@ -883,16 +877,6 @@ func (c *config) claimSlot(slot, option string) error {
 	return newConfigurationError(option+" conflicts with prior "+prior.option, nil)
 }
 
-// claimFlag is [config.claimSlot] for a zero-argument option: repeating the
-// same option is an idempotent no-op, while a different option sharing the
-// slot still conflicts.
-func (c *config) claimFlag(slot, option string) error {
-	if prior, taken := c.claimed[slot]; taken && prior.option == option && c.applyingDefaults == prior.fallback {
-		return nil
-	}
-	return c.claimSlot(slot, option)
-}
-
 // defaultsOption is the [Option] [WithDefaults] returns.
 type defaultsOption struct{ opts []Option }
 
@@ -933,7 +917,7 @@ func WithDefaults(opts ...Option) Option {
 // DNS-hijacked (RFC 8252 §7.3 reasoning); a development boot binding
 // loopback uses the IP literal directly.
 //
-// [WithAllowLocalhostLoopback] additionally admits the textual
+// [WithAllowLocalhostIssuerForDev] additionally admits the textual
 // "localhost" host over http. It is the only way to run a WebAuthn
 // deployment locally without TLS: a Relying Party ID must be a domain
 // and browsers reject an IP literal for it, so an http issuer on

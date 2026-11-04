@@ -227,7 +227,7 @@ func newCDEnv(t *testing.T, cfg cdCfg) *cdEnv {
 		op.WithAuditLogger(capture.Logger()),
 	}
 	if !cfg.strict {
-		opts = append(opts, op.WithAllowPrivateNetworkClientIDMetadata())
+		opts = append(opts, op.WithAllowPrivateNetwork(op.OutboundClientIDMetadata))
 	}
 	if len(cfg.resources) > 0 {
 		rs := make([]op.ProtectedResource, 0, len(cfg.resources))
@@ -1109,7 +1109,7 @@ func TestScenario_CIMD_RES_10_AllowNarrowingTakesEffectOnWarmCache(t *testing.T)
 	e.probe(t, id).requireInteraction(t)
 }
 
-// Tracks: CVE-2026-1180 (Keycloak; client-supplied URL fetched without a
+// Tracks: CVE-2026-1180 (another OP; client-supplied URL fetched without a
 // private-range check). Here the URL is the client_id itself.
 func TestScenario_CIMD_RES_11_SSRFBlocksPrivateRanges(t *testing.T) {
 	t.Parallel()

@@ -1,6 +1,6 @@
 package op
 
-import "github.com/libraz/go-oidc-provider/internal/authn"
+import "github.com/libraz/go-oidc-provider/op/authn"
 
 // CaptchaInput is an alias for [authn.CaptchaInput].
 type CaptchaInput = authn.CaptchaInput

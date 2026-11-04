@@ -70,7 +70,9 @@ func handleRefreshToken(w http.ResponseWriter, r *http.Request, deps Deps) {
 	if !ok {
 		return
 	}
-	if deps.Transactions != nil {
+	// The transaction exists to roll a failed issuance's Consume back; a
+	// non-rotating exchange consumes nothing, so it has nothing to roll back.
+	if deps.Transactions != nil && !deps.RefreshTokenRotationDisabled {
 		handleRefreshTokenTransaction(
 			ctx,
 			w,
@@ -191,7 +193,7 @@ func completeRefreshToken(
 	if !enforceDPoPRefreshBinding(w, deps, dpopOut, exchanged.DPoPJKT) {
 		return rollback
 	}
-	if !requireMTLSMatch(w, r, deps, exchanged.MTLSCertThumbprint) {
+	if !requireMTLSMatch(w, r, deps, client, exchanged.MTLSCertThumbprint) {
 		return rollback
 	}
 	binding := tokenBinding{
@@ -414,6 +416,7 @@ func newRefreshExchanger(deps Deps) (*refresh.Exchanger, error) {
 		GraceTTL:           deps.RefreshTokenGraceTTL,
 		Audit:              deps.audit(),
 		DeferReplayCascade: true,
+		RotationDisabled:   deps.RefreshTokenRotationDisabled,
 	})
 }
 

@@ -320,15 +320,15 @@ type Deps struct {
 	// JAR request_uri before the OP fetches the request object. The
 	// default posture rejects loopback / link-local / RFC 1918 hosts;
 	// embedders that front their RPs with private DNS opt in via
-	// op.WithAllowPrivateNetworkJAR.
+	// op.WithAllowPrivateNetwork(op.OutboundJAR).
 	AllowPrivateNetworkJAR bool
 
 	// ClaimsParameterEnabled, when false, makes /authorize discard
 	// any parsed OIDC Core 1.0 §5.5 "claims" payload before the
 	// snapshot is persisted. The library default is true (the wiring
-	// layer leaves the field at zero value when the embedder calls
-	// op.WithClaimsParameterSupported(true) or omits the option
-	// entirely; op.WithClaimsParameterSupported(false) flips this to
+	// layer leaves the field at zero value when
+	// the embedder omits op.WithClaimsParameterDisabled;
+	// op.WithClaimsParameterDisabled() flips this to
 	// false on the wire layer). The parser still rejects a malformed
 	// payload so the wire shape stays uniform with FAPI 2.0; the
 	// flag only governs whether the (validated) payload survives

@@ -117,7 +117,7 @@ func TestValidateRedirectURIs_DefaultRejectsLocalhostMessageHints(t *testing.T) 
 	if err == nil {
 		t.Fatal("expected error in default mode")
 	}
-	if !strings.Contains(err.Error(), "WithAllowLocalhostLoopback") {
+	if !strings.Contains(err.Error(), "WithAllowLocalhostRedirectURIs") {
 		t.Errorf("error message %q should name the opt-in option for operator remediation", err.Error())
 	}
 }
@@ -240,7 +240,7 @@ func TestValidateRedirectURIs_WebImplicitForbidsLoopbackHost(t *testing.T) {
 // TestValidateRedirectURIs_CaseVariantDangerousSchemes pins that
 // javascript: and data: redirect URIs are rejected regardless of scheme
 // letter case, for both redirect_uris and post_logout_redirect_uris.
-// Tracks: CVE-2026-9086 (Keycloak) — case-variant javascript:/data: scheme bypassed redirect URI validation
+// Tracks: CVE-2026-9086 (another OP) — case-variant javascript:/data: scheme bypassed redirect URI validation
 func TestValidateRedirectURIs_CaseVariantDangerousSchemes(t *testing.T) {
 	t.Parallel()
 

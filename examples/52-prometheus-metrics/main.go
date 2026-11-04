@@ -106,7 +106,7 @@ func main() {
 		op.WithProfile(profile.OAuth21),
 		op.WithLoginFlow(op.LoginFlow{Primary: op.PrimaryPassword{Store: memStore.UserPasswords()}}),
 		// Admit "localhost" as a redirect_uri host alongside 127.0.0.1.
-		op.WithAllowLocalhostLoopback(),
+		op.WithAllowLocalhostRedirectURIs(),
 		op.WithPrometheus(registry),
 		op.WithStaticClients(
 			op.PublicClient{

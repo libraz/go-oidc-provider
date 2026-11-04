@@ -66,6 +66,12 @@ type Deps struct {
 	// invalid_client.
 	AssertionVerifier clientauth.AssertionVerifier
 
+	// CertificateVerifier verifies RFC 8705 §2 mTLS client
+	// authentication (tls_client_auth, self_signed_tls_client_auth). Nil
+	// when feature.MTLS is off, which rejects a client registered for
+	// either method as invalid_client.
+	CertificateVerifier clientauth.CertificateVerifier
+
 	// AllowedClientAuthMethods optionally restricts which client
 	// authentication methods the endpoint accepts. See
 	// tokenendpoint.Deps.AllowedClientAuthMethods for the rationale;
@@ -207,12 +213,13 @@ func authenticate(
 ) (*store.Client, *clientauth.Credentials, bool) {
 	return endpointsupport.AuthenticateClient(ctx, w, r,
 		endpointsupport.AuthenticateOpts{
-			Clients:           deps.Clients,
-			SecretVerifier:    deps.SecretVerifier,
-			AssertionVerifier: deps.AssertionVerifier,
-			AllowedMethods:    deps.AllowedClientAuthMethods,
-			Now:               deps.now().UTC(),
-			Audit:             deps.audit(),
+			Clients:             deps.Clients,
+			SecretVerifier:      deps.SecretVerifier,
+			AssertionVerifier:   deps.AssertionVerifier,
+			CertificateVerifier: deps.CertificateVerifier,
+			AllowedMethods:      deps.AllowedClientAuthMethods,
+			Now:                 deps.now().UTC(),
+			Audit:               deps.audit(),
 		},
 		// /revoke does not raise an audit event on pre-authentication
 		// failures: RFC 7009 §2.2 collapses the success path to "always

@@ -1,11 +1,10 @@
 package op
 
-import "github.com/libraz/go-oidc-provider/internal/authn"
+import "github.com/libraz/go-oidc-provider/op/authn"
 
 // AAL is an alias for the canonical [authn.AAL] type. See the
 // authn-package documentation for the full semantics; the op package
-// re-exports it so embedders write `op.AAL` without reaching into
-// internal/.
+// re-exports it so embedders write `op.AAL`.
 //
 // Stable since v1.0.
 type AAL = authn.AAL

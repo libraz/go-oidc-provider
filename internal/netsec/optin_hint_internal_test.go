@@ -8,7 +8,7 @@ import (
 	"testing"
 )
 
-const testOptIn = "op.WithAllowPrivateNetworkJWKS()"
+const testOptIn = "op.WithAllowPrivateNetwork(op.OutboundJWKS)"
 
 func privateLookup(_ context.Context, _ string) ([]net.IPAddr, error) {
 	return []net.IPAddr{{IP: net.ParseIP("10.1.2.3")}}, nil

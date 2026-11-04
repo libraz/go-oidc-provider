@@ -8,6 +8,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/libraz/go-oidc-provider/internal/oidcscope"
+	opciba "github.com/libraz/go-oidc-provider/op/ciba"
 )
 
 // MaxBindingMessageRunes is the upper bound on binding_message
@@ -117,53 +118,18 @@ func ExpiryFromSeconds(seconds int64, upper time.Duration) time.Duration {
 	return d
 }
 
-// HintKind is the closed sum returned by [ClassifyHint] naming
-// which of the three CIBA hint parameters the client supplied. The
-// type is closed: callers exhaustively switch on it and the linter
-// flags any new case the caller forgets to handle.
-type HintKind uint8
+// HintKind is the closed sum returned by [ClassifyHint] naming which of
+// the three CIBA hint parameters the client supplied. The declaration is
+// the public one in [github.com/libraz/go-oidc-provider/op/ciba].
+type HintKind = opciba.HintKind
 
+// HintKind values; see [opciba.HintKind].
 const (
-	// HintNone is the zero value. [ClassifyHint] never returns this
-	// alongside a nil error; observing it indicates a bug in the
-	// caller's dispatch.
-	HintNone HintKind = iota
-
-	// HintLoginHint means the request supplied a login_hint
-	// parameter (an opaque identifier the embedder's resolver maps
-	// to a stable subject).
-	HintLoginHint
-
-	// HintIDTokenHint means the request supplied an id_token_hint
-	// parameter: an ID Token this OP previously issued to the
-	// requesting client, whose sub claim identifies the end-user.
-	// The OP verifies the token itself through [VerifyIDTokenHint]
-	// before the hint reaches a resolver, so the value a resolver
-	// observes for this kind is the OP-verified sub, never the JWT.
-	HintIDTokenHint
-
-	// HintLoginHintToken means the request supplied a
-	// login_hint_token parameter (a signed JWT the embedder's
-	// resolver verifies and maps to a stable subject).
-	HintLoginHintToken
+	HintNone           = opciba.HintNone
+	HintLoginHint      = opciba.HintLoginHint
+	HintIDTokenHint    = opciba.HintIDTokenHint
+	HintLoginHintToken = opciba.HintLoginHintToken
 )
-
-// String returns the wire-friendly name of k, suitable for audit
-// and log output. Unknown values surface as "none".
-func (k HintKind) String() string {
-	switch k {
-	case HintLoginHint:
-		return "login_hint"
-	case HintIDTokenHint:
-		return "id_token_hint"
-	case HintLoginHintToken:
-		return "login_hint_token"
-	case HintNone:
-		return "none"
-	default:
-		return "none"
-	}
-}
 
 // ClassifyHint inspects the three CIBA hint parameters and returns
 // the kind plus the value of whichever one is non-empty. CIBA Core

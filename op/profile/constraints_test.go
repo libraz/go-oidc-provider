@@ -244,10 +244,7 @@ func TestMaxRequestObjectAge(t *testing.T) {
 func TestAllowedClientAuthMethods(t *testing.T) {
 	t.Parallel()
 
-	// The RFC 8705 §2 mTLS methods FAPI 2.0 §3.1.3 also permits are
-	// deliberately absent: the OP does not implement them, so listing
-	// them would hand callers a seed value no client could use.
-	fapi2Allowed := []string{"private_key_jwt"}
+	fapi2Allowed := []string{"private_key_jwt", "tls_client_auth", "self_signed_tls_client_auth"}
 
 	cases := []struct {
 		name string
@@ -384,5 +381,33 @@ func TestRequiresPAR(t *testing.T) {
 				t.Errorf("RequiresPAR(%s) = %v, want %v", tc.in, got, tc.want)
 			}
 		})
+	}
+}
+
+func TestFAPI2OnlyPredicates(t *testing.T) {
+	t.Parallel()
+
+	predicates := map[string]func(profile.Profile) bool{
+		"RequiresIssuerAssertionAudience": profile.RequiresIssuerAssertionAudience,
+		"ForbidsRefreshTokenRotation":     profile.ForbidsRefreshTokenRotation,
+	}
+	cases := []struct {
+		in   profile.Profile
+		want bool
+	}{
+		{profile.OAuth21, false},
+		{profile.OIDCCore, false},
+		{profile.FAPI2Baseline, true},
+		{profile.FAPI2MessageSigning, true},
+		{profile.FAPICIBA, false},
+		{profile.Profile(0), false},
+		{profile.Profile(99), false},
+	}
+	for name, pred := range predicates {
+		for _, tc := range cases {
+			if got := pred(tc.in); got != tc.want {
+				t.Errorf("%s(%s) = %v, want %v", name, tc.in, got, tc.want)
+			}
+		}
 	}
 }

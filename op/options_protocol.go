@@ -1,11 +1,15 @@
 package op
 
-import "time"
+import (
+	"net/http"
+	"time"
+)
 
 // BackchannelAllowsPrivateNetwork reports whether
-// [WithAllowPrivateNetworkBackchannel] was applied to this config. The
-// wiring layer (op_builders.go) consults the accessor when constructing the back-channel deliverer so the
-// per-config gate flows through to the SSRF check.
+// [WithAllowPrivateNetwork] listed [OutboundBackchannel] on this config.
+// The wiring layer (op_builders.go) consults the accessor when
+// constructing the back-channel deliverer so the per-config gate flows
+// through to the SSRF check.
 //
 // The accessor is the only path through which the SSRF gate's
 // inversion is exposed to the wiring layer; tests that need to
@@ -17,78 +21,103 @@ func (c *config) BackchannelAllowsPrivateNetwork() bool {
 	return c.backchannelAllowPrivateNetwork
 }
 
-// WithAllowPrivateNetworkBackchannel suppresses the SSRF deny-list
-// the back-channel logout deliverer applies to RP-controlled
-// backchannel_logout_uri values. Without it the deliverer rejects
-// loopback / link-local / RFC 1918 / IPv6 ULA destinations, so a
-// hostile RP cannot register backchannel_logout_uri =
-// "http://127.0.0.1/..." or "http://169.254.169.254/..." and have the
-// OP POST a signed logout_token at an internal service.
-//
-// Embedders that front their RPs with private DNS — typical in
-// service-mesh deployments where the RP and the OP share a pod
-// network — opt in with this option. This is network reach for
-// deployments whose relying parties live on a private network; it is
-// legitimate in production, not a development-only option, and [New] logs
-// one line naming what it widens: INFO, or WARN when open dynamic
-// registration or Client ID Metadata Documents is enabled too, since an
-// unauthenticated caller can then supply a backchannel_logout_uri of its
-// choosing (SSRF exposure). It flips the gate at the
-// deliverer level only; the other fetchers keep their own
-// WithAllowPrivateNetwork* flags ([WithAllowPrivateNetworkJWKS],
-// [WithAllowPrivateNetworkJAR], ...) so private-network access granted
-// to one never widens another. Repeating the option is a no-op.
+// BackchannelLogout tunes the back-channel logout fan-out ([WithBackchannelLogout]).
+// A zero field selects the library default.
 //
 // Stable since v1.5.
-func WithAllowPrivateNetworkBackchannel() Option {
-	return optionFunc(func(c *config) error {
-		if err := c.claimFlag(slotBackchannelAllowPrivateNetwork, "WithAllowPrivateNetworkBackchannel"); err != nil {
-			return err
-		}
-		c.backchannelAllowPrivateNetwork = true
-		return nil
-	})
+type BackchannelLogout struct {
+	// Transport is the [http.RoundTripper] the coordinator uses when
+	// POSTing Logout Tokens to relying parties. Most embedders do not need
+	// it — the default is correct for the spec posture. Supply one for
+	// shared instrumentation or an internal CA.
+	//
+	// The coordinator always applies [BackchannelLogout.Timeout], rejects
+	// redirects, and checks every request URL against the SSRF deny-list.
+	// A nil Transport or an [*http.Transport] also gets the dial-time
+	// check: the transport is cloned and its DialContext, DialTLSContext
+	// and DialTLS are replaced by the OP's gated dialer, so the proxy, TLS
+	// and pool settings carry over but a custom dial function does not.
+	// Through a proxy the dial-time check covers the proxy's address; the
+	// target URL is checked once before the hand-off and the proxy resolves
+	// it independently. Any other [http.RoundTripper] (an otelhttp wrap,
+	// for instance) is gated on the request URL only, which does not stop a
+	// DNS-rebinding peer that resolves public when the URL is checked and
+	// private when it is dialled.
+	Transport http.RoundTripper
+
+	// Timeout caps the time the OP spends waiting for a single relying
+	// party to acknowledge a Logout Token POST. The budget applies per RP;
+	// the coordinator dispatches in parallel, so a slow RP does not delay
+	// deliveries to its peers. Zero selects the default of 5 seconds. Keep
+	// the value low — back-channel logout is best-effort, and a long
+	// timeout merely keeps the OP holding state on a likely-broken RP. A
+	// negative value fails [New].
+	Timeout time.Duration
+
+	// FanOutBudget caps the total wall-clock time one back-channel logout
+	// fan-out may occupy. The /end_session handler terminates the OP-side
+	// session, starts the fan-out on a detached context, and answers the
+	// browser immediately, so this budget — not the end-user's request — is
+	// what bounds the lifetime of the outbound work.
+	//
+	// The budget is a whole-event cap and is therefore distinct from
+	// Timeout, which bounds a single RP's POST. The two compose: an
+	// audience larger than the delivery worker pool is notified in waves,
+	// so the per-RP timeout alone would let a fully unresponsive audience
+	// occupy many multiples of itself. Deliveries abandoned when the budget
+	// elapses fail with the context error and raise
+	// [AuditLogoutBackChannelFailed], so an under-sized budget is visible
+	// in the audit stream rather than silent.
+	//
+	// Zero selects the library default of 30 seconds, which suits an
+	// audience of a few dozen responsive RPs. Raise it for deployments
+	// where one subject holds grants with many RPs; lower it where the
+	// deployment would rather shed a slow logout than hold outbound
+	// connections open. "No budget" is not expressible — an unbounded
+	// fan-out would outlive any shutdown deadline [Provider.Shutdown] is
+	// given — so a negative value fails [New].
+	FanOutBudget time.Duration
 }
 
-// slotBackchannelAllowPrivateNetwork is the claim key of the
-// back-channel private-network setting.
-const slotBackchannelAllowPrivateNetwork = "backchannelAllowPrivateNetwork"
-
-// WithBackchannelFanOutBudget caps the total wall-clock time one
-// back-channel logout fan-out may occupy. The /end_session handler
-// terminates the OP-side session, starts the fan-out on a detached
-// context, and answers the browser immediately, so this budget — not
-// the end-user's request — is what bounds the lifetime of the
-// outbound work.
+// WithBackchannelLogout tunes the OpenID Connect Back-Channel Logout 1.0
+// delivery: the outbound transport, the per-RP timeout and the whole
+// fan-out budget. Zero fields in b keep their defaults, and not calling the
+// option keeps all of them.
 //
-// The budget is a whole-event cap and is therefore distinct from
-// [WithBackchannelLogoutTimeout], which bounds a single RP's POST.
-// The two compose: an audience larger than the delivery worker pool
-// is notified in waves, so the per-RP timeout alone would let a fully
-// unresponsive audience occupy many multiples of itself. Deliveries
-// abandoned when the budget elapses fail with the context error and
-// raise [AuditLogoutBackChannelFailed], so an under-sized budget is
-// visible in the audit stream rather than silent.
+// # Delivery integrity
 //
-// Not calling the option selects the library default of 30 seconds,
-// which suits an audience of a few dozen responsive RPs. Raise it for
-// deployments where one subject holds grants with many RPs; lower it
-// where the deployment would rather shed a slow logout than hold
-// outbound connections open. A non-positive duration is rejected at
-// the option site — "no budget" is not an expressible posture,
-// because an unbounded fan-out would outlive any shutdown deadline
-// [Provider.Shutdown] is given.
+// Back-channel logout fan-out walks the active grants the OP
+// remembers for the terminating subject. The walk's coverage is
+// bounded by the durability of the [op/store.SessionStore] and the
+// [op/store.GrantStore] backing the OP: under volatile placement
+// (Redis without persistence, Memcached, in-memory under maxmemory
+// eviction) a session evicted between establishment and logout
+// silently removes the rows the coordinator would walk, narrowing
+// OIDC Back-Channel Logout 1.0 §2.7's best-effort floor to zero.
+// Embedders who require at-least-once delivery for every initiated
+// logout MUST route SessionStore to a durable backend; the
+// `bcl.no_sessions_for_subject` audit event ([AuditBCLNoSessionsForSubject])
+// surfaces the gap when it actually fires. Declare the chosen
+// posture through [WithSessionDurabilityPosture] so the audit
+// signal carries the embedder's intent.
 //
-// Stable since v1.1.
-func WithBackchannelFanOutBudget(d time.Duration) Option {
+// At most one call is accepted; a second call fails [New].
+//
+// Stable since v1.5.
+func WithBackchannelLogout(b BackchannelLogout) Option {
 	return optionFunc(func(c *config) error {
-		if err := c.claimOnce("WithBackchannelFanOutBudget"); err != nil {
+		if err := c.claimOnce("WithBackchannelLogout"); err != nil {
 			return err
 		}
-		if d <= 0 {
-			return newConfigurationError("WithBackchannelFanOutBudget requires a positive duration", nil)
+		if b.Timeout < 0 {
+			return newConfigurationError("WithBackchannelLogout: Timeout must not be negative (zero selects the default)", nil)
 		}
-		c.backchannelFanOutBudget = d
+		if b.FanOutBudget < 0 {
+			return newConfigurationError("WithBackchannelLogout: FanOutBudget must not be negative (zero selects the default)", nil)
+		}
+		c.backchannelLogoutTransport = b.Transport
+		c.backchannelLogoutTimeout = b.Timeout
+		c.backchannelFanOutBudget = b.FanOutBudget
 		return nil
 	})
 }

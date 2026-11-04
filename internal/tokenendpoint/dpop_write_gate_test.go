@@ -47,7 +47,7 @@ func writeGateProof(tb testing.TB, f *fixture, jti string) string {
 	}
 	token, err := jwt.Signed(signer).Claims(map[string]any{
 		"htm": http.MethodPost,
-		"htu": f.endpoint,
+		"htu": f.htu(),
 		"iat": f.clock.now.Unix(),
 		"jti": jti,
 	}).Serialize()

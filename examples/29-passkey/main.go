@@ -212,15 +212,16 @@ func run() error {
 		op.WithCookieKeys(keys.CookieKey),
 		op.WithProfile(profile.OAuth21),
 		op.WithLoginFlow(flow),
-		// Both halves of this example need it. The issuer is
+		// Both halves of this example need an opt-in. The issuer is
 		// http://localhost:8080 and the RP's redirect_uri is on
 		// localhost too, and neither is admitted by default: the
 		// textual host can be DNS-hijacked, so the library restricts
 		// plain http to IP literals. WebAuthn leaves no other option
 		// locally — an RP ID must be a domain, and browsers reject an
-		// IP. Production fronts the OP with TLS and this option comes
+		// IP. Production fronts the OP with TLS and both options come
 		// back off.
-		op.WithAllowLocalhostLoopback(),
+		op.WithAllowLocalhostIssuerForDev(),
+		op.WithAllowLocalhostRedirectURIs(),
 		op.WithUI(op.SPAUI{
 			LoginMount: "/login",
 			StaticDir:  staticDir,

@@ -197,14 +197,15 @@ func writeJARError(w http.ResponseWriter, err error) {
 // only checks the bool.
 func authenticateWithDPoP(w http.ResponseWriter, r *http.Request, deps Deps) (string, *store.Client, bool) {
 	return endpointsupport.AuthenticateWithDPoP(w, r,
-		dpop.Gate{Verifier: deps.DPoP, Nonces: deps.DPoPNonces},
+		dpop.Gate{Verifier: deps.DPoP, Nonces: deps.DPoPNonces, HTU: deps.DPoPHTU},
 		endpointsupport.AuthenticateOpts{
-			Clients:           deps.Clients,
-			SecretVerifier:    deps.SecretVerifier,
-			AssertionVerifier: deps.AssertionVerifier,
-			AllowedMethods:    deps.AllowedClientAuthMethods,
-			Now:               deps.now(),
-			Audit:             deps.auditEmitter(),
+			Clients:             deps.Clients,
+			SecretVerifier:      deps.SecretVerifier,
+			AssertionVerifier:   deps.AssertionVerifier,
+			CertificateVerifier: deps.CertificateVerifier,
+			AllowedMethods:      deps.AllowedClientAuthMethods,
+			Now:                 deps.now(),
+			Audit:               deps.auditEmitter(),
 		},
 		"client authentication failed at PAR endpoint",
 	)

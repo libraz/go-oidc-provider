@@ -284,11 +284,12 @@ func validateIssue(in IssueInput) error {
 // Exchanger consumes refresh tokens and validates the rotation contract.
 // It is immutable after construction and safe for concurrent use.
 type Exchanger struct {
-	store        store.RefreshTokenStore
-	clock        func() time.Time
-	graceTTL     time.Duration
-	audit        audit.Emitter
-	deferCascade bool
+	store            store.RefreshTokenStore
+	clock            func() time.Time
+	graceTTL         time.Duration
+	audit            audit.Emitter
+	deferCascade     bool
+	rotationDisabled bool
 }
 
 // ExchangerConfig is the parameter bundle for [NewExchanger].
@@ -340,6 +341,16 @@ type ExchangerConfig struct {
 	// in both the commit and the rollback direction: the replay is the
 	// finding regardless of what became of the rotation.
 	DeferReplayCascade bool
+
+	// RotationDisabled makes [Exchanger.Exchange] read the presented
+	// token without consuming it, so it stays redeemable until it
+	// expires or is revoked and the caller MUST NOT mint a successor.
+	// [Exchanged.ConsumedID] then names the presented token. GraceTTL is
+	// not consulted: with nothing rotated there is no window to absorb.
+	// A presented record that is already consumed or revoked still takes
+	// the replay path, so a token rotated before the setting changed, or
+	// one a cascade retired, is refused the same way.
+	RotationDisabled bool
 }
 
 // NewExchanger constructs an [Exchanger] from cfg.
@@ -357,11 +368,12 @@ func NewExchanger(cfg ExchangerConfig) (*Exchanger, error) {
 	}
 	em := audit.OrDiscard(cfg.Audit)
 	return &Exchanger{
-		store:        cfg.Store,
-		clock:        clock,
-		graceTTL:     graceTTL,
-		audit:        em,
-		deferCascade: cfg.DeferReplayCascade,
+		store:            cfg.Store,
+		clock:            clock,
+		graceTTL:         graceTTL,
+		audit:            em,
+		deferCascade:     cfg.DeferReplayCascade,
+		rotationDisabled: cfg.RotationDisabled,
 	}, nil
 }
 
@@ -493,10 +505,15 @@ type Exchanged struct {
 // is returned; outside it [ErrTokenReplayed] is surfaced and the chain is
 // retired, inline or through the caller's later
 // [Exchanger.RevokeReplayedChain] depending on
-// [ExchangerConfig.DeferReplayCascade].
+// [ExchangerConfig.DeferReplayCascade]. Under
+// [ExchangerConfig.RotationDisabled] the token is read rather than
+// consumed and no grace window applies.
 func (e *Exchanger) Exchange(ctx context.Context, in ExchangeInput) (*Exchanged, error) {
 	if in.Token == "" {
 		return nil, ErrTokenMissing
+	}
+	if e.rotationDisabled {
+		return e.exchangeWithoutRotation(ctx, in)
 	}
 	rec, err := e.store.Consume(ctx, in.Token)
 	if err == nil && rec == nil {
@@ -527,13 +544,51 @@ func (e *Exchanger) Exchange(ctx context.Context, in ExchangeInput) (*Exchanged,
 	if err != nil {
 		return nil, err
 	}
-	return &Exchanged{
+	return exchangedFrom(rec, resolvedScope), nil
+}
+
+// exchangeWithoutRotation is [Exchanger.Exchange] under
+// [ExchangerConfig.RotationDisabled]: the record is read, not consumed,
+// and validated against the same expiry, client and scope rules.
+func (e *Exchanger) exchangeWithoutRotation(ctx context.Context, in ExchangeInput) (*Exchanged, error) {
+	rec, err := e.store.Find(ctx, in.Token)
+	if err == nil && rec == nil {
+		// Same contract violation Exchange guards against on Consume.
+		err = store.ErrNotFound
+	}
+	if err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			return nil, ErrTokenMissing
+		}
+		return nil, fmt.Errorf("refresh: find: %w", err)
+	}
+	if rec.ConsumedAt != nil || rec.Revoked {
+		return nil, e.mapConsumeError(ctx, in.Token, store.ErrAlreadyConsumed)
+	}
+	if e.clock().UTC().After(rec.ExpiresAt) {
+		return nil, ErrTokenExpired
+	}
+	if rec.ClientID != in.ClientID {
+		return nil, ErrClientMismatch
+	}
+	resolvedScope, err := resolveScope(rec.Scope, in.RequestedScope)
+	if err != nil {
+		return nil, err
+	}
+	return exchangedFrom(rec, resolvedScope), nil
+}
+
+// exchangedFrom projects rec onto the [Exchanged] the token endpoint
+// consumes, with scope as the resolved request scope. ConsumedAt stays
+// zero for a record that was read rather than consumed.
+func exchangedFrom(rec *store.RefreshToken, scope []string) *Exchanged {
+	out := &Exchanged{
 		ConsumedID:            rec.ID,
 		ClientID:              rec.ClientID,
 		Subject:               rec.Subject,
 		SubjectPublic:         rec.SubjectPublic,
 		GrantID:               rec.GrantID,
-		Scope:                 resolvedScope,
+		Scope:                 scope,
 		BoundScope:            slices.Clone(rec.Scope),
 		Resource:              rec.Resource,
 		Origin:                rec.Origin,
@@ -544,13 +599,16 @@ func (e *Exchanger) Exchange(ctx context.Context, in ExchangeInput) (*Exchanged,
 		AccessTokenExtra:      cloneClaims(rec.AccessTokenExtra),
 		Claims:                cloneClaims(rec.Claims),
 		AuthorizationRecorded: rec.AuthorizationRecorded,
-		ConsumedAt:            *rec.ConsumedAt,
 		IssuedAt:              rec.CreatedAt,
 		DPoPJKT:               rec.DPoPJKT,
 		MTLSCertThumbprint:    rec.MTLSCertThumbprint,
 		Nonce:                 rec.Nonce,
 		ChainID:               rec.ChainID,
-	}, nil
+	}
+	if rec.ConsumedAt != nil {
+		out.ConsumedAt = *rec.ConsumedAt
+	}
+	return out
 }
 
 // mapConsumeError translates raw store errors into refresh sentinels and,
@@ -751,31 +809,9 @@ func (e *Exchanger) graceExchange(rec *store.RefreshToken, in ExchangeInput) (*E
 	if err != nil {
 		return nil, err
 	}
-	return &Exchanged{
-		ConsumedID:            rec.ID,
-		ClientID:              rec.ClientID,
-		Subject:               rec.Subject,
-		SubjectPublic:         rec.SubjectPublic,
-		GrantID:               rec.GrantID,
-		Scope:                 resolvedScope,
-		BoundScope:            slices.Clone(rec.Scope),
-		Resource:              rec.Resource,
-		Origin:                rec.Origin,
-		AuthTime:              rec.AuthTime,
-		ACR:                   rec.ACR,
-		AMR:                   slices.Clone(rec.AMR),
-		AuthorizationDetails:  authorize.CloneAuthorizationDetails(rec.AuthorizationDetails),
-		AccessTokenExtra:      cloneClaims(rec.AccessTokenExtra),
-		Claims:                cloneClaims(rec.Claims),
-		AuthorizationRecorded: rec.AuthorizationRecorded,
-		ConsumedAt:            *rec.ConsumedAt,
-		IssuedAt:              rec.CreatedAt,
-		DPoPJKT:               rec.DPoPJKT,
-		MTLSCertThumbprint:    rec.MTLSCertThumbprint,
-		Nonce:                 rec.Nonce,
-		ChainID:               rec.ChainID,
-		InGrace:               true,
-	}, nil
+	out := exchangedFrom(rec, resolvedScope)
+	out.InGrace = true
+	return out, nil
 }
 
 // withinGraceWindow reports whether rec is eligible for the RFC 9700

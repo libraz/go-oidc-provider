@@ -3,11 +3,11 @@
 // that user-controlled bytes (state echoed from the request, plus any
 // description that ever flows through the helpers) are properly
 // percent-encoded on the redirect surface and HTML-escaped on the
-// form_post surface, so a future refactor cannot reintroduce a Keycloak-
-// class reflective injection.
+// form_post surface, so a future refactor cannot reintroduce a
+// reflective injection of the kind other providers have shipped.
 //
 // Tracks:
-//   - GHSA-27gc-wj6x-9w55 (Keycloak, 2024) — error_description was
+//   - GHSA-27gc-wj6x-9w55 (another OP, 2024) — error_description was
 //     reflected into HTML error pages without escaping, enabling
 //     phishing / open-redirect chains. Class: CWE-79 / CWE-601.
 //

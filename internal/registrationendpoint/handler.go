@@ -141,7 +141,7 @@ type Deps struct {
 	// DNS-rebinding adversary (RFC 8252 §8.3) cannot pivot a
 	// registered http://localhost:* URI onto a host they control.
 	// Embedders flip the bit by passing
-	// [op.WithAllowLocalhostLoopback] at construction.
+	// [op.WithAllowLocalhostRedirectURIs] at construction.
 	AllowLocalhostLoopback bool
 
 	// AllowInsecureBackchannelLogoutForDev admits plain-http
@@ -150,7 +150,7 @@ type Deps struct {
 	// validation time. The default false enforces the
 	// OpenID Connect Back-Channel Logout 1.0 §2.2 https-only rule.
 	// Embedders flip the bit by passing
-	// [op.WithAllowInsecureBackchannelLogoutForDev] for dev/CI
+	// [op.WithAllowInsecureOutboundForDev] ([op.OutboundBackchannel]) for dev/CI
 	// fixtures only — production deployments leave it off.
 	AllowInsecureBackchannelLogoutForDev bool
 
@@ -171,6 +171,12 @@ type Deps struct {
 	// with invalid_client_metadata before any store write. Nil applies
 	// no restriction beyond the library-supported method set.
 	AllowedClientAuthMethods []clientauth.Method
+
+	// MTLSClientAuth reports whether the RFC 8705 §2 methods
+	// (tls_client_auth, self_signed_tls_client_auth) are admitted: the OP
+	// runs with feature.MTLS, so its endpoints can read client
+	// certificates. False refuses both as unsupported.
+	MTLSClientAuth bool
 
 	// AllowedClientSigningAlgs is the active profile's JWS alg set for
 	// client-signed input, the same set the assertion and request-object
@@ -338,7 +344,7 @@ func (d *Deps) audit() audit.Emitter {
 // profilePolicy bundles the profile-level client-authentication
 // narrowing the metadata validator applies.
 func (d *Deps) profilePolicy() profilePolicy {
-	return profilePolicy{authMethods: d.AllowedClientAuthMethods, signingAlgs: d.AllowedClientSigningAlgs, signingAlg: d.SigningAlg}
+	return profilePolicy{authMethods: d.AllowedClientAuthMethods, signingAlgs: d.AllowedClientSigningAlgs, signingAlg: d.SigningAlg, mtlsClientAuth: d.MTLSClientAuth}
 }
 
 // serve routes the request to the matching method+path handler. The

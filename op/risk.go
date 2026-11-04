@@ -1,11 +1,10 @@
 package op
 
-import "github.com/libraz/go-oidc-provider/internal/authn"
+import "github.com/libraz/go-oidc-provider/op/authn"
 
 // RiskStage / RiskDecision / RiskInput / RiskOutcome / RiskAssessor
-// are aliases for the canonical types the login orchestrator declares.
-// The op package re-exports them so embedders write `op.RiskAssessor`
-// etc.
+// are declared in [github.com/libraz/go-oidc-provider/op/authn]. The op
+// package re-exports them so embedders write `op.RiskAssessor` etc.
 
 // RiskStage is an alias for [authn.RiskStage].
 type RiskStage = authn.RiskStage

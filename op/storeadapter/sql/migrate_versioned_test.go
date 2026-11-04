@@ -354,6 +354,9 @@ func TestMigrate_VersionTableFollowsPrefix(t *testing.T) {
 	}{
 		{"prefix", []Option{WithTablePrefix("acme_")}, "acme_schema_migrations"},
 		{"naming", []Option{WithNaming(map[string]string{"clients": "partner_clients"})}, "oidc_schema_migrations"},
+		{"naming of the version table", []Option{WithNaming(map[string]string{"schema_migrations": "partner_versions"})}, "partner_versions"},
+		{"naming over prefix", []Option{WithTablePrefix("acme_"), WithNaming(map[string]string{"schema_migrations": "partner_versions"})}, "partner_versions"},
+		{"empty prefix with a named version table", []Option{WithTablePrefix(""), WithNaming(map[string]string{"schema_migrations": "partner_versions"})}, "partner_versions"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
@@ -364,7 +367,7 @@ func TestMigrate_VersionTableFollowsPrefix(t *testing.T) {
 			}
 			assertVersionRows(t, db, tc.table, "(6, false)")
 			var n int
-			if err := db.QueryRowContext(t.Context(), `SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name LIKE '%schema\_migrations' ESCAPE '\'`).Scan(&n); err != nil {
+			if err := db.QueryRowContext(t.Context(), `SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND (name LIKE '%schema\_migrations' ESCAPE '\' OR name LIKE '%versions')`).Scan(&n); err != nil {
 				t.Fatalf("count version tables: %v", err)
 			}
 			if n != 1 {

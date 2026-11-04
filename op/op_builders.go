@@ -3,6 +3,7 @@ package op
 import (
 	"context"
 	"errors"
+	"net/http"
 	"net/url"
 	"strconv"
 	"strings"
@@ -445,8 +446,12 @@ func buildMTLSVerifier(cfg *config) (*mtls.Verifier, error) {
 	if !featureEnabled(cfg.features, feature.MTLS) {
 		return nil, nil
 	}
+	proxyCfg, err := cfg.mtlsProxyConfig()
+	if err != nil {
+		return nil, err
+	}
 	v, err := mtls.NewVerifier(mtls.VerifierConfig{
-		Proxy:   loadMTLSProxyConfig(cfg),
+		Proxy:   proxyCfg,
 		RootCAs: cfg.mtlsRootCAsPool(),
 	})
 	if err != nil {
@@ -587,7 +592,7 @@ func jarEncryptionResolver(encSet *keys.EncryptionSet) jar.EncryptionResolver {
 // first use. The JAR, private_key_jwt and outbound-encryption paths each
 // read it through their own sentinel view, so a jwks_uri is cached and
 // forced-refreshed once across all of them, under one SSRF posture:
-// [WithAllowPrivateNetworkJWKS] lifts the deny-list and
+// [WithAllowPrivateNetwork] ([OutboundJWKS]) lifts the deny-list and
 // [WithJWKSHTTPTransport] supplies the transport.
 func (c *config) relyingPartyJWKS() *rpjwks.Fetcher {
 	if c.rpJWKS == nil {
@@ -652,12 +657,11 @@ type assertionVerifiers struct {
 // likewise accepts the token endpoint URL because CIBA Core 1.0 §7.1
 // explicitly permits issuer, token endpoint URL, and backchannel
 // authentication endpoint URL.
-func buildAssertionVerifiers(cfg *config) (assertionVerifiers, error) {
-	resolver, err := clientauth.NewStoreJWKSResolver(cfg.clientStore())
-	if err != nil {
-		return assertionVerifiers{}, newConfigurationError("private_key_jwt JWKS resolver construction failed", err)
-	}
-	resolver.SetURLFetcher(&jar.Fetcher{Fetcher: cfg.relyingPartyJWKS().WithFetchError(jar.ErrJWKSFetch)})
+//
+// Under [profile.RequiresIssuerAssertionAudience] every endpoint instead
+// accepts only the issuer as a single string; see
+// [buildAssertionVerifier].
+func buildAssertionVerifiers(cfg *config, resolver clientauth.JWKSResolver) assertionVerifiers {
 	tokenAud := absoluteEndpointURL(cfg, cfg.endpoints.Token)
 	parAud := absoluteEndpointURL(cfg, cfg.endpoints.PAR)
 	backchannelAud := absoluteEndpointURL(cfg, cfg.endpoints.Backchannel)
@@ -668,7 +672,35 @@ func buildAssertionVerifiers(cfg *config) (assertionVerifiers, error) {
 		Revoke:      buildAssertionVerifier(cfg, resolver, tokenAud, []string{cfg.issuer}),
 		Device:      buildAssertionVerifier(cfg, resolver, tokenAud, []string{cfg.issuer}),
 		Backchannel: buildAssertionVerifier(cfg, resolver, backchannelAud, []string{cfg.issuer, tokenAud}),
-	}, nil
+	}
+}
+
+// buildClientJWKSResolver constructs the client-key resolver every client
+// authentication method that verifies against registered keys shares:
+// private_key_jwt and self_signed_tls_client_auth. A jwks_uri client is
+// fetched through [config.relyingPartyJWKS], so the SSRF gate and the
+// JWKS transport apply to both.
+func buildClientJWKSResolver(cfg *config) (*clientauth.StoreJWKSResolver, error) {
+	resolver, err := clientauth.NewStoreJWKSResolver(cfg.clientStore())
+	if err != nil {
+		return nil, newConfigurationError("client JWKS resolver construction failed", err)
+	}
+	resolver.SetURLFetcher(&jar.Fetcher{Fetcher: cfg.relyingPartyJWKS().WithFetchError(jar.ErrJWKSFetch)})
+	return resolver, nil
+}
+
+// buildCertificateVerifier constructs the RFC 8705 §2 client-certificate
+// verifier every client-authenticating endpoint shares, or nil when
+// [feature.MTLS] is off. It reads certificates through mtlsVerifier, the
+// instance that also binds cnf.x5t#S256, so authentication and binding
+// see the same certificate.
+//
+//nolint:ireturn // the endpoint Deps field is the interface; nil means "mTLS client authentication off".
+func buildCertificateVerifier(mtlsVerifier *mtls.Verifier, resolver clientauth.JWKSResolver) clientauth.CertificateVerifier {
+	if mtlsVerifier == nil {
+		return nil
+	}
+	return &clientauth.MTLSVerifier{Certificates: mtlsVerifier, Resolver: resolver}
 }
 
 func buildAssertionVerifier(
@@ -677,7 +709,7 @@ func buildAssertionVerifier(
 	audience string,
 	auxAudiences []string,
 ) *clientauth.PrivateKeyJWTVerifier {
-	return &clientauth.PrivateKeyJWTVerifier{
+	v := &clientauth.PrivateKeyJWTVerifier{
 		Resolver:     resolver,
 		JTIStore:     cfg.store.ConsumedJTIs(),
 		Audience:     audience,
@@ -685,6 +717,12 @@ func buildAssertionVerifier(
 		Clock:        cfg.clock.Now,
 		AllowedAlgs:  cfg.clientSigningJOSEAlgs(),
 	}
+	if cfg.requireIssuerAssertionAudience() {
+		// FAPI 2.0 Security Profile §5.3.2.1: the issuer, as a string, on
+		// every client-authenticating endpoint.
+		v.Audience, v.AuxAudiences, v.SingleStringAudience = cfg.issuer, nil, true
+	}
+	return v
 }
 
 // jwtBearerDeps is the token-endpoint wiring of [WithJWTBearerGrant]:
@@ -755,6 +793,19 @@ func assertionProfileInternal(p AssertionProfile) assertiongrant.Profile {
 		return assertiongrant.ProfileIDJAG
 	}
 	return assertiongrant.ProfileJWT
+}
+
+// dpopHTU returns the "htu" values a DPoP proof sent to endpoint may
+// carry: the absolute URL discovery advertises for it and, when the
+// embedder published one, its RFC 8705 mtls_endpoint_aliases entry under
+// metadataName. Comparing against these rather than the reconstructed
+// request URL keeps proof verification independent of proxy headers.
+func dpopHTU(cfg *config, endpoint, metadataName string) []string {
+	out := []string{absoluteEndpointURL(cfg, endpoint)}
+	if alias := cfg.discoveryMetadata.MTLSEndpointAliases[metadataName]; alias != "" {
+		out = append(out, alias)
+	}
+	return out
 }
 
 // absoluteEndpointURL composes the OP's issuer with the mount prefix
@@ -845,7 +896,7 @@ func buildSessionMachinery(cfg *config) (*cookie.Codec, *sessions.Manager, error
 // the rotation lifecycle with id_tokens. The HTTP transport defaults
 // to an internal client with [backchannel.DefaultTimeout] applied;
 // embedders that need shared instrumentation override it through
-// [WithBackchannelLogoutHTTPClient].
+// [WithBackchannelLogout].
 func buildBackchannelCoordinator(cfg *config, keySet *keys.Set) (*backchannel.Coordinator, error) {
 	grants, ok := cfg.store.Grants().(store.GrantClientLister)
 	if !ok {
@@ -854,8 +905,8 @@ func buildBackchannelCoordinator(cfg *config, keySet *keys.Set) (*backchannel.Co
 	}
 	active := keySet.Active()
 	deliverer := backchannel.NewHTTPDeliverer(cfg.backchannelLogoutTimeout)
-	if cfg.backchannelLogoutHTTPClient != nil {
-		deliverer.Client = cfg.backchannelLogoutHTTPClient
+	if cfg.backchannelLogoutTransport != nil {
+		deliverer.Client = &http.Client{Transport: cfg.backchannelLogoutTransport}
 	}
 	// The deliverer's SSRF gate refuses loopback / private-network
 	// destinations by default. The two opt-ins widen it by different
@@ -864,7 +915,7 @@ func buildBackchannelCoordinator(cfg *config, keySet *keys.Set) (*backchannel.Co
 	// fixtures can POST a logout token at a stub RP bound to
 	// 127.0.0.1, matching both its own godoc and the registration
 	// validator's accept-set, while
-	// [WithAllowPrivateNetworkBackchannel] carries the wider
+	// [WithAllowPrivateNetwork] ([OutboundBackchannel]) carries the wider
 	// service-mesh meaning and is the only way to reach RFC 1918
 	// space.
 	deliverer.AllowLoopbackNetwork = cfg.allowInsecureBackchannelLogoutForDev

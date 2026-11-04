@@ -557,11 +557,11 @@ func TestPrivateKeyJWTVerifier_RejectsAlgOutsideClientPin(t *testing.T) {
 // replayed within its lifetime.
 //
 // Tracks:
-//   - CVE-2020-15222 / GHSA-mh3m-8c74-74xh (ory/fosite < 0.31.0) — jti
+//   - CVE-2020-15222 / GHSA-mh3m-8c74-74xh (an OAuth library before 0.31.0) — jti
 //     uniqueness was not enforced for private_key_jwt, so an
 //     intercepted assertion could be replayed to authenticate the
 //     client repeatedly.
-//   - GHSA-v3q9-2p3m-7g43 (ory/fosite, 2020 cluster) — same defect
+//   - GHSA-v3q9-2p3m-7g43 (the same 2020 cluster) — same defect
 //     class re-disclosed under a separate GHSA; the structural
 //     mitigation is identical (per-jti single-use within the
 //     assertion's exp window).

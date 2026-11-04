@@ -59,7 +59,7 @@ func TestExample50FAPITLSJWKS(t *testing.T) {
 		map[string]any{"alg": "ES256", "kid": "example-50-client", "typ": "JWT"},
 		map[string]any{
 			"iss": example50ClientID, "sub": example50ClientID,
-			"aud": tokenURL, "iat": now.Unix(), "exp": now.Add(time.Minute).Unix(), "jti": "example-50-assertion",
+			"aud": issuer, "iat": now.Unix(), "exp": now.Add(time.Minute).Unix(), "jti": "example-50-assertion",
 		},
 	)
 	dpop := signES256(t, clientKey,

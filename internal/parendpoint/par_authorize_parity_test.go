@@ -68,10 +68,10 @@ func newParityFixture(tb testing.TB) *fixture {
 				Type:     parityDetailType,
 				Validate: validateParityDetail,
 			}),
-			op.WithGrantManagement([]op.GrantManagementAction{
+			op.WithGrantManagement(op.GrantManagement{Actions: []op.GrantManagementAction{
 				op.GrantActionCreate,
 				op.GrantActionMerge,
-			}, false),
+			}}),
 		),
 	)
 	return &fixture{

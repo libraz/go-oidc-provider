@@ -228,8 +228,8 @@ func TestHandler_HappyPath_ClientSecretBasic(t *testing.T) {
 	}
 }
 
-// TestHandler_HappyPath_CustomPARLifetime pins the WithPARLifetime wiring
-// (op.WithPARLifetime -> config.parLifetime -> op_router -> parendpoint.
+// TestHandler_HappyPath_CustomPARLifetime pins the WithPARTTL wiring
+// (op.WithPARTTL -> config.parLifetime -> op_router -> parendpoint.
 // Deps.TTL): a non-default lifetime must reach both the advertised
 // expires_in and the persisted record's ExpiresAt, guarding the
 // option-to-wire gap class this repo is prone to.
@@ -240,7 +240,7 @@ func TestHandler_HappyPath_CustomPARLifetime(t *testing.T) {
 	clock := fixedClock{now: time.Date(2026, 4, 26, 12, 0, 0, 0, time.UTC)}
 	prov := testkit.NewProvider(t,
 		testkit.WithClock(clock),
-		testkit.WithOptions(op.WithFeature(feature.PAR), op.WithPARLifetime(lifetime)),
+		testkit.WithOptions(op.WithFeature(feature.PAR), op.WithPARTTL(lifetime)),
 	)
 	f := &fixture{prov: prov, endpoint: prov.Server.URL + "/oidc/par", clock: clock}
 

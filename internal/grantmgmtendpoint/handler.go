@@ -80,6 +80,7 @@ type Deps struct {
 	// Client-authentication wiring, identical to the sibling endpoints.
 	SecretVerifier           clientauth.SecretVerifier
 	AssertionVerifier        clientauth.AssertionVerifier
+	CertificateVerifier      clientauth.CertificateVerifier
 	AllowedClientAuthMethods []clientauth.Method
 
 	// QueryEnabled / RevokeEnabled gate the GET (query) and DELETE
@@ -181,12 +182,13 @@ func resolveOwnedGrant(w http.ResponseWriter, r *http.Request, deps Deps) (*stor
 	}
 	client, _, ok := endpointsupport.AuthenticateClient(r.Context(), w, r,
 		endpointsupport.AuthenticateOpts{
-			Clients:           deps.Clients,
-			SecretVerifier:    deps.SecretVerifier,
-			AssertionVerifier: deps.AssertionVerifier,
-			AllowedMethods:    deps.AllowedClientAuthMethods,
-			Now:               deps.now(),
-			Audit:             deps.audit(),
+			Clients:             deps.Clients,
+			SecretVerifier:      deps.SecretVerifier,
+			AssertionVerifier:   deps.AssertionVerifier,
+			CertificateVerifier: deps.CertificateVerifier,
+			AllowedMethods:      deps.AllowedClientAuthMethods,
+			Now:                 deps.now(),
+			Audit:               deps.audit(),
 		}, nil)
 	if !ok {
 		return nil, nil, false

@@ -65,6 +65,17 @@ func main() {
 	}
 }
 
+// loopbackDemoOptions admits the textual "localhost" for the loopback demo.
+// A deployment fronts the OP with TLS and leaves both off; the issuer half
+// is needed only when the demo is pointed at http://localhost.
+func loopbackDemoOptions(issuer string) []op.Option {
+	opts := []op.Option{op.WithAllowLocalhostRedirectURIs()}
+	if u, err := url.Parse(issuer); err == nil && u.Scheme == "http" && u.Hostname() == "localhost" {
+		opts = append(opts, op.WithAllowLocalhostIssuerForDev())
+	}
+	return opts
+}
+
 func run(logger *slog.Logger) error {
 	cfg, err := loadConfig()
 	if err != nil {
@@ -122,9 +133,7 @@ func run(logger *slog.Logger) error {
 		}),
 	}
 	if cfg.Insecure {
-		// Loopback demo only. A deployment fronts the OP with TLS and
-		// leaves both of these off.
-		opts = append(opts, op.WithAllowLocalhostLoopback())
+		opts = append(opts, loopbackDemoOptions(cfg.Issuer)...)
 	}
 
 	provider, err := op.New(opts...)

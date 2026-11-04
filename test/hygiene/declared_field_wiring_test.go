@@ -54,7 +54,7 @@ var declaredFieldWatch = []watchedType{
 			"a predicate cannot tell which face produced the value it reads",
 	},
 	{
-		declFile:  "internal/authn/captcha.go",
+		declFile:  "op/authn/captcha.go",
 		declName:  "CaptchaInput",
 		literals:  []string{"CaptchaInput"},
 		minSites:  1,

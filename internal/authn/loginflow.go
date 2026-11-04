@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	opauthn "github.com/libraz/go-oidc-provider/op/authn"
 	"github.com/libraz/go-oidc-provider/op/interaction"
 )
 
@@ -82,15 +83,12 @@ type LoginFlowStep struct {
 
 // UnenrolledPolicy is what a one-of step does when the subject has none
 // of its factors enrolled.
-type UnenrolledPolicy int
+type UnenrolledPolicy = opauthn.UnenrolledPolicy
 
+// UnenrolledPolicy values.
 const (
-	// UnenrolledDeny ends the attempt with [ErrFactorNotEnrolled].
-	UnenrolledDeny UnenrolledPolicy = iota
-
-	// UnenrolledSkip passes over the step without completing it, so it
-	// raises neither the level nor the amr.
-	UnenrolledSkip
+	UnenrolledDeny = opauthn.UnenrolledDeny
+	UnenrolledSkip = opauthn.UnenrolledSkip
 )
 
 // LoginFlowRule is the projection of a public [op.Rule] for the

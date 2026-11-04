@@ -90,7 +90,7 @@ type Options struct {
 
 	// OptIn spells the public option that lifts the private-network
 	// deny-list for this client (for example
-	// "op.WithAllowPrivateNetworkJWKS()"). When non-empty, a
+	// "op.WithAllowPrivateNetwork(op.OutboundJWKS)"). When non-empty, a
 	// private-network refusal names it so the operator knows what to
 	// set. Cloud-metadata refusals never carry it: no option lifts them.
 	OptIn string

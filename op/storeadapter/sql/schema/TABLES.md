@@ -19,7 +19,9 @@ column) and names every missing one in a single error, so a run against an
 empty database lists what the configuration needs. `Store.ValidateSchema`,
 the deploy gate, checks every table. `WithTablePrefix` replaces the `oidc_`
 prefix of every name and `WithNaming` renames one table through its key; the
-columns are fixed.
+columns are fixed. `Store.Migrate` records its progress in a version table that
+`WithTablePrefix` renames too and the `schema_migrations` key names; the DDL
+does not create it and the schema checks do not look for it.
 
 ## Which tables a configuration reads
 
@@ -83,6 +85,11 @@ Substore: `Store.Clients()`
 - `resources`
 - `token_endpoint_auth_method`
 - `token_endpoint_auth_signing_alg`
+- `tls_client_auth_subject_dn` (v1.5.0)
+- `tls_client_auth_san_dns` (v1.5.0)
+- `tls_client_auth_san_uri` (v1.5.0)
+- `tls_client_auth_san_ip` (v1.5.0)
+- `tls_client_auth_san_email` (v1.5.0)
 - `secret_hash`
 - `previous_secret_hash` (v1.5.0)
 - `previous_secret_expires_at` (v1.5.0)

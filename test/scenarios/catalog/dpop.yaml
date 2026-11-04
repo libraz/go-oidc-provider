@@ -518,3 +518,17 @@ rows:
       a handler-level test can satisfy both halves by setting the flag
       itself while nothing sets it in a real provider.
     status: active
+
+  - id: DPOP-051
+    severity: P0
+    spec: RFC 9449 §4.3 + RFC 8705 §5
+    shape: value
+    behaviour: |
+      At an OP endpoint the proof htu is compared with the absolute URL
+      the OP advertises for that endpoint (issuer origin, mount prefix,
+      endpoint path) or with its published mtls_endpoint_aliases URL,
+      not with the URL the request reconstructs to. A proof naming the
+      listener's own address, or another advertised endpoint, is
+      rejected with 400 invalid_request "DPoP proof does not bind to
+      this request".
+    status: active

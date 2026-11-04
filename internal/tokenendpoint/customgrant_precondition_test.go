@@ -29,7 +29,7 @@ import (
 // handler that runs but returns a response violating a registered limit
 // has its whole response discarded rather than partially honoured.
 //
-// Tracks: CVE-2026-1486 (Keycloak) — the JWT authorization-grant path
+// Tracks: CVE-2026-1486 (another OP) — the JWT authorization-grant path
 // issued tokens without checking that the backing identity provider was
 // enabled, skipping an authorisation gate on the issuance path itself.
 func TestCustomGrant_NoTokenEscapesAFailedPrecondition(t *testing.T) {

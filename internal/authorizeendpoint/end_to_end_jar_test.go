@@ -379,7 +379,7 @@ func TestEndToEnd_JAR_RequestURIServedAndConsumed(t *testing.T) {
 	// allow-private path is wired AND that the URI must be in the
 	// allowlist — but httptest binds to loopback so the SSRF check
 	// fires first and the test asserts that path instead. (A future
-	// op.WithAllowPrivateNetworkJAR option would let this case
+	// op.WithAllowPrivateNetwork(op.OutboundJAR) option would let this case
 	// exercise the success path against httptest; for now we land on
 	// the deny.)
 	updated, err := h.tk.Store.GetClient(context.Background(), h.rpID)

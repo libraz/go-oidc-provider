@@ -199,52 +199,52 @@ func TestNew_LogsPrivateNetworkReach(t *testing.T) {
 		level   string
 		wantMsg string
 	}{
-		{name: "JWKS alone", option: "WithAllowPrivateNetworkJWKS", reach: op.WithAllowPrivateNetworkJWKS(), level: "INFO"},
-		{name: "JAR alone", option: "WithAllowPrivateNetworkJAR", reach: op.WithAllowPrivateNetworkJAR(), level: "INFO"},
-		{name: "Sector alone", option: "WithAllowPrivateNetworkSector", reach: op.WithAllowPrivateNetworkSector(), level: "INFO"},
+		{name: "JWKS alone", option: "WithAllowPrivateNetwork(op.OutboundJWKS)", reach: op.WithAllowPrivateNetwork(op.OutboundJWKS), level: "INFO"},
+		{name: "JAR alone", option: "WithAllowPrivateNetwork(op.OutboundJAR)", reach: op.WithAllowPrivateNetwork(op.OutboundJAR), level: "INFO"},
+		{name: "Sector alone", option: "WithAllowPrivateNetwork(op.OutboundSector)", reach: op.WithAllowPrivateNetwork(op.OutboundSector), level: "INFO"},
 		{
-			name: "ClientIDMetadata alone", option: "WithAllowPrivateNetworkClientIDMetadata",
-			reach: op.WithAllowPrivateNetworkClientIDMetadata(), level: "INFO",
+			name: "ClientIDMetadata alone", option: "WithAllowPrivateNetwork(op.OutboundClientIDMetadata)",
+			reach: op.WithAllowPrivateNetwork(op.OutboundClientIDMetadata), level: "INFO",
 		},
 		{
-			name: "Backchannel alone", option: "WithAllowPrivateNetworkBackchannel",
-			reach: op.WithAllowPrivateNetworkBackchannel(), level: "INFO",
+			name: "Backchannel alone", option: "WithAllowPrivateNetwork(op.OutboundBackchannel)",
+			reach: op.WithAllowPrivateNetwork(op.OutboundBackchannel), level: "INFO",
 		},
 		{
-			name: "SharedSignals alone", option: "WithAllowPrivateNetworkSharedSignals",
-			reach: op.WithAllowPrivateNetworkSharedSignals(), level: "INFO",
+			name: "SharedSignals alone", option: "WithAllowPrivateNetwork(op.OutboundSharedSignals)",
+			reach: op.WithAllowPrivateNetwork(op.OutboundSharedSignals), level: "INFO",
 		},
 		{
-			name: "JWKS with IAT-gated registration", option: "WithAllowPrivateNetworkJWKS",
-			reach: op.WithAllowPrivateNetworkJWKS(), others: []op.Option{iatDCR}, level: "INFO",
+			name: "JWKS with IAT-gated registration", option: "WithAllowPrivateNetwork(op.OutboundJWKS)",
+			reach: op.WithAllowPrivateNetwork(op.OutboundJWKS), others: []op.Option{iatDCR}, level: "INFO",
 		},
 		{
-			name: "JWKS with open registration", option: "WithAllowPrivateNetworkJWKS",
-			reach: op.WithAllowPrivateNetworkJWKS(), others: []op.Option{openDCR}, level: "WARN",
+			name: "JWKS with open registration", option: "WithAllowPrivateNetwork(op.OutboundJWKS)",
+			reach: op.WithAllowPrivateNetwork(op.OutboundJWKS), others: []op.Option{openDCR}, level: "WARN",
 			wantMsg: "open dynamic registration",
 		},
 		{
-			name: "Sector with open registration", option: "WithAllowPrivateNetworkSector",
-			reach: op.WithAllowPrivateNetworkSector(), others: []op.Option{openDCR}, level: "WARN",
+			name: "Sector with open registration", option: "WithAllowPrivateNetwork(op.OutboundSector)",
+			reach: op.WithAllowPrivateNetwork(op.OutboundSector), others: []op.Option{openDCR}, level: "WARN",
 			wantMsg: "SSRF exposure",
 		},
 		{
-			name: "JAR with client ID metadata documents", option: "WithAllowPrivateNetworkJAR",
-			reach: op.WithAllowPrivateNetworkJAR(), others: []op.Option{cimd}, level: "WARN",
+			name: "JAR with client ID metadata documents", option: "WithAllowPrivateNetwork(op.OutboundJAR)",
+			reach: op.WithAllowPrivateNetwork(op.OutboundJAR), others: []op.Option{cimd}, level: "WARN",
 			wantMsg: "Client ID Metadata Documents",
 		},
 		{
-			name: "Backchannel with open registration", option: "WithAllowPrivateNetworkBackchannel",
-			reach: op.WithAllowPrivateNetworkBackchannel(), others: []op.Option{openDCR}, level: "WARN",
+			name: "Backchannel with open registration", option: "WithAllowPrivateNetwork(op.OutboundBackchannel)",
+			reach: op.WithAllowPrivateNetwork(op.OutboundBackchannel), others: []op.Option{openDCR}, level: "WARN",
 			wantMsg: "open dynamic registration",
 		},
 		{
-			name: "Backchannel with IAT-gated registration", option: "WithAllowPrivateNetworkBackchannel",
-			reach: op.WithAllowPrivateNetworkBackchannel(), others: []op.Option{iatDCR}, level: "INFO",
+			name: "Backchannel with IAT-gated registration", option: "WithAllowPrivateNetwork(op.OutboundBackchannel)",
+			reach: op.WithAllowPrivateNetwork(op.OutboundBackchannel), others: []op.Option{iatDCR}, level: "INFO",
 		},
 		{
-			name: "SharedSignals with open registration", option: "WithAllowPrivateNetworkSharedSignals",
-			reach: op.WithAllowPrivateNetworkSharedSignals(), others: []op.Option{openDCR}, level: "INFO",
+			name: "SharedSignals with open registration", option: "WithAllowPrivateNetwork(op.OutboundSharedSignals)",
+			reach: op.WithAllowPrivateNetwork(op.OutboundSharedSignals), others: []op.Option{openDCR}, level: "INFO",
 		},
 	}
 	for _, tc := range cases {

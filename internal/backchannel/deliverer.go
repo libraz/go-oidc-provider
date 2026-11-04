@@ -100,7 +100,7 @@ type HTTPDeliverer struct {
 	// rejects loopback / link-local / RFC 1918 hosts so an
 	// attacker-controlled backchannel_logout_uri cannot pivot the OP
 	// onto an internal service. Embedders fronting their RPs with
-	// private DNS opt in via op.WithAllowPrivateNetworkBackchannel.
+	// private DNS opt in via op.WithAllowPrivateNetwork(op.OutboundBackchannel).
 	AllowPrivateNetwork bool
 
 	// AllowLoopbackNetwork is the narrow counterpart of
@@ -108,7 +108,7 @@ type HTTPDeliverer struct {
 	// (127.0.0.0/8, ::1, and the textual loopback names, the latter
 	// only when they resolve to a loopback address) and leaves every
 	// other deny-listed range — link-local, RFC 1918, IPv6 ULA, cloud
-	// metadata — refused. op.WithAllowInsecureBackchannelLogoutForDev
+	// metadata — refused. op.WithAllowInsecureOutboundForDev(op.OutboundBackchannel)
 	// sets this flag rather than AllowPrivateNetwork so the dev opt-in
 	// delivers exactly the destination set its godoc promises.
 	AllowLoopbackNetwork bool

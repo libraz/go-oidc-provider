@@ -279,7 +279,7 @@ func TestNew_RecordsBackchannelCoordinator(t *testing.T) {
 			Authenticator: shutdownFixtureAuthenticator{},
 			KindLabel:     "fixture.primary",
 		}}),
-		WithBackchannelFanOutBudget(3*time.Second),
+		WithBackchannelLogout(BackchannelLogout{FanOutBudget: 3 * time.Second}),
 	)
 	if err != nil {
 		t.Fatalf("New: %v", err)

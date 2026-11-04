@@ -264,28 +264,36 @@ func (c *config) emitPartialWiringWarnings() {
 	}
 	if c.allowInsecureBackchannelLogoutForDev {
 		log.Warn(
-			"WithAllowInsecureBackchannelLogoutForDev admits plain-http "+
+			insecureOutboundOption(OutboundBackchannel)+" admits plain-http "+
 				"loopback URLs for backchannel_logout_uri and lets the "+
 				"deliverer POST a signed logout token at a loopback "+
 				"address; never enable this in production",
-			"option", "WithAllowInsecureBackchannelLogoutForDev",
+			"option", insecureOutboundOption(OutboundBackchannel),
 		)
 	}
 	if c.allowInsecureSharedSignalsPushForDev {
 		log.Warn(
-			"WithAllowInsecureSharedSignalsPushForDev admits plain-http "+
+			insecureOutboundOption(OutboundSharedSignals)+" admits plain-http "+
 				"and loopback push endpoints for shared-signals streams and "+
 				"lets the push worker POST security event tokens there; "+
 				"never enable this in production",
-			"option", "WithAllowInsecureSharedSignalsPushForDev",
+			"option", insecureOutboundOption(OutboundSharedSignals),
 		)
 	}
-	if c.allowLocalhostLoopback {
+	if c.allowLocalhostRedirectURIs {
 		log.Warn(
-			"WithAllowLocalhostLoopback is a development option: it admits the "+
-				"textual \"localhost\" host in redirect_uri and in the issuer, "+
-				"whose resolution can be hijacked; never enable this in production",
-			"option", "WithAllowLocalhostLoopback",
+			"WithAllowLocalhostRedirectURIs admits the textual \"localhost\" host in "+
+				"redirect_uri and post_logout_redirect_uris, whose resolution can be "+
+				"hijacked (RFC 8252 §8.3); keep it to native clients that listen on localhost",
+			"option", "WithAllowLocalhostRedirectURIs",
+		)
+	}
+	if c.allowLocalhostIssuer {
+		log.Warn(
+			"WithAllowLocalhostIssuerForDev is a development option: it admits the "+
+				"textual \"localhost\" host in the issuer, whose resolution can be "+
+				"hijacked; never enable this in production",
+			"option", "WithAllowLocalhostIssuerForDev",
 		)
 	}
 	if featureEnabled(c.features, feature.PKCE) {
@@ -300,7 +308,6 @@ func (c *config) emitPartialWiringWarnings() {
 	c.infoMissingStoreCapabilities()
 	c.warnSessionDurabilityMismatch()
 	c.warnCaptchaOnScriptlessUI()
-	c.warnMTLSOptionsWithoutFeature()
 	c.warnEncryptionKidlessTrialCap()
 	c.warnNoLogger()
 	c.warnUnenabledSeedGrants()
@@ -324,50 +331,6 @@ func (c *config) warnSessionDurabilityMismatch() {
 			"the posture only labels back-channel logout audit events",
 		"option", "WithSessionDurabilityPosture",
 	)
-}
-
-// warnMTLSOptionsWithoutFeature reports mTLS knobs configured on an OP
-// that has no mTLS verifier to apply them.
-//
-// [buildMTLSVerifier] returns a nil verifier unless [feature.MTLS] is
-// enabled, and every consumer reads nil as "mTLS off". The recorded
-// [WithMTLSProxy] allow-list and [WithMTLSRootCAs] pool are then never
-// read: no certificate is selected from the forwarded header, no chain
-// is checked, and no cnf.x5t#S256 is stamped. The request still
-// succeeds, so the deployment issues plain bearer tokens while its
-// configuration says the tokens are certificate-bound — and
-// [MTLSProxyConfig] reads the recorded value back unchanged, which is
-// what makes the gap invisible from the embedder's side.
-//
-// Reported rather than rejected because both options are legitimately
-// set ahead of the feature flag — a deployment staging its proxy
-// allow-list before turning binding on, or sharing one option slice
-// across environments that enable the feature selectively. Rejecting
-// would break those without making any deployment safer than a line
-// naming the missing flag does.
-func (c *config) warnMTLSOptionsWithoutFeature() {
-	if featureEnabled(c.features, feature.MTLS) {
-		return
-	}
-	for _, o := range []struct {
-		configured bool
-		option     string
-	}{
-		{c.mtlsProxy.header != "" || len(c.mtlsProxy.trusted) > 0, "WithMTLSProxy"},
-		{c.mtlsRootCAs != nil, "WithMTLSRootCAs"},
-	} {
-		if !o.configured {
-			continue
-		}
-		c.startupLog().Warn(
-			o.option+" is configured but the mTLS feature is not enabled, so the "+
-				"OP builds no certificate verifier and never reads the value: "+
-				"client certificates are ignored and access tokens are issued as "+
-				"plain bearer tokens with no cnf.x5t#S256 confirmation. Add "+
-				"WithFeature(feature.MTLS) to make the setting take effect",
-			"option", o.option,
-		)
-	}
 }
 
 // warnCaptchaOnScriptlessUI reports a captcha challenge scheduled behind

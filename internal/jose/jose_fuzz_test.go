@@ -52,7 +52,7 @@ import (
 func FuzzJOSEParse(f *testing.F) {
 	// Seed: alg=none compact JWS — historically devastating to JWT
 	// libs. Tracks CVE-2015-2951 (jose4j) and the broader 2015
-	// "alg=none" disclosure (Auth0 advisory).
+	// "alg=none" disclosure (published advisory).
 	f.Add(`eyJhbGciOiJub25lIiwidHlwIjoiSldUIn0.eyJzdWIiOiJhbGljZSJ9.`)
 	// Seed: alg=HS256 — symmetric algorithm must be rejected. Tracks
 	// CVE-2015-9235 (jsonwebtoken) and CVE-2016-10555 (jwt-simple).

@@ -217,7 +217,7 @@ var ErrUserStoreRequired = &Error{
 //
 // The scheme MUST be https, except that http is admitted for development when
 // the host is a loopback IP literal in 127.0.0.0/8 or [::1] — or, once
-// [WithAllowLocalhostLoopback] has been supplied, the textual host
+// [WithAllowLocalhostIssuerForDev] has been supplied, the textual host
 // "localhost". The textual host needs the opt-in because its resolution can be
 // hijacked (RFC 8252 §7.3) while an IP literal's cannot.
 //
@@ -225,7 +225,7 @@ var ErrUserStoreRequired = &Error{
 // it broke, with ErrIssuerInvalid as its cause; match it with [errors.Is].
 var ErrIssuerInvalid = &Error{
 	Code:        codeConfiguration,
-	Description: "issuer must be an absolute URL with no trailing slash, query, or fragment (https; http permitted only for loopback IP literals; pass op.WithAllowLocalhostLoopback() to also admit the textual \"localhost\" host)",
+	Description: "issuer must be an absolute URL with no trailing slash, query, or fragment (https; http permitted only for loopback IP literals; pass op.WithAllowLocalhostIssuerForDev() to also admit the textual \"localhost\" host)",
 }
 
 // ErrKeysetRequired is returned by [New] when [WithKeyset] is not supplied or

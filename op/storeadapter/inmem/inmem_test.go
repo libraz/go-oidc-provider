@@ -168,7 +168,7 @@ func TestConsumePAR_Race(t *testing.T) {
 // concurrent presentations of the same refresh token must have exactly
 // one successful consumer, with every other racer observing replay.
 //
-// Tracks: CVE-2026-1035 (Keycloak; refresh token reuse bypass via a
+// Tracks: CVE-2026-1035 (another OP; refresh token reuse bypass via a
 // TOCTOU race in rotation enforcement).
 func TestConsumeRefresh_Race(t *testing.T) {
 	t.Parallel()

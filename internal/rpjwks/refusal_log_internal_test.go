@@ -12,7 +12,7 @@ import (
 	"time"
 )
 
-const testOptIn = "op.WithAllowPrivateNetworkJWKS()"
+const testOptIn = "op.WithAllowPrivateNetwork(op.OutboundJWKS)"
 
 // logRecords decodes the JSON lines buf holds.
 func logRecords(t *testing.T, buf *bytes.Buffer) []map[string]any {

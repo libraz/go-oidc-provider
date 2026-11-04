@@ -256,33 +256,34 @@ func TestWithProfile_AutoEnablePopulatesRequiredFeatures(t *testing.T) {
 	}
 }
 
-// TestProfileAllowedAuthMethodNames_ExcludesMTLS pins that the helper's
-// documented contract — the wire list excludes the RFC 8705 mTLS methods
-// the runtime cannot enforce — matches its behaviour. A FAPI 2.0 profile
-// allows private_key_jwt plus the two mTLS methods; the helper must keep
-// private_key_jwt and drop both mTLS names so every consumer (discovery
-// advertisement and the static-client auth-method gate) inherits the
-// exclusion.
-func TestProfileAllowedAuthMethodNames_ExcludesMTLS(t *testing.T) {
+// TestProfileAllowedAuthMethodNames_MTLSFollowsTheFeature pins that a
+// FAPI 2.0 profile's mTLS methods reach every consumer of the list
+// (discovery and the static-client gate) only with feature.MTLS, and that
+// private_key_jwt is kept either way.
+func TestProfileAllowedAuthMethodNames_MTLSFollowsTheFeature(t *testing.T) {
 	t.Parallel()
 
-	c := &config{profiles: []profile.Profile{profile.FAPI2Baseline}}
-	got := c.profileAllowedAuthMethodNames()
-
-	for _, name := range got {
-		if m := AuthMethod(name); m == AuthTLSClientAuth || m == AuthSelfSignedTLSClientAuth {
-			t.Fatalf("profileAllowedAuthMethodNames returned mTLS method %q; doc promises exclusion", name)
+	for _, mtlsOn := range []bool{false, true} {
+		c := &config{profiles: []profile.Profile{profile.FAPI2Baseline}}
+		if mtlsOn {
+			c.features = []feature.Flag{feature.MTLS}
 		}
-	}
-	if !containsString(got, string(AuthPrivateKeyJWT)) {
-		t.Fatalf("profileAllowedAuthMethodNames=%v, want it to retain private_key_jwt", got)
+		got := c.profileAllowedAuthMethodNames()
+		for _, m := range []AuthMethod{AuthTLSClientAuth, AuthSelfSignedTLSClientAuth} {
+			if containsString(got, string(m)) != mtlsOn {
+				t.Fatalf("mTLS=%v: profileAllowedAuthMethodNames=%v, %q present=%v", mtlsOn, got, m, !mtlsOn)
+			}
+		}
+		if !containsString(got, string(AuthPrivateKeyJWT)) {
+			t.Fatalf("mTLS=%v: profileAllowedAuthMethodNames=%v, want it to retain private_key_jwt", mtlsOn, got)
+		}
 	}
 }
 
 // TestEffectiveDeviceCodeExpiry_DefaultsAndOverride pins the H1
 // resolution contract for the device_code TTL knob: a zero-value
 // [config.deviceCodeExpiry] resolves to [devicecode.DefaultExpiresIn]
-// and an embedder-supplied value via [WithDeviceCodeExpiry] wins.
+// and an embedder-supplied value via [WithDeviceCodeTTL] wins.
 // The knob is deliberately independent of [config.accessTokenTTL].
 func TestEffectiveDeviceCodeExpiry_DefaultsAndOverride(t *testing.T) {
 	t.Parallel()

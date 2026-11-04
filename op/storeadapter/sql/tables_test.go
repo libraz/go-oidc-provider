@@ -213,7 +213,9 @@ func renderTablesDoc(t *testing.T) []byte {
 	b.WriteString("empty database lists what the configuration needs. `Store.ValidateSchema`,\n")
 	b.WriteString("the deploy gate, checks every table. `WithTablePrefix` replaces the `oidc_`\n")
 	b.WriteString("prefix of every name and `WithNaming` renames one table through its key; the\n")
-	b.WriteString("columns are fixed.\n\n")
+	b.WriteString("columns are fixed. `Store.Migrate` records its progress in a version table that\n")
+	b.WriteString("`WithTablePrefix` renames too and the `schema_migrations` key names; the DDL\n")
+	b.WriteString("does not create it and the schema checks do not look for it.\n\n")
 	b.WriteString("## Which tables a configuration reads\n\n")
 	defaults := make([]string, 0, len(defaultConfigTables))
 	var always []string

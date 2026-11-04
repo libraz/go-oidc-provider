@@ -69,10 +69,12 @@ func buildRouter(cfg *config, keySet *keys.Set, encSet *keys.EncryptionSet, scop
 	if err != nil {
 		return nil, err
 	}
-	assertionVerifiers, err := buildAssertionVerifiers(cfg)
+	clientJWKS, err := buildClientJWKSResolver(cfg)
 	if err != nil {
 		return nil, err
 	}
+	assertionVerifiers := buildAssertionVerifiers(cfg, clientJWKS)
+	certificateVerifier := buildCertificateVerifier(mtlsVerifier, clientJWKS)
 	jarVerifiers, err := buildJARVerifiers(cfg, encSet)
 	if err != nil {
 		return nil, err
@@ -145,6 +147,7 @@ func buildRouter(cfg *config, keySet *keys.Set, encSet *keys.EncryptionSet, scop
 			ClaimsParameterEnabled: cfg.claimsParameterSupported(),
 			DPoP:                   dpopVerifier,
 			DPoPNonces:             cfg.dpopNonces, // nil leaves the use_dpop_nonce challenge disabled.
+			DPoPHTU:                dpopHTU(cfg, cfg.endpoints.UserInfo, "userinfo_endpoint"),
 			MTLS:                   mtlsVerifier,
 			AccessTokens:           cfg.store.AccessTokens(),
 			OpaqueAccessTokens:     cfg.store.OpaqueAccessTokens(),
@@ -174,12 +177,15 @@ func buildRouter(cfg *config, keySet *keys.Set, encSet *keys.EncryptionSet, scop
 			AuthorizationDetailTypes:       authorizationDetailRegistry(cfg),
 			DPoP:                           dpopVerifier,
 			DPoPNonces:                     cfg.dpopNonces, // nil leaves the use_dpop_nonce challenge disabled.
+			DPoPHTU:                        dpopHTU(cfg, cfg.endpoints.Token, "token_endpoint"),
 			MTLS:                           mtlsVerifier,
 			AssertionVerifier:              assertionVerifiers.Token,
+			CertificateVerifier:            certificateVerifier,
 			AccessTokenTTL:                 cfg.accessTokenTTL,
 			RefreshTokenTTL:                cfg.refreshTokenTTL,
 			RefreshTokenOfflineTTL:         cfg.refreshTokenOfflineTTL,
 			RefreshTokenGraceTTL:           cfg.effectiveRefreshGrace(),
+			RefreshTokenRotationDisabled:   cfg.refreshTokenRotationDisabled(),
 			RefreshRetryEncryptionKeys:     cfg.cookieKeys,
 			StrictOfflineAccess:            cfg.strictOfflineAccess,
 			OpenIDScopeOptional:            cfg.openIDScopeOptional,
@@ -207,8 +213,8 @@ func buildRouter(cfg *config, keySet *keys.Set, encSet *keys.EncryptionSet, scop
 			JWTBearerAllowedClients:        jwtBearer.AllowedClients,
 		})),
 	)
-	mountDeviceAuthorizationEndpoint(mux, cfg, auditEmitter, scopes, dpopVerifier, mtlsVerifier, assertionVerifiers.Device, strictCORS)
-	mountBackchannelAuthenticationEndpoint(mux, cfg, auditEmitter, scopes, keySet, dpopVerifier, mtlsVerifier, assertionVerifiers.Backchannel, jarVerifiers.CIBA, strictCORS)
+	mountDeviceAuthorizationEndpoint(mux, cfg, auditEmitter, scopes, dpopVerifier, mtlsVerifier, assertionVerifiers.Device, certificateVerifier, strictCORS)
+	mountBackchannelAuthenticationEndpoint(mux, cfg, auditEmitter, scopes, keySet, dpopVerifier, mtlsVerifier, assertionVerifiers.Backchannel, certificateVerifier, jarVerifiers.CIBA, strictCORS)
 	// The interaction mount is deliberately not handed strictCORS: its
 	// routes run on the narrower ceremony allowlist.
 	onOpaqueOrigin := newOpaqueOriginWarner(cfg.logger)
@@ -219,10 +225,10 @@ func buildRouter(cfg *config, keySet *keys.Set, encSet *keys.EncryptionSet, scop
 	if err != nil {
 		return nil, err
 	}
-	mountPAREndpoint(mux, cfg, auditEmitter, scopes, jarVerifiers.Authorize, assertionVerifiers.PAR, dpopVerifier, strictCORS)
-	mountIntrospectionEndpoint(mux, cfg, auditEmitter, scopes, keySet, encResolver, assertionVerifiers.Introspect, subjectProjector, strictCORS)
-	mountRevocationEndpoint(mux, cfg, auditEmitter, keySet, assertionVerifiers.Revoke, strictCORS)
-	mountGrantManagementEndpoint(mux, cfg, auditEmitter, assertionVerifiers.Revoke, strictCORS)
+	mountPAREndpoint(mux, cfg, auditEmitter, scopes, jarVerifiers.Authorize, assertionVerifiers.PAR, certificateVerifier, dpopVerifier, strictCORS)
+	mountIntrospectionEndpoint(mux, cfg, auditEmitter, scopes, keySet, encResolver, assertionVerifiers.Introspect, certificateVerifier, subjectProjector, strictCORS)
+	mountRevocationEndpoint(mux, cfg, auditEmitter, keySet, assertionVerifiers.Revoke, certificateVerifier, strictCORS)
+	mountGrantManagementEndpoint(mux, cfg, auditEmitter, assertionVerifiers.Revoke, certificateVerifier, strictCORS)
 	if err := mountSharedSignals(mux, cfg, keySet, dpopVerifier, mtlsVerifier, subjectProjector, publicCORS, strictCORS); err != nil {
 		return nil, err
 	}
@@ -310,7 +316,14 @@ func mountProtectedResourceMetadata(mux *routeMux, cfg *config, publicCORS *cors
 // draft endpoint (GET / DELETE {endpoint}/{grant_id}) when the feature is
 // enabled via [WithGrantManagement]. Without the option no route is added;
 // discovery gates the advertisement on the same condition.
-func mountGrantManagementEndpoint(mux *routeMux, cfg *config, auditEmitter audit.Emitter, assertionVerifier clientauth.AssertionVerifier, strictCORS *cors.Strict) {
+func mountGrantManagementEndpoint(
+	mux *routeMux,
+	cfg *config,
+	auditEmitter audit.Emitter,
+	assertionVerifier clientauth.AssertionVerifier,
+	certificateVerifier clientauth.CertificateVerifier,
+	strictCORS *cors.Strict,
+) {
 	if !cfg.grantManagementEnabled {
 		return
 	}
@@ -325,6 +338,7 @@ func mountGrantManagementEndpoint(mux *routeMux, cfg *config, auditEmitter audit
 		AccessTokenTTL:           cfg.accessTokenTTL,
 		Audit:                    auditEmitter,
 		AssertionVerifier:        assertionVerifier,
+		CertificateVerifier:      certificateVerifier,
 		AllowedClientAuthMethods: cfg.allowedClientAuthMethods(),
 		SecretVerifier:           cfg.clientSecretVerifier(),
 		QueryEnabled:             cfg.grantManagementActionEnabled(GrantActionQuery),
@@ -386,11 +400,12 @@ func mountRegistrationEndpoint(
 		AllowedGrantTypes:                    append([]string(nil), cfg.dcr.AllowedGrantTypes...),
 		AllowedResponseTypes:                 append([]string(nil), cfg.dcr.AllowedResponseTypes...),
 		PairwiseEnabled:                      cfg.pairwiseEnabled(),
-		AllowLocalhostLoopback:               cfg.allowLocalhostLoopback,
+		AllowLocalhostLoopback:               cfg.allowLocalhostRedirectURIs,
 		AllowInsecureBackchannelLogoutForDev: cfg.allowInsecureBackchannelLogoutForDev,
 		JWEPolicy:                            cfg.jwePolicy(),
 		SigningAlg:                           string(cfg.issuingAlg()),
 		AllowedClientAuthMethods:             cfg.allowedClientAuthMethods(),
+		MTLSClientAuth:                       cfg.mtlsClientAuthEnabled(),
 		AllowedClientSigningAlgs:             cfg.clientSigningJOSEAlgs(),
 		SectorResolver:                       buildSectorResolver(cfg),
 		ValidateMetadata:                     wrapValidateMetadata(cfg.dcr.ValidateMetadata),
@@ -428,6 +443,7 @@ func mountPAREndpoint(
 	scopes *scoperegistry.Registry,
 	jarVerifier *jar.Verifier,
 	assertionVerifier clientauth.AssertionVerifier,
+	certificateVerifier clientauth.CertificateVerifier,
 	dpopVerifier *dpop.Verifier,
 	strictCORS *cors.Strict,
 ) {
@@ -448,7 +464,9 @@ func mountPAREndpoint(
 			JAR:                        jarVerifier,
 			DPoP:                       dpopVerifier,
 			DPoPNonces:                 cfg.dpopNonces, // nil leaves the use_dpop_nonce challenge disabled.
+			DPoPHTU:                    dpopHTU(cfg, cfg.endpoints.PAR, "pushed_authorization_request_endpoint"),
 			AssertionVerifier:          assertionVerifier,
+			CertificateVerifier:        certificateVerifier,
 			AllowedClientAuthMethods:   cfg.allowedClientAuthMethods(),
 			SecretVerifier:             cfg.clientSecretVerifier(),
 			RequireSignedRequestObject: cfg.requireSignedRequestObject(),
@@ -469,6 +487,7 @@ func mountIntrospectionEndpoint(
 	keySet *keys.Set,
 	encResolver *clientencjwks.Resolver,
 	assertionVerifier clientauth.AssertionVerifier,
+	certificateVerifier clientauth.CertificateVerifier,
 	subjectProjector func(ctx context.Context, raw string, client *store.Client) (string, error),
 	strictCORS *cors.Strict,
 ) {
@@ -488,6 +507,7 @@ func mountIntrospectionEndpoint(
 			Clock:                      cfg.clock,
 			SigningKey:                 tokens.FromInternalEntry(keySet.Active()),
 			AssertionVerifier:          assertionVerifier,
+			CertificateVerifier:        certificateVerifier,
 			AllowedClientAuthMethods:   cfg.allowedClientAuthMethods(),
 			SecretVerifier:             cfg.clientSecretVerifier(),
 			RequireSignedIntrospection: cfg.requireSignedIntrospection(),
@@ -510,6 +530,7 @@ func mountRevocationEndpoint(
 	auditEmitter audit.Emitter,
 	keySet *keys.Set,
 	assertionVerifier clientauth.AssertionVerifier,
+	certificateVerifier clientauth.CertificateVerifier,
 	strictCORS *cors.Strict,
 ) {
 	if !featureEnabled(cfg.features, feature.Revoke) {
@@ -524,6 +545,7 @@ func mountRevocationEndpoint(
 			Keys:                     keySet,
 			Clock:                    cfg.clock,
 			AssertionVerifier:        assertionVerifier,
+			CertificateVerifier:      certificateVerifier,
 			AllowedClientAuthMethods: cfg.allowedClientAuthMethods(),
 			SecretVerifier:           cfg.clientSecretVerifier(),
 			AccessTokens:             cfg.store.AccessTokens(),
@@ -729,6 +751,7 @@ func mountDeviceAuthorizationEndpoint(
 	dpopVerifier *dpop.Verifier,
 	mtlsVerifier *mtls.Verifier,
 	assertionVerifier clientauth.AssertionVerifier,
+	certificateVerifier clientauth.CertificateVerifier,
 	strictCORS *cors.Strict,
 ) {
 	if !cfg.grantEnabled(grant.DeviceCode) {
@@ -744,10 +767,12 @@ func mountDeviceAuthorizationEndpoint(
 			Scopes:                   scopes,
 			Clock:                    cfg.clock,
 			AssertionVerifier:        assertionVerifier,
+			CertificateVerifier:      certificateVerifier,
 			AllowedClientAuthMethods: cfg.allowedClientAuthMethods(),
 			SecretVerifier:           cfg.clientSecretVerifier(),
 			DPoP:                     dpopVerifier,
 			DPoPNonces:               cfg.dpopNonces,
+			DPoPHTU:                  dpopHTU(cfg, cfg.endpoints.DeviceAuthorization, "device_authorization_endpoint"),
 			MTLS:                     mtlsVerifier,
 			RequireSenderConstraint:  cfg.requireSenderConstrainedTokens(),
 			DeviceCodeTTL:            cfg.effectiveDeviceCodeExpiry(),
@@ -808,6 +833,7 @@ func mountBackchannelAuthenticationEndpoint(
 	dpopVerifier *dpop.Verifier,
 	mtlsVerifier *mtls.Verifier,
 	assertionVerifier clientauth.AssertionVerifier,
+	certificateVerifier clientauth.CertificateVerifier,
 	jarVerifier *jar.Verifier,
 	strictCORS *cors.Strict,
 ) {
@@ -828,10 +854,12 @@ func mountBackchannelAuthenticationEndpoint(
 			Keys:                     keySet,
 			Clock:                    cfg.clock,
 			AssertionVerifier:        assertionVerifier,
+			CertificateVerifier:      certificateVerifier,
 			AllowedClientAuthMethods: cfg.allowedClientAuthMethods(),
 			SecretVerifier:           cfg.clientSecretVerifier(),
 			DPoP:                     dpopVerifier,
 			DPoPNonces:               cfg.dpopNonces,
+			DPoPHTU:                  dpopHTU(cfg, cfg.endpoints.Backchannel, "backchannel_authentication_endpoint"),
 			MTLS:                     mtlsVerifier,
 			RequireSenderConstraint:  cfg.requireSenderConstrainedTokens(),
 			JAR:                      jarVerifier,
@@ -857,7 +885,7 @@ func transactionalStore(s store.Store) store.Transactional {
 // validator drives at registration time. The resolver inherits the
 // embedder clock so a frozen-clock test fixture sees deterministic
 // cache TTL bookkeeping, and honours the
-// [WithAllowPrivateNetworkSector] opt-in for embedders that host
+// [WithAllowPrivateNetwork] ([OutboundSector]) opt-in for embedders that host
 // their RPs on a private network. Construction is unconditional —
 // even DCR registrations that omit sector_identifier_uri pay only
 // the resolver allocation, and the validator short-circuits on the
@@ -899,6 +927,11 @@ func fromInternalMetadata(m registrationendpoint.ClientMetadata) ClientMetadata 
 		Scope:                             m.Scope,
 		TokenEndpointAuthMethod:           m.TokenEndpointAuthMethod,
 		TokenEndpointAuthSigningAlg:       m.TokenEndpointAuthSigningAlg,
+		TLSClientAuthSubjectDN:            m.TLSClientAuthSubjectDN,
+		TLSClientAuthSANDNS:               m.TLSClientAuthSANDNS,
+		TLSClientAuthSANURI:               m.TLSClientAuthSANURI,
+		TLSClientAuthSANIP:                m.TLSClientAuthSANIP,
+		TLSClientAuthSANEmail:             m.TLSClientAuthSANEmail,
 		ApplicationType:                   m.ApplicationType,
 		SubjectType:                       m.SubjectType,
 		IDTokenSignedResponseAlg:          m.IDTokenSignedResponseAlg,

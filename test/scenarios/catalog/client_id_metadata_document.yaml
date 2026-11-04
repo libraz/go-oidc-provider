@@ -29,7 +29,7 @@ description: |
   Allow hook decides, on every resolution, whether a URL may be
   resolved at all.
 
-  The dev-only op.WithAllowPrivateNetworkClientIDMetadata admits http
+  The dev-only op.WithAllowPrivateNetwork(op.OutboundClientIDMetadata) admits http
   and loopback targets so the rows can serve documents from an httptest
   server. A rejected document is reported only through the cimd.*
   audit events; the wire answer is the generic unknown-client one

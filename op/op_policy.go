@@ -3,6 +3,7 @@ package op
 import (
 	"github.com/libraz/go-oidc-provider/internal/clientauth"
 	"github.com/libraz/go-oidc-provider/internal/jose"
+	"github.com/libraz/go-oidc-provider/op/feature"
 	"github.com/libraz/go-oidc-provider/op/profile"
 )
 
@@ -143,6 +144,21 @@ func (c *config) requireSignedIntrospection() bool {
 	return c.anyProfile(profile.RequiresSignedIntrospection)
 }
 
+// requireIssuerAssertionAudience reports whether the active
+// [profile.Profile] set pins every client authentication assertion's
+// "aud" to the issuer as a single string. One FAPI 2.0 profile in a
+// disjunctive set is enough, as with [config.requirePKCE].
+func (c *config) requireIssuerAssertionAudience() bool {
+	return c.anyProfile(profile.RequiresIssuerAssertionAudience)
+}
+
+// refreshTokenRotationDisabled reports whether the active
+// [profile.Profile] set forbids rotating refresh tokens at the refresh
+// grant. The disjunctive resolution mirrors [config.requirePKCE].
+func (c *config) refreshTokenRotationDisabled() bool {
+	return c.anyProfile(profile.ForbidsRefreshTokenRotation)
+}
+
 // clientSecretVerifier returns the [clientauth.SecretVerifier] every
 // client-authenticating endpoint installs. Nil means "the endpoint's
 // own default", which is the Argon2id verifier; that is the value
@@ -165,12 +181,7 @@ func (c *config) clientSecretVerifier() clientauth.SecretVerifier { //nolint:ire
 // active [profile.Profile] set imposes on every client-authenticating
 // endpoint and on the clients static seeding and dynamic registration
 // may persist, or nil when no profile constrains client authentication.
-//
-// Profile values that name authentication methods outside the
-// [clientauth] enum (tls_client_auth, self_signed_tls_client_auth)
-// do not appear in the returned slice because they are handled
-// outside the package; the FAPI 2.0 §3.1.3 enforcement ladder for
-// those methods lives in internal/mtls.
+// It is [config.profileAllowedAuthMethodNames] in the typed form.
 func (c *config) allowedClientAuthMethods() []clientauth.Method {
 	allowedNames := c.profileAllowedAuthMethodNames()
 	if allowedNames == nil {
@@ -180,7 +191,8 @@ func (c *config) allowedClientAuthMethods() []clientauth.Method {
 	for _, name := range allowedNames {
 		switch clientauth.Method(name) {
 		case clientauth.MethodNone, clientauth.MethodSecretBasic,
-			clientauth.MethodSecretPost, clientauth.MethodPrivateKeyJWT:
+			clientauth.MethodSecretPost, clientauth.MethodPrivateKeyJWT,
+			clientauth.MethodTLSClientAuth, clientauth.MethodSelfSignedTLSClientAuth:
 			out = append(out, clientauth.Method(name))
 		}
 	}
@@ -195,20 +207,28 @@ func (c *config) allowedClientAuthMethods() []clientauth.Method {
 // When multiple profiles are active the result is the intersection
 // of every profile's allowed list — the most restrictive policy
 // wins, matching the "stricter MAY override looser" posture used
-// elsewhere in the configuration. The returned list excludes the mTLS
-// methods (tls_client_auth / self_signed_tls_client_auth): mTLS client
-// authentication is tracked as v1.x work, the runtime client-auth
-// verifier does not negotiate it, and discovery must not advertise — nor
-// the static-client gate admit — a method the runtime cannot enforce.
-// The exclusion is applied here so every consumer of this list inherits
-// it, independent of the global support allowlist in the registration
-// validator.
+// elsewhere in the configuration. Without [feature.MTLS] the list
+// excludes the mTLS methods (tls_client_auth / self_signed_tls_client_auth):
+// no endpoint can read a client certificate, so discovery must not
+// advertise — nor static seeding and registration admit — a method the
+// runtime cannot enforce. The exclusion is applied here so every consumer
+// of this list inherits it.
 func (c *config) profileAllowedAuthMethodNames() []string {
 	allowed := c.profileIntersection(profile.AllowedClientAuthMethods)
 	if allowed == nil {
 		return nil
 	}
+	if c.mtlsClientAuthEnabled() {
+		return allowed
+	}
 	return withoutMTLSAuthMethods(allowed)
+}
+
+// mtlsClientAuthEnabled reports whether the RFC 8705 §2 client
+// authentication methods are usable: [feature.MTLS] builds the verifier
+// that reads client certificates.
+func (c *config) mtlsClientAuthEnabled() bool {
+	return featureEnabled(c.features, feature.MTLS)
 }
 
 // clientSigningAlgs returns the JWS alg set the active profiles admit on
@@ -259,9 +279,7 @@ func (c *config) profileIntersection(list func(profile.Profile) []string) []stri
 }
 
 // withoutMTLSAuthMethods returns names with the RFC 8705 mTLS client-auth
-// methods removed, preserving order. The OP advertises and admits only the
-// methods its runtime verifier negotiates; mTLS client authentication is not
-// yet among them.
+// methods removed, preserving order, for an OP without [feature.MTLS].
 func withoutMTLSAuthMethods(names []string) []string {
 	out := make([]string, 0, len(names))
 	for _, name := range names {

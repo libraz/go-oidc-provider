@@ -110,7 +110,7 @@ func newDeliveryScopeProvider(t *testing.T, sink *auditSink, opts ...Option) *Pr
 		WithKeyset(Keyset{SigningKey{KeyID: "sig-1", Signer: priv}}),
 		WithGrants(grant.ClientCredentials),
 		WithDynamicRegistration(RegistrationOption{}),
-		WithBackchannelLogoutTimeout(2 * time.Second),
+		WithBackchannelLogout(BackchannelLogout{Timeout: 2 * time.Second}),
 		WithAuditLogger(slog.New(sink)),
 	}
 	provider, err := New(append(base, opts...)...)
@@ -174,7 +174,7 @@ func loopbackRP(t *testing.T) (uri string, hit func() bool) {
 
 // TestBackchannelDevOptIn_RefusesNonLoopbackPrivateTargets is the
 // acceptance test for the width of the dev opt-in. With
-// [WithAllowInsecureBackchannelLogoutForDev] as the only opt-in, a
+// [WithAllowInsecureOutboundForDev] ([OutboundBackchannel]) as the only opt-in, a
 // client whose backchannel_logout_uri names an RFC 1918 (or any other
 // non-loopback private) address must have its delivery refused by the
 // SSRF gate — the option's godoc promises loopback and nothing else,
@@ -204,7 +204,7 @@ func TestBackchannelDevOptIn_RefusesNonLoopbackPrivateTargets(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			sink := &auditSink{}
-			provider := newDeliveryScopeProvider(t, sink, WithAllowInsecureBackchannelLogoutForDev())
+			provider := newDeliveryScopeProvider(t, sink, WithAllowInsecureOutboundForDev(OutboundBackchannel))
 
 			rec := deliverTo(t, provider, sink, tc.uri)
 			if !strings.Contains(rec.err, denyListReason) {
@@ -223,7 +223,7 @@ func TestBackchannelDevOptIn_DeliversToLoopback(t *testing.T) {
 	t.Parallel()
 
 	sink := &auditSink{}
-	provider := newDeliveryScopeProvider(t, sink, WithAllowInsecureBackchannelLogoutForDev())
+	provider := newDeliveryScopeProvider(t, sink, WithAllowInsecureOutboundForDev(OutboundBackchannel))
 	uri, hit := loopbackRP(t)
 
 	rec := deliverTo(t, provider, sink, uri)
@@ -243,7 +243,7 @@ func TestBackchannelPrivateOptIn_DeliversToLoopback(t *testing.T) {
 	t.Parallel()
 
 	sink := &auditSink{}
-	provider := newDeliveryScopeProvider(t, sink, WithAllowPrivateNetworkBackchannel())
+	provider := newDeliveryScopeProvider(t, sink, WithAllowPrivateNetwork(OutboundBackchannel))
 	uri, hit := loopbackRP(t)
 
 	rec := deliverTo(t, provider, sink, uri)

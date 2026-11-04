@@ -73,18 +73,18 @@ func (p *Provider) SubjectGenerator() SubjectGenerator { //nolint:ireturn,nolint
 	return p.cfg.catalogSubjectGenerator()
 }
 
-// LocaleResolver returns the locale [Resolver] the Provider built
+// LocaleResolver returns the locale [LocaleResolver] the Provider built
 // from [WithLocale] / [WithDefaultLocale] / [WithPreferredLocaleStore].
 // Embedders use it to render emails, server-rendered admin pages, or
 // other out-of-band surfaces in the same locale the OP picks for
 // /authorize prompts. The resolver is safe for concurrent use.
 //
 // Stable since v1.0.
-func (p *Provider) LocaleResolver() *Resolver {
+func (p *Provider) LocaleResolver() *LocaleResolver {
 	if p == nil || p.locales == nil {
 		return nil
 	}
-	return &Resolver{inner: p.locales}
+	return &LocaleResolver{inner: p.locales}
 }
 
 // Shutdown blocks until every back-channel logout fan-out already in
@@ -124,7 +124,7 @@ func (p *Provider) LocaleResolver() *Resolver {
 //     its lease and is retried once the lease ends.
 //
 // Each fan-out is independently bounded by
-// [WithBackchannelFanOutBudget], so a Provider left unattended still
+// [BackchannelLogout.FanOutBudget], so a Provider left unattended still
 // converges; Shutdown makes the convergence something the embedder
 // can wait for.
 //

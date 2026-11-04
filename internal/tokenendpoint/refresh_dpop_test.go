@@ -148,7 +148,7 @@ func TestRefresh_DPoP_HappyPath(t *testing.T) {
 	})
 
 	form := refreshForm(tokenID, "")
-	proof := makeDPoPProof(t, key, "POST", f.endpoint, f.clock.now, "jti-refresh-1", "")
+	proof := makeDPoPProof(t, key, "POST", f.htu(), f.clock.now, "jti-refresh-1", "")
 	resp := postWithDPoP(t, f.prov.HTTPClient(nil), f.endpoint, form, client.ID, secret, proof)
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
@@ -218,7 +218,7 @@ func TestRefresh_DPoP_GraceRebindsAccessToken(t *testing.T) {
 
 	// First refresh with key A: mints an access token bound to A, rotates
 	// the chain, and caches the response for grace recovery.
-	firstProof := makeDPoPProof(t, keyA, "POST", f.endpoint, cur, "jti-grace-A", "")
+	firstProof := makeDPoPProof(t, keyA, "POST", f.htu(), cur, "jti-grace-A", "")
 	first := postWithDPoP(t, f.prov.HTTPClient(nil), f.endpoint, refreshForm(tokenID, ""), client.ID, secret, firstProof)
 	defer first.Body.Close()
 	if first.StatusCode != http.StatusOK {
@@ -232,7 +232,7 @@ func TestRefresh_DPoP_GraceRebindsAccessToken(t *testing.T) {
 	// Step inside the grace window and replay the ORIGINAL token with a
 	// DIFFERENT DPoP key.
 	cur = cur.Add(5 * time.Second)
-	replayProof := makeDPoPProof(t, keyB, "POST", f.endpoint, cur, "jti-grace-B", "")
+	replayProof := makeDPoPProof(t, keyB, "POST", f.htu(), cur, "jti-grace-B", "")
 	second := postWithDPoP(t, f.prov.HTTPClient(nil), f.endpoint, refreshForm(tokenID, ""), client.ID, secret, replayProof)
 	defer second.Body.Close()
 	if second.StatusCode != http.StatusOK {
@@ -319,7 +319,7 @@ func TestRefresh_DPoP_ThumbprintMismatch(t *testing.T) {
 	})
 
 	form := refreshForm(tokenID, "")
-	proof := makeDPoPProof(t, other, "POST", f.endpoint, f.clock.now, "jti-mismatch", "")
+	proof := makeDPoPProof(t, other, "POST", f.htu(), f.clock.now, "jti-mismatch", "")
 	resp := postWithDPoP(t, f.prov.HTTPClient(nil), f.endpoint, form, client.ID, secret, proof)
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusBadRequest {
@@ -398,7 +398,7 @@ func TestRefresh_DPoP_BearerChainNoBindOnRefreshConfidential(t *testing.T) {
 	})
 
 	form := refreshForm(tokenID, "")
-	proof := makeDPoPProof(t, key, "POST", f.endpoint, f.clock.now, "jti-upgrade", "")
+	proof := makeDPoPProof(t, key, "POST", f.htu(), f.clock.now, "jti-upgrade", "")
 	resp := postWithDPoP(t, f.prov.HTTPClient(nil), f.endpoint, form, client.ID, secret, proof)
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {

@@ -17,7 +17,8 @@ import (
 // issueRefreshResponse mints the access token, optionally an id_token
 // (only when the originating grant carried "openid"), and rotates the
 // refresh token (mints a fresh one whose ParentID is the just-consumed
-// id). Failure on any step writes a 500. The provider's transactional path
+// id) unless [Deps.RefreshTokenRotationDisabled] leaves the presented one
+// in place and the response without a refresh_token. Failure on any step writes a 500. The provider's transactional path
 // rolls the staged Consume back; non-transactional embeddings cannot
 // coordinate that rollback and rely on their substore atomicity contract.
 //
@@ -63,7 +64,7 @@ func issueRefreshResponse(
 	if !refuseIssuanceUnderClosedGrant(ctx, w, deps, refreshIssuedUnderGrant(exchanged), "refresh token rejected") {
 		return
 	}
-	exchanged, err = withChainID(exchanged)
+	exchanged, err = refreshIssuanceChain(deps, exchanged)
 	if err != nil {
 		endpointsupport.WriteServerError(w)
 		return
@@ -109,7 +110,7 @@ func issueRefreshResponse(
 		AuthorizationDetails: authorize.CloneAuthorizationDetails(authorizationDetails),
 		GrantID:              chainGrantIDForResponse(deps, exchanged),
 	}
-	if err := rotateRefreshToken(ctx, deps, client, refreshExchangedForRotation(exchanged, authCtx, authorizationDetails), binding, &response, rotation); err != nil {
+	if err := rotateOrKeepRefreshToken(ctx, deps, client, exchanged, authCtx, authorizationDetails, binding, &response, rotation); err != nil {
 		endpointsupport.WriteServerError(w)
 		return
 	}
@@ -117,6 +118,38 @@ func issueRefreshResponse(
 	issued.AccessToken, issued.RefreshToken = accessToken, response.RefreshToken
 	rotation.recordIssued(issued)
 	writeSuccess(w, response)
+}
+
+// refreshIssuanceChain returns exchanged with the chain the issued access
+// token records. A rotation gives a legacy chain an id for its successor;
+// without rotation there is no successor, so the access token keeps the
+// presented token's chain, empty or not.
+func refreshIssuanceChain(deps Deps, exchanged *refresh.Exchanged) (*refresh.Exchanged, error) {
+	if deps.RefreshTokenRotationDisabled {
+		return exchanged, nil
+	}
+	return withChainID(exchanged)
+}
+
+// rotateOrKeepRefreshToken rotates the chain into response, or, under
+// [Deps.RefreshTokenRotationDisabled], leaves the presented token in
+// place and records only the refresh.
+func rotateOrKeepRefreshToken(
+	ctx context.Context,
+	deps Deps,
+	client *store.Client,
+	exchanged *refresh.Exchanged,
+	authCtx authContext,
+	authorizationDetails []map[string]any,
+	binding tokenBinding,
+	response *successResponse,
+	rotation *rotationOutcome,
+) error {
+	if deps.RefreshTokenRotationDisabled {
+		rotation.record(refreshedEvent(client, deps, exchanged, "access token refreshed; refresh token not rotated"))
+		return nil
+	}
+	return rotateRefreshToken(ctx, deps, client, refreshExchangedForRotation(exchanged, authCtx, authorizationDetails), binding, response, rotation)
 }
 
 // refreshIssuedUnderGrant is the grant-closure probe for a refresh: the
@@ -336,10 +369,17 @@ func rotateRefreshToken(
 			return err
 		}
 	}
-	rotation.record(audit.Event{
+	rotation.record(refreshedEvent(client, deps, exchanged, "refresh token rotated"))
+	return nil
+}
+
+// refreshedEvent is the token.refreshed record of a successful refresh,
+// rotating or not.
+func refreshedEvent(client *store.Client, deps Deps, exchanged *refresh.Exchanged, message string) audit.Event {
+	return audit.Event{
 		Name:     auditTokenRefreshed,
 		Level:    audit.LevelInfo,
-		Message:  "refresh token rotated",
+		Message:  message,
 		ActorID:  exchanged.Subject,
 		ClientID: client.ID,
 		Extras: map[string]any{
@@ -347,6 +387,5 @@ func rotateRefreshToken(
 			"offline_access": oidcscope.ContainsOfflineAccess(exchanged.BoundScope),
 			"ttl_bucket":     ttlBucketFor(deps, exchanged.BoundScope),
 		},
-	})
-	return nil
+	}
 }

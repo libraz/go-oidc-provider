@@ -33,7 +33,7 @@ var errStoreFault = errors.New("simulated storage outage")
 
 // faultyRefreshStore wraps an inmem RefreshTokenStore and replaces
 // RevokeChain with a deterministic non-nil error, simulating the
-// fosite GHSA-7mqr-2v3q-v2wm class: the OP claims revocation success
+// GHSA-7mqr-2v3q-v2wm class: the OP claims revocation success
 // while persistence broke. The other methods delegate verbatim so the
 // handler's lookup / chain walk reach the RevokeChain call site.
 type faultyRefreshStore struct {
@@ -85,7 +85,7 @@ func (f *faultyAccessTokenRegistry) GC(ctx context.Context, cutoff time.Time) (i
 }
 
 // TestHandler_RefreshToken_StoreFault_EmitsAudit pins the structural
-// mitigation for the fosite "revoke silently swallowed storage errors"
+// mitigation for the "revoke silently swallowed storage errors"
 // class: when RefreshTokenStore.RevokeChain returns a non-NotFound
 // error, the wire response stays HTTP 200 (RFC 7009 §2.2 mandates
 // this — disclosure equivalence between "unknown token" and "store
@@ -93,8 +93,8 @@ func (f *faultyAccessTokenRegistry) GC(ctx context.Context, cutoff time.Time) (i
 // "token.revoke_failed" audit event so SOC tooling can detect that a
 // revoke request was acknowledged on the wire while persistence broke.
 //
-// Tracks: GHSA-7mqr-2v3q-v2wm (ory/fosite) — the original advisory
-// pre-dates audit-emitter plumbing in fosite; the structural defect
+// Tracks: GHSA-7mqr-2v3q-v2wm (another OAuth library) — the original advisory
+// pre-dates audit-emitter plumbing in the library it was filed against; the structural defect
 // is "no observable signal that revocation failed". The library's
 // posture (CLAUDE.md "ライブラリ性の核": observability for OIDC-domain
 // events is the OP's responsibility) forbids the silent-swallow path
@@ -195,7 +195,7 @@ func TestHandler_RefreshToken_StoreFault_EmitsAudit(t *testing.T) {
 
 	// Audit event MUST surface so SOC tooling can detect the
 	// silent-swallow path. Without this assertion the test passes
-	// even if the handler regresses to fosite's defect.
+	// even if the handler regresses to that defect.
 	auditRec := capture.findEvent("token.revoke_failed")
 	if auditRec == nil {
 		t.Fatalf("expected audit event token.revoke_failed, captured=%s", capture.dump())

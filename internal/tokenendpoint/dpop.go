@@ -47,7 +47,7 @@ func newDPoPOutcome(checked *dpop.Checked) *dpopOutcome {
 // [Deps.DPoP] yields a gate that admits every request without a proof,
 // so the handler issues bearer tokens.
 func dpopGate(deps Deps) dpop.Gate {
-	return dpop.Gate{Verifier: deps.DPoP, Nonces: deps.DPoPNonces}
+	return dpop.Gate{Verifier: deps.DPoP, Nonces: deps.DPoPNonces, HTU: deps.DPoPHTU}
 }
 
 // authenticateWithDPoP runs DPoP proof verification and client

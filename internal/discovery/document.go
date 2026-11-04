@@ -372,7 +372,7 @@ type Document struct {
 	// requested claims onto the id_token / userinfo responses. The
 	// library defaults to true because the parser is always wired;
 	// embedders that prefer to ignore the parameter can
-	// opt out via op.WithClaimsParameterSupported(false), which sets
+	// opt out via op.WithClaimsParameterDisabled(), which sets
 	// this field to false and routes incoming requests around the
 	// parser.
 	ClaimsParameterSupported bool `json:"claims_parameter_supported,omitempty"`

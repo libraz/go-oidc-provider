@@ -202,7 +202,7 @@ func presenceOf(t *testing.T, what string, err error) bool {
 // a substore that stops resolving its own record once a later substore
 // takes the same identifier (a later write overwrote an earlier one).
 //
-// Tracks: CVE-2026-4282 (Keycloak) — a single-use-object provider held
+// Tracks: CVE-2026-4282 (another OP) — a single-use-object provider held
 // every kind of single-use artefact in one keyspace, so a value obtained
 // through a low-privilege ceremony could be presented as an
 // authorization code and exchanged for tokens. The structural defence is

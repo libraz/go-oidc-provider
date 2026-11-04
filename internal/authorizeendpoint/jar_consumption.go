@@ -162,7 +162,7 @@ func renderJARError(w http.ResponseWriter, r *http.Request, deps resolved, code,
 //     and held on [resolved], so repeat lookups reuse its connection
 //     pool rather than handshaking afresh.
 //   - HTTPS-only by default. http:// is admitted only when
-//     [op.WithAllowPrivateNetworkJAR] is set so loopback fixtures keep
+//     [op.WithAllowPrivateNetwork] ([op.OutboundJAR]) is set so loopback fixtures keep
 //     working without weakening the production posture.
 //   - No redirects. RFC 9101 leaves the matter open, but a 30x is the
 //     easiest way an attacker upstream of the RP could pivot the OP
@@ -270,7 +270,7 @@ func newJARRequestURICache(clock Clock) *remotecache.Cache[string] {
 
 // jarPrivateNetworkOptIn is the public option that lifts the deny-list
 // for the request_uri fetch; a refusal names it.
-const jarPrivateNetworkOptIn = "op.WithAllowPrivateNetworkJAR()"
+const jarPrivateNetworkOptIn = "op.WithAllowPrivateNetwork(op.OutboundJAR)"
 
 // jarRequestURIPolicy returns the [securefetch.Policy] the JAR
 // request_uri fetcher runs under. The policy is the single source of

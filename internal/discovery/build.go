@@ -91,7 +91,7 @@ type Input struct {
 	// ClaimsParameterSupported reports whether the OP honours the
 	// OIDC Core 1.0 §5.5 "claims" request parameter. The library
 	// defaults to true; embedders that prefer to ignore the parameter
-	// supply false via op.WithClaimsParameterSupported(false).
+	// call op.WithClaimsParameterDisabled().
 	ClaimsParameterSupported bool
 
 	// PairwiseEnabled reports whether the OP can issue pairwise
@@ -532,7 +532,7 @@ func Build(in Input) Document {
 	doc.AuthorizationResponseIssParameterSupported = true
 	// OIDC Core 1.0 §5.5: advertise "claims" support when the OP has
 	// not opted out. The library default is true (the parser is
-	// always wired); op.WithClaimsParameterSupported(false) flips
+	// always wired); op.WithClaimsParameterDisabled() flips
 	// this to false so the field is dropped from the wire and the
 	// authorize / par parsers ignore the parameter.
 	doc.ClaimsParameterSupported = in.ClaimsParameterSupported
@@ -782,15 +782,21 @@ func applyDPoPFeature(in Input, doc *Document) {
 	doc.DPoPSigningAlgValuesSupported = dpop.SupportedProofAlgs()
 }
 
-// applyMTLSFeature publishes the RFC 8705 §3 binding signal and (when
-// supplied) the §5 endpoint aliases. It publishes no §2 client
-// authentication method: tls_client_auth / self_signed_tls_client_auth
-// are not implemented. Aliases stay absent when MTLS itself is disabled
+// applyMTLSFeature publishes the RFC 8705 §2 client authentication
+// methods, the §3 binding signal and (when supplied) the §5 endpoint
+// aliases. It runs before profile narrowing and the introspection /
+// revocation mirrors, so all three auth-method lists carry the two
+// methods together. Aliases stay absent when MTLS itself is disabled
 // even if the embedder pre-staged the option, so a feature toggle never
 // leaks the alias map.
 func applyMTLSFeature(in Input, doc *Document) {
 	if !in.Features.MTLS {
 		return
+	}
+	for _, method := range []string{"tls_client_auth", "self_signed_tls_client_auth"} {
+		if !slices.Contains(doc.TokenEndpointAuthMethodsSupported, method) {
+			doc.TokenEndpointAuthMethodsSupported = append(doc.TokenEndpointAuthMethodsSupported, method)
+		}
 	}
 	// RFC 8705 §3.3: the OP signals that it issues certificate-bound
 	// access tokens; clients use it to decide whether to present a

@@ -186,10 +186,10 @@ func TestWithAccessTokenTTL_RejectsNegative(t *testing.T) {
 	}
 }
 
-func TestWithPARLifetime_RejectsNegative(t *testing.T) {
+func TestWithPARTTL_RejectsNegative(t *testing.T) {
 	t.Parallel()
 
-	_, err := op.New(append(validBaseOpts(t), op.WithPARLifetime(-1*time.Second))...)
+	_, err := op.New(append(validBaseOpts(t), op.WithPARTTL(-1*time.Second))...)
 	if err == nil {
 		t.Fatal("expected error for negative PAR lifetime, got nil")
 	}
@@ -198,15 +198,15 @@ func TestWithPARLifetime_RejectsNegative(t *testing.T) {
 	}
 }
 
-func TestWithPARLifetime_AcceptsZeroAndCustom(t *testing.T) {
+func TestWithPARTTL_AcceptsZeroAndCustom(t *testing.T) {
 	t.Parallel()
 
 	// Zero opts into the PAR endpoint's own default (60s); a positive
 	// value is threaded to the record lifetime. Both must construct.
-	if _, err := op.New(append(validBaseOpts(t), op.WithPARLifetime(0))...); err != nil {
+	if _, err := op.New(append(validBaseOpts(t), op.WithPARTTL(0))...); err != nil {
 		t.Fatalf("zero PAR lifetime: %v", err)
 	}
-	if _, err := op.New(append(validBaseOpts(t), op.WithPARLifetime(5*time.Minute))...); err != nil {
+	if _, err := op.New(append(validBaseOpts(t), op.WithPARTTL(5*time.Minute))...); err != nil {
 		t.Fatalf("custom PAR lifetime: %v", err)
 	}
 }
@@ -293,31 +293,31 @@ func TestWithAccessTokenTTL_FAPI2BaselineAcceptsAtCap(t *testing.T) {
 	}
 }
 
-func TestWithPARLifetime_FAPIProfilesRejectTenMinutesOrMore(t *testing.T) {
+func TestWithPARTTL_FAPIProfilesRejectTenMinutesOrMore(t *testing.T) {
 	t.Parallel()
 
 	for _, ttl := range []time.Duration{600 * time.Second, 30 * time.Minute} {
 		_, err := op.New(append(validBaseOptsWithInmem(t),
 			op.WithProfile(profile.FAPI2Baseline),
 			op.WithFeature(feature.DPoP),
-			op.WithPARLifetime(ttl),
+			op.WithPARTTL(ttl),
 		)...)
 		if err == nil {
-			t.Fatalf("WithPARLifetime(%s) under fapi2-baseline: expected error, got nil", ttl)
+			t.Fatalf("WithPARTTL(%s) under fapi2-baseline: expected error, got nil", ttl)
 		}
-		if !strings.Contains(err.Error(), "profile.FAPI2Baseline") || !strings.Contains(err.Error(), "WithPARLifetime") {
-			t.Errorf("err = %v, want it to name profile.FAPI2Baseline and WithPARLifetime", err)
+		if !strings.Contains(err.Error(), "profile.FAPI2Baseline") || !strings.Contains(err.Error(), "WithPARTTL") {
+			t.Errorf("err = %v, want it to name profile.FAPI2Baseline and WithPARTTL", err)
 		}
 	}
 	if _, err := op.New(append(validBaseOptsWithInmem(t),
 		op.WithProfile(profile.FAPI2Baseline),
 		op.WithFeature(feature.DPoP),
-		op.WithPARLifetime(599*time.Second),
+		op.WithPARTTL(599*time.Second),
 	)...); err != nil {
-		t.Fatalf("WithPARLifetime(599s) under fapi2-baseline: %v", err)
+		t.Fatalf("WithPARTTL(599s) under fapi2-baseline: %v", err)
 	}
-	if _, err := op.New(append(validBaseOptsWithInmem(t), op.WithPARLifetime(30*time.Minute))...); err != nil {
-		t.Fatalf("WithPARLifetime(30m) without a profile: %v", err)
+	if _, err := op.New(append(validBaseOptsWithInmem(t), op.WithPARTTL(30*time.Minute))...); err != nil {
+		t.Fatalf("WithPARTTL(30m) without a profile: %v", err)
 	}
 }
 

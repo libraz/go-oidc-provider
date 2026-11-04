@@ -176,8 +176,9 @@ func nameMapFieldSet(t *testing.T) map[string]bool {
 	for i := range typ.NumField() {
 		fields[typ.Field(i).Name] = true
 	}
-	if len(fields) != len(defaultNames().all()) {
-		t.Fatalf("nameMap field count=%d, defaultNames().all()=%d", len(fields), len(defaultNames().all()))
+	// all() lists the DDL's tables; the version table is the one extra field.
+	if len(fields) != len(defaultNames().all())+1 {
+		t.Fatalf("nameMap field count=%d, defaultNames().all()+version table=%d", len(fields), len(defaultNames().all())+1)
 	}
 	return fields
 }

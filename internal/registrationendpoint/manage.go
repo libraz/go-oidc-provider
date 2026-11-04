@@ -241,6 +241,11 @@ func applyMetadataToClient(existing *store.Client, m ClientMetadata, secretHash 
 	updated.Scopes = oidcscope.Parse(m.Scope)
 	updated.TokenEndpointAuthMethod = m.TokenEndpointAuthMethod
 	updated.TokenEndpointAuthSigningAlg = m.TokenEndpointAuthSigningAlg
+	updated.TLSClientAuthSubjectDN = m.TLSClientAuthSubjectDN
+	updated.TLSClientAuthSANDNS = m.TLSClientAuthSANDNS
+	updated.TLSClientAuthSANURI = m.TLSClientAuthSANURI
+	updated.TLSClientAuthSANIP = m.TLSClientAuthSANIP
+	updated.TLSClientAuthSANEmail = m.TLSClientAuthSANEmail
 	updated.SecretHash = secretHash
 	if secretHash != existing.SecretHash {
 		// The current secret was cleared or newly minted; a previous one
@@ -497,6 +502,11 @@ func clientToResponse(c *store.Client, deps Deps, rotatedRAT, rawSecret string) 
 		Scope:                             strings.Join(c.Scopes, " "),
 		TokenEndpointAuthMethod:           c.TokenEndpointAuthMethod,
 		TokenEndpointAuthSigningAlg:       c.TokenEndpointAuthSigningAlg,
+		TLSClientAuthSubjectDN:            c.TLSClientAuthSubjectDN,
+		TLSClientAuthSANDNS:               c.TLSClientAuthSANDNS,
+		TLSClientAuthSANURI:               c.TLSClientAuthSANURI,
+		TLSClientAuthSANIP:                c.TLSClientAuthSANIP,
+		TLSClientAuthSANEmail:             c.TLSClientAuthSANEmail,
 		ApplicationType:                   c.ApplicationType,
 		SubjectType:                       c.SubjectType,
 		IDTokenAlg:                        c.IDTokenSignedResponseAlg,

@@ -20,10 +20,11 @@ import (
 // tls_client_auth metadata the package needs to decide whether a
 // presented certificate authenticates that client (RFC 8705 §2.1.2).
 //
-// All fields are optional; the matcher succeeds when AT LEAST ONE
-// non-empty field matches a value present on the cert. An entirely
-// empty matcher fails closed with [ErrNoMatcherConfigured]: silently
-// admitting any cert would defeat the §2.1 contract.
+// RFC 8705 §2.1.2 has a client register exactly one of the fields;
+// [ClientMatcher.Validate] enforces that at registration and before every
+// runtime match. [VerifyTLSClientAuth] itself succeeds when any non-empty
+// field matches and fails closed with [ErrNoMatcherConfigured] on an empty
+// matcher: silently admitting any cert would defeat the §2.1 contract.
 type ClientMatcher struct {
 	// SubjectDN is the RFC 4514 string form of the cert subject DN.
 	// The match runs in two passes (see [VerifyTLSClientAuth]): a
@@ -74,11 +75,36 @@ type ClientMatcher struct {
 // client has no matcher configured at all rather than silently
 // accepting any cert.
 func (m ClientMatcher) hasAny() bool {
-	return m.SubjectDN != "" ||
-		m.SANDNS != "" ||
-		m.SANURI != "" ||
-		m.SANIP != "" ||
-		m.SANEmail != ""
+	return m.count() > 0
+}
+
+// count returns how many matcher fields are non-empty.
+func (m ClientMatcher) count() int {
+	n := 0
+	for _, v := range []string{m.SubjectDN, m.SANDNS, m.SANURI, m.SANIP, m.SANEmail} {
+		if v != "" {
+			n++
+		}
+	}
+	return n
+}
+
+// Validate enforces the RFC 8705 §2.1.2 registration rule: exactly one
+// field is set, and a SANIP value is an IP literal. It returns
+// [ErrNoMatcherConfigured] for none, [ErrAmbiguousMatcher] for several,
+// and [ErrMatcherMalformed] for an unparseable IP.
+func (m ClientMatcher) Validate() error {
+	switch m.count() {
+	case 0:
+		return ErrNoMatcherConfigured
+	case 1:
+	default:
+		return ErrAmbiguousMatcher
+	}
+	if m.SANIP != "" && net.ParseIP(m.SANIP) == nil {
+		return fmt.Errorf("%w: tls_client_auth_san_ip %q is not an IP address", ErrMatcherMalformed, m.SANIP)
+	}
+	return nil
 }
 
 // MethodTLSClientAuth is the RFC 8705 §2.1 token_endpoint_auth_method
@@ -94,47 +120,24 @@ const MethodTLSClientAuth = "tls_client_auth"
 const MethodSelfSignedTLSClientAuth = "self_signed_tls_client_auth"
 
 // VerifyClientAuth dispatches the inbound cert onto the per-method
-// verifier RFC 8705 §2 prescribes. The function is the single entry
-// point handler code calls; callers pass the client's stored
+// verifier RFC 8705 §2 prescribes, for callers that hold the client's
+// JWKS as raw bytes. Callers pass the client's stored
 // token_endpoint_auth_method verbatim and the function returns the
 // per-method sentinel on failure.
 //
 //   - tls_client_auth (§2.1) routes to [VerifyTLSClientAuth]; the
-//     supplied [ClientMatcher] is used to decide whether the cert's
-//     subject DN or one of its SANs satisfies the registered value.
-//     Chain validation against the OP's trust anchors is the
-//     EMBEDDER's responsibility (see [VerifyTLSClientAuth]).
+//     supplied [ClientMatcher] decides whether the cert's subject DN
+//     or one of its SANs satisfies the registered value. Chain
+//     validation is the caller's job (see [Verifier.ClientAuthCertificate]).
 //
 //   - self_signed_tls_client_auth (§2.2) routes to
 //     [VerifySelfSignedTLSClientAuth]; the supplied jwks bytes are
 //     compared against the cert's public-key thumbprint. The matcher
-//     argument is unused on this path because §2.2 binds the cert to
-//     the client by thumbprint, not by DN.
+//     argument is unused on this path.
 //
-// Any other method value returns [ErrUnsupportedMethod] so the caller
-// surfaces invalid_client at the wire boundary; the comparison is
-// case-sensitive because RFC 8705 spells the method names exactly.
-// A nil cert returns [ErrNoClientCert] so the caller can distinguish
-// "no cert at all" from "cert presented but does not satisfy the
-// registered method".
-//
-// Status: the OP does not offer RFC 8705 §2 client authentication.
-// tls_client_auth / self_signed_tls_client_auth are not selectable as a
-// token_endpoint_auth_method: neither discovery nor client registration
-// admits them, and no endpoint calls this function. Offering them would
-// require the client record to carry the expected subject DN / SAN (§2.1)
-// alongside the registration and discovery surface to populate it, which
-// is a feature rather than a wiring detail. The library's supported path
-// for a profile that demands asymmetric client authentication is
-// private_key_jwt.
-//
-// The verifier is kept because it is complete, spec-shaped, and covered
-// by tests, so the decision above is reversible without re-deriving RFC
-// 8705 §2. It is deliberately unreachable from the HTTP layer today.
-//
-// The mTLS *token binding* path (cnf.x5t#S256, RFC 8705 §3), which needs
-// only the presented cert thumbprint and no per-client metadata, IS
-// wired and is independent of this client-authentication verifier.
+// Any other method value returns [ErrUnsupportedMethod]; the comparison
+// is case-sensitive because RFC 8705 spells the method names exactly.
+// A nil cert returns [ErrNoClientCert].
 func VerifyClientAuth(method string, cert *x509.Certificate, expected ClientMatcher, jwks []byte) error {
 	switch method {
 	case MethodTLSClientAuth:
@@ -148,9 +151,9 @@ func VerifyClientAuth(method string, cert *x509.Certificate, expected ClientMatc
 
 // VerifyTLSClientAuth checks the cert against the client's registered
 // matcher per RFC 8705 §2.1.2. It returns nil on a successful match
-// and a typed sentinel on failure; chain validation against the OP's
-// trust anchors is the EMBEDDER's responsibility (and the reverse-
-// proxy / [tls.Config.ClientCAs] are the canonical places to wire it).
+// and a typed sentinel on failure. It does not validate the chain: the
+// caller only passes a cert [Verifier.ClientAuthCertificate] reported
+// as chain-verified.
 //
 // The function does not consult the cert's NotBefore / NotAfter
 // either — the TLS layer (or the proxy that terminated TLS) has
@@ -477,7 +480,19 @@ func VerifySelfSignedTLSClientAuth(cert *x509.Certificate, jwks []byte) error {
 	if err != nil {
 		return fmt.Errorf("%w: %w", ErrJWKSMalformed, err)
 	}
+	return VerifySelfSignedTLSClientAuthKeySet(cert, set)
+}
 
+// VerifySelfSignedTLSClientAuthKeySet is [VerifySelfSignedTLSClientAuth]
+// over an already-decoded key set, the form a resolved jwks_uri arrives
+// in. A nil or empty set yields [ErrNoMatchingJWK].
+func VerifySelfSignedTLSClientAuthKeySet(cert *x509.Certificate, set *josev4.JSONWebKeySet) error {
+	if cert == nil {
+		return fmt.Errorf("%w: nil certificate", ErrNoClientCert)
+	}
+	if set == nil {
+		return ErrNoMatchingJWK
+	}
 	certThumbprint, err := jwkThumbprint(cert.PublicKey)
 	if err != nil {
 		return fmt.Errorf("%w: derive cert JWK thumbprint: %w", ErrCertMalformed, err)

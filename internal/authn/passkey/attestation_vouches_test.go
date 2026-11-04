@@ -29,7 +29,7 @@ import (
 // that identifies the model — asking is only a preference, and a
 // self-attested or unattested response is a legal answer to it.
 //
-// Tracks: CVE-2026-6856 (Keycloak) — direct attestation was requested,
+// Tracks: CVE-2026-6856 (another OP) — direct attestation was requested,
 // but a response bearing packed self-attestation (no x5c chain) was
 // accepted and its unverified AAGUID was matched against the
 // acceptable-AAGUID policy, bypassing the allowlist.

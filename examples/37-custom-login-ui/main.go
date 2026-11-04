@@ -127,7 +127,7 @@ func main() {
 		op.WithKeyset(keys.Keyset()),
 		op.WithCookieKeys(keys.CookieKey),
 		// Admit "localhost" as a redirect_uri host alongside 127.0.0.1.
-		op.WithAllowLocalhostLoopback(),
+		op.WithAllowLocalhostRedirectURIs(),
 		op.WithProfile(profile.OAuth21),
 		op.WithLoginFlow(op.LoginFlow{Primary: op.PrimaryPassword{Store: memStore.UserPasswords()}}),
 		// Without a policy the login page inherits the one the built-in

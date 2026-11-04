@@ -155,7 +155,7 @@ func WithPreferredLocaleStore(store PreferredLocaleStore) Option {
 
 // SetLocaleCookie records an explicit user locale choice in the
 // __Host-oidc_locale cookie, which is the third link of the priority
-// chain [Resolver.Resolve] walks — below the RP's ui_locales parameter,
+// chain [LocaleResolver.Resolve] walks — below the RP's ui_locales parameter,
 // above the browser's Accept-Language header.
 //
 // The OP reads that cookie but never writes it on its own, because it
@@ -215,20 +215,20 @@ func (p *Provider) ClearLocaleCookie(w http.ResponseWriter) {
 	http.SetCookie(w, c)
 }
 
-// Resolver is the public view of the locale resolver the Provider
+// LocaleResolver is the public view of the locale resolver the Provider
 // built from [WithLocale] / [WithDefaultLocale] /
 // [WithPreferredLocaleStore]. Embedders fetch it through
 // [Provider.LocaleResolver] when they want to render emails, server-
 // rendered pages, or out-of-band UIs in the same locale the OP picks
 // for /authorize prompts.
 //
-// Resolver is safe for concurrent use; the Provider builds it once at
+// LocaleResolver is safe for concurrent use; the Provider builds it once at
 // startup and never replaces it.
-type Resolver struct {
+type LocaleResolver struct {
 	inner *i18n.Resolver
 }
 
-// ResolveRequest bundles the per-call signals [Resolver.Resolve]
+// ResolveRequest bundles the per-call signals [LocaleResolver.Resolve]
 // consults. An embedder rendering an out-of-band surface (email,
 // server-rendered admin page) populates the fields it has and leaves
 // the rest at their zero values. The resolver walks the chain in the
@@ -262,7 +262,7 @@ type ResolveRequest struct {
 // default — and returns the first matching locale. The return value is
 // guaranteed to be a registered locale; the chain always terminates at
 // the configured default.
-func (r *Resolver) Resolve(ctx context.Context, in ResolveRequest) Locale {
+func (r *LocaleResolver) Resolve(ctx context.Context, in ResolveRequest) Locale {
 	if r == nil || r.inner == nil {
 		return ""
 	}
@@ -277,7 +277,7 @@ func (r *Resolver) Resolve(ctx context.Context, in ResolveRequest) Locale {
 
 // Default returns the locale the resolver falls back to when no
 // signal in the chain matches. Always populated.
-func (r *Resolver) Default() Locale {
+func (r *LocaleResolver) Default() Locale {
 	if r == nil || r.inner == nil {
 		return ""
 	}
@@ -286,8 +286,8 @@ func (r *Resolver) Default() Locale {
 
 // Available returns the registered locales in registration order
 // (seed bundles first, then [WithLocale] additions). The slice is a
-// fresh copy; mutating it does not affect the Resolver.
-func (r *Resolver) Available() []Locale {
+// fresh copy; mutating it does not affect the LocaleResolver.
+func (r *LocaleResolver) Available() []Locale {
 	if r == nil || r.inner == nil {
 		return nil
 	}
@@ -315,9 +315,9 @@ func (r *Resolver) Available() []Locale {
 // interaction.HTMLDriver does so automatically.
 //
 // Message is safe for concurrent use as long as the caller does not mutate
-// data concurrently with the call. The Resolver and registered bundles are
+// data concurrently with the call. The LocaleResolver and registered bundles are
 // immutable after [New] returns.
-func (r *Resolver) Message(locale Locale, key string, data map[string]string) (string, bool) {
+func (r *LocaleResolver) Message(locale Locale, key string, data map[string]string) (string, bool) {
 	if r == nil || r.inner == nil {
 		return "", false
 	}

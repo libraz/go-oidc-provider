@@ -95,10 +95,10 @@ type Config struct {
 	DPoPReplay store.ConsumedJTIStore
 
 	// MTLSProxy names the header a trusted reverse proxy forwards the
-	// client certificate in, and the addresses it is trusted from — the
-	// same value the OP's [op.WithMTLSProxy] records and
-	// [op.MTLSProxyConfig] reads back. Nil considers only the certificate
-	// of the TLS handshake (r.TLS).
+	// client certificate in, and the CIDR ranges it is trusted from — the
+	// same value the OP's [op.WithMTLSProxy] takes and
+	// [op.Provider.MTLSProxy] reads back. Nil considers only the
+	// certificate of the TLS handshake (r.TLS).
 	MTLSProxy *op.MTLSProxy
 
 	// Logger receives the in-process replay-store warning and the causes
@@ -191,10 +191,11 @@ func New(cfg Config) (*Verifier, error) {
 	}
 	var proxy mtls.ProxyConfig
 	if cfg.MTLSProxy != nil {
-		proxy = mtls.ProxyConfig{
-			HeaderName:     cfg.MTLSProxy.HeaderName,
-			TrustedProxies: append([]netip.Prefix(nil), cfg.MTLSProxy.TrustedProxies...),
+		prefixes, perr := mtls.ParseTrustedProxies(cfg.MTLSProxy.TrustedProxies)
+		if perr != nil {
+			return nil, fmt.Errorf("rs: Config.MTLSProxy: %w", perr)
 		}
+		proxy = mtls.ProxyConfig{HeaderName: cfg.MTLSProxy.HeaderName, TrustedProxies: prefixes}
 	}
 	mv, err := mtls.NewVerifier(mtls.VerifierConfig{Proxy: proxy})
 	if err != nil {
@@ -252,6 +253,11 @@ func (c Config) validate(rule schemeRule) error {
 	}
 	if p := c.MTLSProxy; p != nil && p.HeaderName != "" && len(p.TrustedProxies) == 0 {
 		return errors.New("rs: Config.MTLSProxy names a header but no trusted proxies; the header would be trusted from nowhere")
+	}
+	if p := c.MTLSProxy; p != nil {
+		if _, err := mtls.ParseTrustedProxies(p.TrustedProxies); err != nil {
+			return fmt.Errorf("rs: Config.MTLSProxy: %w", err)
+		}
 	}
 	return c.validateURLs(rule)
 }

@@ -1307,7 +1307,7 @@ func pathHasPrefix(path, prefix string) bool {
 }
 
 // TestScenario_CL_90_ParameterOffSilencesAlreadyEstablishedGrant checks
-// that op.WithClaimsParameterSupported(false) stops the §5.5 projection
+// that op.WithClaimsParameterDisabled() stops the §5.5 projection
 // for a grant whose payload was persisted while the parameter was still
 // enabled. Turning the option off is a deployment-wide posture change,
 // so it cannot be honoured only by the request parsers: a grant records
@@ -1327,7 +1327,7 @@ func TestScenario_CL_90_ParameterOffSilencesAlreadyEstablishedGrant(t *testing.T
 	t.Parallel()
 
 	ctx := context.Background()
-	tk := testkit.NewProvider(t, testkit.WithOptions(op.WithClaimsParameterSupported(false)))
+	tk := testkit.NewProvider(t, testkit.WithOptions(op.WithClaimsParameterDisabled()))
 	rp, secret := clRegisterRP(t, tk, "rp-cl-90")
 	clSeedAlice(t, tk)
 

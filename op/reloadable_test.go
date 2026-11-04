@@ -399,9 +399,8 @@ func TestReloadable_DrainsOldProvider(t *testing.T) {
 
 	f := newReloadFixture(t, false)
 	extra := []op.Option{
-		op.WithAllowInsecureBackchannelLogoutForDev(),
-		op.WithBackchannelLogoutTimeout(30 * time.Second),
-		op.WithBackchannelFanOutBudget(30 * time.Second),
+		op.WithAllowInsecureOutboundForDev(op.OutboundBackchannel),
+		op.WithBackchannelLogout(op.BackchannelLogout{Timeout: 30 * time.Second, FanOutBudget: 30 * time.Second}),
 		op.WithStaticClients(op.PublicClient{
 			ID:                   clientID,
 			RedirectURIs:         []string{reloadSeedRedirect},

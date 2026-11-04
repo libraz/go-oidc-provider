@@ -160,11 +160,28 @@ func TestValidateProfile_RejectsMissingRequiredFeature(t *testing.T) {
 	if !op.IsServerError(err) {
 		t.Errorf("missing required feature must surface as server-side configuration error: %v", err)
 	}
-	// The error description must call out the first missing flag so
-	// an operator can locate the misconfiguration.
+	// The error description must call out the first missing flag, by
+	// the identifier an embedder passes to WithFeature, so an operator
+	// can locate the misconfiguration.
 	missing := required[0]
-	if !strings.Contains(err.Error(), missing.String()) {
-		t.Errorf("err description %q must mention missing flag %q", err, missing)
+	if !strings.Contains(strings.ToLower(err.Error()), "withfeature(feature."+missing.String()+")") {
+		t.Errorf("err description %q must name the missing flag as WithFeature(feature.%s)", err, missing)
+	}
+}
+
+// TestValidateProfile_AnyOfErrorNamesFeatureIdentifiers pins the
+// disjunctive half of the same message: a FAPI profile with neither
+// sender constraint names both options as an embedder would write them.
+func TestValidateProfile_AnyOfErrorNamesFeatureIdentifiers(t *testing.T) {
+	t.Parallel()
+
+	err := op.ValidateProfileFeatureSetForTest(profile.FAPI2Baseline, profile.RequiredFeatures(profile.FAPI2Baseline))
+	if err == nil {
+		t.Fatal("expected configuration error when neither DPoP nor mTLS is enabled, got nil")
+	}
+	const want = "requires at least one of WithFeature(feature.DPoP) or WithFeature(feature.MTLS)"
+	if !strings.Contains(err.Error(), want) {
+		t.Errorf("err = %q, want it to contain %q", err, want)
 	}
 }
 

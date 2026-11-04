@@ -88,7 +88,7 @@ func newSSFE2EProvider(t *testing.T) *testkit.Provider {
 	tk := testkit.NewProvider(t, testkit.WithOptions(
 		op.WithGrants(grant.AuthorizationCode, grant.RefreshToken, grant.ClientCredentials),
 		op.WithSharedSignals(),
-		op.WithAllowInsecureSharedSignalsPushForDev(),
+		op.WithAllowInsecureOutboundForDev(op.OutboundSharedSignals),
 	))
 	t.Cleanup(func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)

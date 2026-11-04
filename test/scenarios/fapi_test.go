@@ -28,6 +28,7 @@ import (
 	josev4 "github.com/go-jose/go-jose/v4"
 	"github.com/go-jose/go-jose/v4/jwt"
 
+	"github.com/libraz/go-oidc-provider/internal/grants/refresh"
 	"github.com/libraz/go-oidc-provider/op"
 	"github.com/libraz/go-oidc-provider/op/feature"
 	"github.com/libraz/go-oidc-provider/op/profile"
@@ -76,13 +77,18 @@ type fapiFixture struct {
 // gateway and is not exercised here.
 func newFAPIFixture(t *testing.T) *fapiFixture {
 	t.Helper()
+	return newPrivateKeyJWTFixture(t, op.WithProfile(profile.FAPI2Baseline), op.WithFeature(feature.DPoP))
+}
+
+// newPrivateKeyJWTFixture is [newFAPIFixture] with the provider options
+// supplied by the caller, so a scenario can contrast the FAPI 2.0
+// posture with a provider that declares no profile.
+func newPrivateKeyJWTFixture(t *testing.T, opts ...op.Option) *fapiFixture {
+	t.Helper()
 	clock := fapiClock{t: fapiAnchor}
 	tk := testkit.NewProvider(t,
 		testkit.WithClock(clock),
-		testkit.WithOptions(
-			op.WithProfile(profile.FAPI2Baseline),
-			op.WithFeature(feature.DPoP),
-		),
+		testkit.WithOptions(opts...),
 	)
 	priv, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
@@ -181,16 +187,22 @@ func (f *fapiFixture) signES256(t *testing.T, claims map[string]any) string {
 }
 
 // clientAssertion builds and signs a private_key_jwt assertion for
-// the fixture's client. The audience is the OP's issuer, which the
-// AuxAudiences plumbing accepts alongside the canonical token-
-// endpoint URL (see op_builders.buildAssertionVerifier).
+// the fixture's client. The audience is the OP's issuer as a single
+// string, the one shape FAPI 2.0 Security Profile §5.3.2.1 admits.
 func (f *fapiFixture) clientAssertion(t *testing.T) string {
+	t.Helper()
+	return f.clientAssertionFor(t, f.tk.Issuer)
+}
+
+// clientAssertionFor is [fapiFixture.clientAssertion] with the "aud"
+// claim supplied by the caller: a string or a string slice.
+func (f *fapiFixture) clientAssertionFor(t *testing.T, aud any) string {
 	t.Helper()
 	now := f.clock.t
 	return f.signES256(t, map[string]any{
 		"iss": f.clientID,
 		"sub": f.clientID,
-		"aud": f.tk.Issuer,
+		"aud": aud,
 		"jti": freshFAPIJTI("ca"),
 		"iat": now.Unix(),
 		"exp": now.Add(2 * time.Minute).Unix(),
@@ -224,10 +236,17 @@ func freshFAPIJTI(prefix string) string {
 // never 302).
 func (f *fapiFixture) parPost(t *testing.T, form url.Values) *http.Response {
 	t.Helper()
+	return f.parPostWithAssertion(t, form, f.clientAssertion(t))
+}
+
+// parPostWithAssertion is [fapiFixture.parPost] with the caller's
+// client_assertion.
+func (f *fapiFixture) parPostWithAssertion(t *testing.T, form url.Values, assertion string) *http.Response {
+	t.Helper()
 	if form == nil {
 		form = url.Values{}
 	}
-	form.Set("client_assertion", f.clientAssertion(t))
+	form.Set("client_assertion", assertion)
 	form.Set("client_assertion_type", "urn:ietf:params:oauth:client-assertion-type:jwt-bearer")
 	target := f.tk.Server.URL + "/oidc/par"
 	req, err := http.NewRequestWithContext(context.Background(), http.MethodPost,
@@ -364,10 +383,62 @@ func TestScenario_FAPI_V2_020_CodeFlowRequiresPKCE(t *testing.T) {
 	}
 }
 
-// TestScenario_FAPI_V2_021_PrivateKeyJWTAudIsIssuer is OOS — see catalog out_of_scope_reason.
+// TestScenario_FAPI_V2_021_PrivateKeyJWTAudIsIssuer pins FAPI 2.0
+// Security Profile §5.3.2.1: under the profile a client assertion
+// authenticates only when its "aud" is the issuer as a single string.
+// An array — even one holding only the issuer — and the token or PAR
+// endpoint URL answer 401 invalid_client. A provider without the
+// profile keeps accepting every one of those shapes.
+//
+// Spec: FAPI 2.0 Security Profile §5.3.2.1 / RFC 7523 §3.
 func TestScenario_FAPI_V2_021_PrivateKeyJWTAudIsIssuer(t *testing.T) {
 	t.Parallel()
-	t.Skip("out-of-scope: FAPI-V2-021 (see catalog out_of_scope_reason)")
+
+	cases := []struct {
+		name    string
+		aud     func(f *fapiFixture) any
+		fapiOK  bool
+		plainOK bool
+	}{
+		{"issuer string", func(f *fapiFixture) any { return f.tk.Issuer }, true, true},
+		{"issuer array", func(f *fapiFixture) any { return []string{f.tk.Issuer} }, false, true},
+		{"token endpoint URL", func(f *fapiFixture) any { return f.tk.Issuer + "/oidc/token" }, false, true},
+		{"PAR endpoint URL", func(f *fapiFixture) any { return f.tk.Issuer + "/oidc/par" }, false, true},
+		{"array with issuer and token endpoint", func(f *fapiFixture) any {
+			return []string{f.tk.Issuer, f.tk.Issuer + "/oidc/token"}
+		}, false, true},
+	}
+	run := func(t *testing.T, f *fapiFixture, aud any, wantOK bool) {
+		t.Helper()
+		resp := f.parPostWithAssertion(t, f.fapiHappyForm(), f.clientAssertionFor(t, aud))
+		defer func() { _ = resp.Body.Close() }()
+		if wantOK {
+			if resp.StatusCode != http.StatusCreated {
+				body, _ := io.ReadAll(resp.Body)
+				t.Fatalf("aud=%v: status=%d want 201; body=%s", aud, resp.StatusCode, body)
+			}
+			return
+		}
+		if resp.StatusCode != http.StatusUnauthorized {
+			body, _ := io.ReadAll(resp.Body)
+			t.Fatalf("aud=%v: status=%d want 401; body=%s", aud, resp.StatusCode, body)
+		}
+		if got, _ := scenariokit.DecodeJSON(t, resp)["error"].(string); got != "invalid_client" {
+			t.Errorf("aud=%v: error=%q want invalid_client", aud, got)
+		}
+	}
+	for _, tc := range cases {
+		t.Run("fapi2-baseline/"+tc.name, func(t *testing.T) {
+			t.Parallel()
+			f := newFAPIFixture(t)
+			run(t, f, tc.aud(f), tc.fapiOK)
+		})
+		t.Run("no-profile/"+tc.name, func(t *testing.T) {
+			t.Parallel()
+			f := newPrivateKeyJWTFixture(t, op.WithFeature(feature.PAR))
+			run(t, f, tc.aud(f), tc.plainOK)
+		})
+	}
 }
 
 // TestScenario_FAPI_V2_022_RedirectURIAlwaysRequired pins the FAPI
@@ -508,4 +579,98 @@ func TestScenario_FAPI_030_PolicyEnforcedRegardlessOfMetadata(t *testing.T) {
 func TestScenario_FAPI_031_DetachedSignatureCarriesSHashCHash(t *testing.T) {
 	t.Parallel()
 	t.Skip("out-of-scope: FAPI-031 (see catalog out_of_scope_reason)")
+}
+
+// TestScenario_FAPI_V2_026_RefreshTokenNotRotated pins FAPI 2.0
+// Security Profile §5.3.2.1: under the profile a refresh_token grant
+// answers with a fresh access token and no refresh_token, the presented
+// refresh token stays redeemable, and retiring the grant still ends it.
+//
+// Spec: FAPI 2.0 Security Profile §5.3.2.1 / RFC 6749 §6.
+func TestScenario_FAPI_V2_026_RefreshTokenNotRotated(t *testing.T) {
+	t.Parallel()
+
+	f := newFAPIFixture(t)
+	const (
+		subject = "fapi-refresh-subject"
+		grantID = "fapi-refresh-grant"
+	)
+	scenariokit.SeedSubject(t, f.tk, subject)
+	issuer, err := refresh.NewIssuer(refresh.IssuerConfig{
+		Store: f.tk.Store.RefreshTokens(),
+		Clock: f.clock,
+		TTL:   time.Hour,
+	})
+	if err != nil {
+		t.Fatalf("refresh.NewIssuer: %v", err)
+	}
+	refreshToken, err := issuer.Issue(context.Background(), refresh.IssueInput{
+		ClientID: f.clientID,
+		Subject:  subject,
+		GrantID:  grantID,
+		Scope:    []string{"openid", "profile"},
+	})
+	if err != nil {
+		t.Fatalf("Issue: %v", err)
+	}
+	key := newDPoPKey(t)
+
+	redeem := func(t *testing.T) (int, map[string]any) {
+		t.Helper()
+		form := url.Values{
+			"grant_type":            {"refresh_token"},
+			"refresh_token":         {refreshToken},
+			"client_id":             {f.clientID},
+			"client_assertion_type": {"urn:ietf:params:oauth:client-assertion-type:jwt-bearer"},
+			"client_assertion":      {f.clientAssertion(t)},
+		}
+		req, err := http.NewRequestWithContext(context.Background(), http.MethodPost,
+			f.tk.Server.URL+"/oidc/token", strings.NewReader(form.Encode()))
+		if err != nil {
+			t.Fatalf("NewRequest /token: %v", err)
+		}
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		req.Header.Set("DPoP", makeDPoPProof(t, key, dpopProofOpts{
+			htu: f.tk.Issuer + "/oidc/token",
+			iat: f.clock.t,
+			jti: freshFAPIJTI("dpop"),
+		}))
+		resp, err := f.tk.HTTPClient(nil).Do(req)
+		if err != nil {
+			t.Fatalf("Do /token: %v", err)
+		}
+		defer func() { _ = resp.Body.Close() }()
+		return resp.StatusCode, scenariokit.DecodeJSON(t, resp)
+	}
+
+	for i := range 2 {
+		status, body := redeem(t)
+		if status != http.StatusOK {
+			t.Fatalf("refresh %d: status=%d body=%v", i, status, body)
+		}
+		if at, _ := body["access_token"].(string); at == "" {
+			t.Errorf("refresh %d: access_token missing: %v", i, body)
+		}
+		if _, ok := body["refresh_token"]; ok {
+			t.Errorf("refresh %d: response carried refresh_token %v; the profile does not rotate", i, body["refresh_token"])
+		}
+	}
+	rec, err := f.tk.Store.RefreshTokens().Find(context.Background(), refreshToken)
+	if err != nil {
+		t.Fatalf("Find: %v", err)
+	}
+	if rec.ConsumedAt != nil {
+		t.Errorf("presented refresh token consumed at %v; it must stay redeemable", rec.ConsumedAt)
+	}
+
+	if err := f.tk.Store.RefreshTokens().RevokeByGrant(context.Background(), grantID); err != nil {
+		t.Fatalf("RevokeByGrant: %v", err)
+	}
+	status, body := redeem(t)
+	if status != http.StatusBadRequest {
+		t.Fatalf("after grant revocation: status=%d body=%v, want 400", status, body)
+	}
+	if got, _ := body["error"].(string); got != "invalid_grant" {
+		t.Errorf("after grant revocation: error=%q want invalid_grant", got)
+	}
 }

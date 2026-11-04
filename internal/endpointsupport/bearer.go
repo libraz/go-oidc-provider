@@ -148,6 +148,12 @@ type BearerDeps struct {
 	// rejection. Nil omits the header but keeps the error code.
 	DPoPNonces dpop.NonceIssuer
 
+	// DPoPHTU is the set of absolute URLs a DPoP proof's "htu" must name
+	// at this endpoint: what discovery advertises for it, plus its RFC
+	// 8705 mtls_endpoint_aliases URL when one is configured. Empty falls
+	// back to the request-derived URL ([dpop.Gate.HTU]).
+	DPoPHTU []string
+
 	// MTLS verifies the client certificate for cnf.x5t#S256-bound
 	// tokens. Nil rejects every such token.
 	MTLS *mtls.Verifier
@@ -322,7 +328,7 @@ func acceptJWTBearer(r *http.Request, raw string, deps BearerDeps) (*BearerAcces
 	if err := checkBearerAudience(deps.Issuer, claims.Audience); err != nil {
 		return nil, err
 	}
-	if err := checkBearerCnf(r, deps, claims.Confirmation, raw); err != nil {
+	if err := checkBearerCnf(r, deps, claims.ClientID, claims.Confirmation, raw); err != nil {
 		return nil, err
 	}
 	revoked, ok := revocation.JWTAccessTokenRevoked(r.Context(), revocation.JWTRevocationOpts{
@@ -364,7 +370,7 @@ func acceptOpaqueBearer(r *http.Request, raw string, deps BearerDeps) (*BearerAc
 	if err := checkBearerAudience(deps.Issuer, claims.Audience); err != nil {
 		return nil, err
 	}
-	if err := checkBearerCnf(r, deps, claims.Confirmation, raw); err != nil {
+	if err := checkBearerCnf(r, deps, claims.ClientID, claims.Confirmation, raw); err != nil {
 		return nil, err
 	}
 	return &BearerAccess{Claims: claims, AuthorizationRecorded: view.Record.AuthorizationRecorded}, nil
@@ -411,14 +417,14 @@ func checkBearerAudience(issuer string, audience []string) error {
 // checkBearerCnf enforces every sender constraint the token carries
 // (RFC 7800): cnf.jkt by DPoP proof, cnf.x5t#S256 by client
 // certificate, both when both are present.
-func checkBearerCnf(r *http.Request, deps BearerDeps, cnf map[string]string, raw string) error {
+func checkBearerCnf(r *http.Request, deps BearerDeps, clientID string, cnf map[string]string, raw string) error {
 	if jkt := cnf[tokens.CnfJKT]; jkt != "" {
 		if err := checkBearerDPoP(r, deps, jkt, raw); err != nil {
 			return err
 		}
 	}
 	if x5t := cnf[tokens.CnfX5tS256]; x5t != "" {
-		if err := checkBearerMTLS(r, deps, x5t); err != nil {
+		if err := checkBearerMTLS(r, deps, clientID, x5t); err != nil {
 			return err
 		}
 	}
@@ -437,7 +443,7 @@ func checkBearerDPoP(r *http.Request, deps BearerDeps, jkt, raw string) error {
 	if !dpop.HasProof(r) {
 		return invalidDPoP(bearerDescDPoPRequired)
 	}
-	res, err := deps.DPoP.VerifyHTTPRequest(r.Context(), r, raw)
+	res, err := deps.DPoP.VerifyHTTPRequestAt(r.Context(), r, raw, deps.DPoPHTU)
 	if err != nil {
 		if dpop.IsNonceError(err) {
 			return NewUseDPoPNonceError(deps.DPoPNonces)
@@ -450,12 +456,28 @@ func checkBearerDPoP(r *http.Request, deps BearerDeps, jkt, raw string) error {
 	return nil
 }
 
-func checkBearerMTLS(r *http.Request, deps BearerDeps, bound string) error {
+func checkBearerMTLS(r *http.Request, deps BearerDeps, clientID, bound string) error {
 	if deps.MTLS == nil {
 		return invalidBearer(bearerDescMTLSDisabled)
 	}
-	if err := deps.MTLS.VerifyBoundRequest(r, bound); err != nil {
+	if err := bearerMTLSVerifier(r, deps, clientID).VerifyBoundRequest(r, bound); err != nil {
 		return invalidBearer(bearerDescMTLSMismatched)
 	}
 	return nil
+}
+
+// bearerMTLSVerifier returns the mTLS view for the token's client
+// ([mtls.Verifier.ForClient]), so a certificate a self_signed_tls_client_auth
+// client bound is re-verified under the rule it was issued under. The client
+// is looked up only when the view can differ; an unresolvable client keeps
+// the RootCAs rule, the stricter one.
+func bearerMTLSVerifier(r *http.Request, deps BearerDeps, clientID string) *mtls.Verifier {
+	if !deps.MTLS.VerifiesChains() || deps.Clients == nil || clientID == "" {
+		return deps.MTLS
+	}
+	client, err := deps.Clients.GetClient(r.Context(), clientID)
+	if err != nil || client == nil {
+		return deps.MTLS
+	}
+	return deps.MTLS.ForClient(client.TokenEndpointAuthMethod)
 }

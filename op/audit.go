@@ -692,10 +692,13 @@ const (
 	// enforces, which may be narrower than the profile permits; empty
 	// means no profile narrowed it), access_token_ttl_seconds,
 	// access_token_format, refresh_token_ttl_seconds,
-	// refresh_grace_period_seconds, dpop_nonce_required,
+	// refresh_grace_period_seconds, refresh_rotation (false when the
+	// profile keeps one refresh token for its lifetime instead of
+	// rotating it on every use), dpop_nonce_required,
 	// signed_request_object_required, signed_backchannel_request_required,
 	// jarm_required, signed_introspection_required,
-	// insecure_backchannel_logout_for_dev.
+	// insecure_backchannel_logout_for_dev,
+	// insecure_shared_signals_push_for_dev.
 	//
 	// The event rides the audit emitter rather than the operational
 	// logger: the two are structurally separate so audit records

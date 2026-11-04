@@ -10,6 +10,7 @@ import (
 
 	"github.com/libraz/go-oidc-provider/internal/clientauth"
 	internaljose "github.com/libraz/go-oidc-provider/internal/jose"
+	"github.com/libraz/go-oidc-provider/internal/mtls"
 	"github.com/libraz/go-oidc-provider/internal/scoperegistry"
 	"github.com/libraz/go-oidc-provider/op/store"
 )
@@ -22,6 +23,18 @@ type profilePolicy struct {
 	signingAlgs []internaljose.Algorithm
 	// signingAlg is the OP's issuing algorithm; empty means ES256.
 	signingAlg string
+	// static marks metadata projected from an embedder-supplied seed, so
+	// a rejection can point at the seed type that would be accepted.
+	static bool
+	// profileName names the profile(s) narrowing authMethods; used in
+	// static-seed rejections only.
+	profileName string
+	// mtlsClientAuth admits the RFC 8705 §2 methods; the OP runs with
+	// feature.MTLS.
+	mtlsClientAuth bool
+	// profileAdmitsMTLS marks a profile that would admit the RFC 8705 §2
+	// methods once feature.MTLS is on; static-seed rejections say so.
+	profileAdmitsMTLS bool
 }
 
 // opAlg returns the OP's issuing algorithm, ES256 when unset.
@@ -82,7 +95,8 @@ func validatePolicy(
 		func() error {
 			return validateGrantResponseTypeConsistency(canonical.GrantTypes, canonical.ResponseTypes)
 		},
-		func() error { return validateAuthMethod(canonical.TokenEndpointAuthMethod, profile.authMethods) },
+		func() error { return validateAuthMethod(canonical.TokenEndpointAuthMethod, profile) },
+		func() error { return validateTLSClientAuthMetadata(canonical) },
 		func() error {
 			return validateSigningAlg("token_endpoint_auth_signing_alg", canonical.TokenEndpointAuthSigningAlg, profile.signingAlgs)
 		},
@@ -449,22 +463,116 @@ func validateGrantResponseTypeConsistency(grantTypes, responseTypes []string) er
 
 // validateAuthMethod rejects token_endpoint_auth_method values the
 // library does not implement (client_secret_jwt is rejected because
-// the library does not negotiate symmetric JWT algorithms) and any
-// value outside the closed set the OP advertises. A non-empty allowed
-// list is the active profile's restriction, the same one every runtime
-// client-authentication site enforces.
-func validateAuthMethod(m string, allowed []clientauth.Method) error {
+// the library does not negotiate symmetric JWT algorithms), the RFC 8705
+// §2 methods on an OP without feature.MTLS, and any value outside the
+// closed set the OP advertises. A non-empty allowed list is the active
+// profile's restriction, the same one every runtime client-authentication
+// site enforces. For a static seed the message names the active profile
+// and the seed types that would be accepted.
+func validateAuthMethod(m string, profile profilePolicy) error {
 	switch m {
 	case string(clientauth.MethodSecretBasic), string(clientauth.MethodSecretPost), string(clientauth.MethodPrivateKeyJWT), string(clientauth.MethodNone):
-		if len(allowed) > 0 && !slices.Contains(allowed, clientauth.Method(m)) {
-			return errInvalidClientMetadata("token_endpoint_auth_method " + m + " is not allowed by active profile")
+		return validateProfileAuthMethod(m, profile)
+	case string(clientauth.MethodTLSClientAuth), string(clientauth.MethodSelfSignedTLSClientAuth):
+		if !profile.mtlsClientAuth {
+			msg := "token_endpoint_auth_method " + m + " is not supported"
+			if profile.static {
+				msg += ": mTLS client authentication requires WithFeature(feature.MTLS); " +
+					"seed the client as op.TLSClientAuthClient or op.SelfSignedTLSClientAuthClient"
+			}
+			return errInvalidClientMetadata(msg)
 		}
-		return nil
+		return validateProfileAuthMethod(m, profile)
 	case "client_secret_jwt":
 		return errInvalidClientMetadata("token_endpoint_auth_method client_secret_jwt is not supported")
 	default:
 		return errInvalidClientMetadata("token_endpoint_auth_method " + m + " is not supported")
 	}
+}
+
+// validateProfileAuthMethod refuses a supported method the active profile
+// excludes.
+func validateProfileAuthMethod(m string, profile profilePolicy) error {
+	if len(profile.authMethods) == 0 || slices.Contains(profile.authMethods, clientauth.Method(m)) {
+		return nil
+	}
+	msg := "token_endpoint_auth_method " + m + " is not allowed by active profile"
+	if profile.static {
+		if profile.profileName != "" {
+			msg += " " + profile.profileName
+		}
+		msg += "; seed this client as " + staticSeedTypeHint(profile.authMethods)
+		if profile.profileAdmitsMTLS && !profile.mtlsClientAuth {
+			msg += ", or as op.TLSClientAuthClient or op.SelfSignedTLSClientAuthClient with WithFeature(feature.MTLS)"
+		}
+	}
+	return errInvalidClientMetadata(msg)
+}
+
+// validateTLSClientAuthMetadata enforces RFC 8705 §2: a tls_client_auth
+// client registers exactly one tls_client_auth_* matcher, a
+// self_signed_tls_client_auth client registers exactly one of jwks and
+// jwks_uri, and no other method carries a matcher the OP would store but
+// never compare.
+func validateTLSClientAuthMetadata(m ClientMetadata) error {
+	matcher := mtls.ClientMatcher{
+		SubjectDN: m.TLSClientAuthSubjectDN,
+		SANDNS:    m.TLSClientAuthSANDNS,
+		SANURI:    m.TLSClientAuthSANURI,
+		SANIP:     m.TLSClientAuthSANIP,
+		SANEmail:  m.TLSClientAuthSANEmail,
+	}
+	switch m.TokenEndpointAuthMethod {
+	case string(clientauth.MethodTLSClientAuth):
+		if err := matcher.Validate(); err != nil {
+			if errors.Is(err, mtls.ErrMatcherMalformed) {
+				return errInvalidClientMetadata("tls_client_auth_san_ip must be an IP address")
+			}
+			return errInvalidClientMetadata("tls_client_auth requires exactly one of " + tlsClientAuthMatcherFields)
+		}
+		if m.TLSClientAuthSANURI != "" {
+			if u, err := url.Parse(m.TLSClientAuthSANURI); err != nil || !u.IsAbs() {
+				return errInvalidClientMetadata("tls_client_auth_san_uri must be an absolute URI")
+			}
+		}
+		return nil
+	case string(clientauth.MethodSelfSignedTLSClientAuth):
+		if (len(m.JWKs) > 0) == (m.JWKsURI != "") {
+			return errInvalidClientMetadata("self_signed_tls_client_auth requires exactly one of jwks or jwks_uri")
+		}
+	}
+	if !errors.Is(matcher.Validate(), mtls.ErrNoMatcherConfigured) {
+		return errInvalidClientMetadata(tlsClientAuthMatcherFields + " apply to token_endpoint_auth_method tls_client_auth only")
+	}
+	return nil
+}
+
+// tlsClientAuthMatcherFields names the RFC 8705 §2.1.2 matcher members.
+const tlsClientAuthMatcherFields = "tls_client_auth_subject_dn, tls_client_auth_san_dns, " +
+	"tls_client_auth_san_uri, tls_client_auth_san_ip or tls_client_auth_san_email"
+
+// staticSeedTypeHint renders the static seed types whose
+// token_endpoint_auth_method the profile admits, in a fixed order.
+func staticSeedTypeHint(allowed []clientauth.Method) string {
+	var types []string
+	for _, entry := range []struct {
+		methods []clientauth.Method
+		seed    string
+	}{
+		{[]clientauth.Method{clientauth.MethodPrivateKeyJWT}, "op.PrivateKeyJWTClient"},
+		{[]clientauth.Method{clientauth.MethodTLSClientAuth}, "op.TLSClientAuthClient"},
+		{[]clientauth.Method{clientauth.MethodSelfSignedTLSClientAuth}, "op.SelfSignedTLSClientAuthClient"},
+		{[]clientauth.Method{clientauth.MethodSecretBasic, clientauth.MethodSecretPost}, "op.ConfidentialClient"},
+		{[]clientauth.Method{clientauth.MethodNone}, "op.PublicClient"},
+	} {
+		if slices.ContainsFunc(entry.methods, func(m clientauth.Method) bool { return slices.Contains(allowed, m) }) {
+			types = append(types, entry.seed)
+		}
+	}
+	if len(types) == 0 {
+		return "a client type the profile admits"
+	}
+	return strings.Join(types, " or ")
 }
 
 // validateSigningAlg checks a registered signing algorithm against the
@@ -555,7 +663,7 @@ func validateMetadataURIs(m ClientMetadata, allowInsecureBackchannelLogoutForDev
 
 // validateBackchannelLogoutURI mirrors [validateHTTPSAbsoluteURI]
 // for the `backchannel_logout_uri` field, with one carve-out gated
-// on [op.WithAllowInsecureBackchannelLogoutForDev]: under the dev
+// on [op.WithAllowInsecureOutboundForDev] ([op.OutboundBackchannel]): under the dev
 // opt-in, plain-http URLs whose host is a loopback identity
 // (127.0.0.1, [::1], or "localhost") are admitted so the
 // in-process examples and CI fixtures can run without TLS. The
@@ -569,7 +677,7 @@ func validateBackchannelLogoutURI(raw string, allowDevLoopback bool) error {
 }
 
 // isLoopbackHost reports whether host is one of the dev-mode
-// loopback identities WithAllowInsecureBackchannelLogoutForDev
+// loopback identities WithAllowInsecureOutboundForDev(OutboundBackchannel)
 // admits over plain http: the textual "localhost", or the IP
 // literals 127.0.0.1 and [::1].
 func isLoopbackHost(host string) bool {
@@ -652,7 +760,7 @@ func validateAbsoluteURL(field, raw string, rules urlRules) error {
 	}
 	if rules.allowLoopbackHTTP && u.Scheme != "https" && (u.Scheme != "http" || !isLoopbackHost(u.Hostname())) {
 		return errInvalidClientMetadata(
-			field + " must use https (or http with a loopback host under WithAllowInsecureBackchannelLogoutForDev)",
+			field + " must use https (or http with a loopback host under op.WithAllowInsecureOutboundForDev(op.OutboundBackchannel))",
 		)
 	}
 	return nil

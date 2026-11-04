@@ -223,6 +223,10 @@ func newDPoPFixture(t *testing.T, extraOpts ...op.Option) *dpopFixture {
 // tokenURL is the canonical /token endpoint URL for the fixture's OP.
 func (f *dpopFixture) tokenURL() string { return f.tk.Server.URL + "/oidc/token" }
 
+// tokenHTU is the token endpoint URL the OP advertises, which a DPoP
+// proof names; the request itself goes to [dpopFixture.tokenURL].
+func (f *dpopFixture) tokenHTU() string { return f.tk.Issuer + "/oidc/token" }
+
 // runFlow drives /authorize → consent → callback and returns the
 // authorization code together with the PKCE verifier scenariokit minted
 // inline. Callers exchange the code at /token with their preferred
@@ -364,7 +368,7 @@ func (f *dpopAsyncFixture) post(
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	req.Header.Set("DPoP", makeDPoPProof(t, f.key, dpopProofOpts{
 		method: http.MethodPost,
-		htu:    endpoint,
+		htu:    f.tk.Issuer + path,
 		jti:    proofJTI,
 	}))
 	if f.secret != "" {
@@ -592,7 +596,7 @@ func TestScenario_DPOP_007_ProofTypMustBeDpopJwt(t *testing.T) {
 	key := newDPoPKey(t)
 	proof := makeDPoPProof(t, key, dpopProofOpts{
 		method: http.MethodPost,
-		htu:    f.tokenURL(),
+		htu:    f.tokenHTU(),
 		typ:    "JWT", // upstream-style typ that the OP MUST reject.
 	})
 	form := url.Values{
@@ -682,7 +686,7 @@ func TestScenario_DPOP_012_ProofRequiresJtiClaim(t *testing.T) {
 			code, verifier := f.runFlow(t)
 			claims := map[string]any{
 				"htm": http.MethodPost,
-				"htu": f.tokenURL(),
+				"htu": f.tokenHTU(),
 				"iat": dpopAnchor.Unix(),
 			}
 			if tc.jti != nil {
@@ -718,7 +722,7 @@ func TestScenario_DPOP_013_ProofHtmMustMatchMethod(t *testing.T) {
 	// fails the htm comparison.
 	proof := makeDPoPProof(t, key, dpopProofOpts{
 		method: http.MethodGet,
-		htu:    f.tokenURL(),
+		htu:    f.tokenHTU(),
 	})
 	form := url.Values{
 		"grant_type":    {"authorization_code"},
@@ -799,7 +803,7 @@ func TestScenario_DPOP_014_ProofHtuMustMatchURI(t *testing.T) {
 				code, verifier := f.runFlow(t)
 				proof := makeDPoPProof(t, newDPoPKey(t), dpopProofOpts{
 					method: http.MethodPost,
-					htu:    f.tokenURL() + tc.htuSuffix,
+					htu:    f.tokenHTU() + tc.htuSuffix,
 				})
 				form := url.Values{
 					"grant_type":    {"authorization_code"},
@@ -848,7 +852,7 @@ func TestScenario_DPOP_015_IatFreshnessWindowEnforced(t *testing.T) {
 			code, verifier := f.runFlow(t)
 			proof := makeDPoPProof(t, newDPoPKey(t), dpopProofOpts{
 				method: http.MethodPost,
-				htu:    f.tokenURL(),
+				htu:    f.tokenHTU(),
 				iat:    dpopAnchor.Add(tc.offset),
 			})
 			form := url.Values{
@@ -904,7 +908,7 @@ func TestScenario_DPOP_017_ProofReplayDetected(t *testing.T) {
 	key := newDPoPKey(t)
 	proof := makeDPoPProof(t, key, dpopProofOpts{
 		method: http.MethodPost,
-		htu:    f.tokenURL(),
+		htu:    f.tokenHTU(),
 		jti:    "replay-test-jti",
 	})
 	// First redemption (must succeed and consume the jti).
@@ -1098,7 +1102,7 @@ func TestScenario_DPOP_028_FreshNonceNotRotated(t *testing.T) {
 	key := newDPoPKey(t)
 	proof := makeDPoPProof(t, key, dpopProofOpts{
 		method: http.MethodPost,
-		htu:    f.tokenURL(),
+		htu:    f.tokenHTU(),
 		nonce:  src.IssueNonce(),
 	})
 	form := url.Values{
@@ -1302,7 +1306,7 @@ func TestScenario_DPOP_034_PARDpopJktMatch(t *testing.T) {
 	}
 	proof := makeDPoPProof(t, key, dpopProofOpts{
 		method: http.MethodPost,
-		htu:    parURL,
+		htu:    f.tk.Issuer + "/oidc/par",
 	})
 
 	req, err := http.NewRequestWithContext(context.Background(), http.MethodPost,
@@ -1357,7 +1361,7 @@ func TestScenario_DPOP_035_PARDpopJktMismatch(t *testing.T) {
 	}
 	proof := makeDPoPProof(t, proofKey, dpopProofOpts{
 		method: http.MethodPost,
-		htu:    parURL,
+		htu:    f.tk.Issuer + "/oidc/par",
 	})
 
 	req, err := http.NewRequestWithContext(context.Background(), http.MethodPost,
@@ -1415,7 +1419,7 @@ func TestScenario_DPOP_036_PARAutoBindsDpopJkt(t *testing.T) {
 	}
 	proof := makeDPoPProof(t, key, dpopProofOpts{
 		method: http.MethodPost,
-		htu:    parURL,
+		htu:    f.tk.Issuer + "/oidc/par",
 	})
 	if len(key.jkt) != 43 {
 		t.Fatalf("internal: jkt=%q want 43-char base64url", key.jkt)
@@ -1468,7 +1472,7 @@ func TestScenario_DPOP_038_CodeGrantWithoutDpopJkt(t *testing.T) {
 	key := newDPoPKey(t)
 	proof := makeDPoPProof(t, key, dpopProofOpts{
 		method: http.MethodPost,
-		htu:    f.tokenURL(),
+		htu:    f.tokenHTU(),
 	})
 	form := url.Values{
 		"grant_type":    {"authorization_code"},
@@ -1513,7 +1517,7 @@ func TestScenario_DPOP_039_CodeGrantWithDpopJktMatch(t *testing.T) {
 
 	proof := makeDPoPProof(t, key, dpopProofOpts{
 		method: http.MethodPost,
-		htu:    f.tokenURL(),
+		htu:    f.tokenHTU(),
 	})
 	form := url.Values{
 		"grant_type":    {"authorization_code"},
@@ -1563,7 +1567,7 @@ func TestScenario_DPOP_040_CodeGrantKeyMismatch(t *testing.T) {
 	// but redeemed with a key whose thumbprint differs.
 	proof := makeDPoPProof(t, other, dpopProofOpts{
 		method: http.MethodPost,
-		htu:    f.tokenURL(),
+		htu:    f.tokenHTU(),
 	})
 	form := url.Values{
 		"grant_type":    {"authorization_code"},
@@ -1724,7 +1728,7 @@ func TestScenario_DPOP_042_RefreshTokenConfidential(t *testing.T) {
 	// Redeem the code with a DPoP proof to bind the access token.
 	codeProof := makeDPoPProof(t, key, dpopProofOpts{
 		method: http.MethodPost,
-		htu:    f.tokenURL(),
+		htu:    f.tokenHTU(),
 	})
 	form := url.Values{
 		"grant_type":    {"authorization_code"},
@@ -1746,7 +1750,7 @@ func TestScenario_DPOP_042_RefreshTokenConfidential(t *testing.T) {
 	// Now refresh with a fresh DPoP proof using the same key.
 	refreshProof := makeDPoPProof(t, key, dpopProofOpts{
 		method: http.MethodPost,
-		htu:    f.tokenURL(),
+		htu:    f.tokenHTU(),
 		jti:    "refresh-jti-042",
 	})
 	rresp := f.postRefresh(t, rt, refreshProof, false)
@@ -1784,7 +1788,7 @@ func TestScenario_DPOP_043_CodeGrantPublicClient(t *testing.T) {
 	key := newDPoPKey(t)
 	proof := makeDPoPProof(t, key, dpopProofOpts{
 		method: http.MethodPost,
-		htu:    f.tokenURL(),
+		htu:    f.tokenHTU(),
 	})
 
 	// Public client: pass client_id via form body, no Basic auth.
@@ -1849,7 +1853,7 @@ func TestScenario_DPOP_044_RefreshTokenPublicClientSuccess(t *testing.T) {
 	// Initial code redemption binds the AT + RT to key.jkt.
 	codeProof := makeDPoPProof(t, key, dpopProofOpts{
 		method: http.MethodPost,
-		htu:    f.tokenURL(),
+		htu:    f.tokenHTU(),
 	})
 	codeForm := url.Values{
 		"grant_type":    {"authorization_code"},
@@ -1882,7 +1886,7 @@ func TestScenario_DPOP_044_RefreshTokenPublicClientSuccess(t *testing.T) {
 	// Refresh with a fresh proof under the SAME key.
 	refreshProof := makeDPoPProof(t, key, dpopProofOpts{
 		method: http.MethodPost,
-		htu:    f.tokenURL(),
+		htu:    f.tokenHTU(),
 		jti:    "refresh-jti-044",
 	})
 	rresp := f.postRefresh(t, rt, refreshProof, true)
@@ -1930,7 +1934,7 @@ func TestScenario_DPOP_045_RefreshTokenPublicClientKeyMismatch(t *testing.T) {
 	// Initial code redemption binds the chain to bindKey.
 	codeProof := makeDPoPProof(t, bindKey, dpopProofOpts{
 		method: http.MethodPost,
-		htu:    f.tokenURL(),
+		htu:    f.tokenHTU(),
 	})
 	codeForm := url.Values{
 		"grant_type":    {"authorization_code"},
@@ -1963,7 +1967,7 @@ func TestScenario_DPOP_045_RefreshTokenPublicClientKeyMismatch(t *testing.T) {
 	// Refresh with a proof signed by a DIFFERENT key.
 	refreshProof := makeDPoPProof(t, otherKey, dpopProofOpts{
 		method: http.MethodPost,
-		htu:    f.tokenURL(),
+		htu:    f.tokenHTU(),
 		jti:    "refresh-jti-045-other",
 	})
 	rresp := f.postRefresh(t, rt, refreshProof, true)
@@ -2003,7 +2007,7 @@ func TestScenario_DPOP_046_ClientCredentialsBinding(t *testing.T) {
 	key := newDPoPKey(t)
 	proof := makeDPoPProof(t, key, dpopProofOpts{
 		method: http.MethodPost,
-		htu:    tokenURL,
+		htu:    tk.Issuer + "/oidc/token",
 	})
 	form := url.Values{
 		"grant_type": {"client_credentials"},
@@ -2152,4 +2156,80 @@ func TestScenario_DPOP_050_DPoPJKTAdmissionFollowsTheFeatureFlag(t *testing.T) {
 			t.Errorf("error_description=%q does not name the offending parameter", res.ErrorDesc)
 		}
 	})
+}
+
+// TestScenario_DPOP_051_HtuComparedAgainstAdvertisedURL pins that an OP
+// endpoint compares a proof's htu with the URL it advertises — the
+// discovery value, or the endpoint's mtls_endpoint_aliases entry when
+// one is published — rather than with the URL the request reconstructs
+// to. The test server listens on a loopback address the issuer does not
+// name, which is the shape a deployment behind an unconfigured proxy has.
+//
+// Spec: RFC 9449 §4.3 / RFC 8705 §5.
+func TestScenario_DPOP_051_HtuComparedAgainstAdvertisedURL(t *testing.T) {
+	t.Parallel()
+
+	const alias = "https://mtls.op.testkit.invalid/oidc/token"
+	cases := []struct {
+		name   string
+		htu    func(tk *testkit.Provider) string
+		wantOK bool
+	}{
+		{"advertised token endpoint", func(tk *testkit.Provider) string { return tk.Issuer + "/oidc/token" }, true},
+		{"mtls endpoint alias", func(*testkit.Provider) string { return alias }, true},
+		{"request-derived test server URL", func(tk *testkit.Provider) string { return tk.Server.URL + "/oidc/token" }, false},
+		{"another advertised endpoint", func(tk *testkit.Provider) string { return tk.Issuer + "/oidc/par" }, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			tk := testkit.NewProvider(t,
+				testkit.WithClock(dpopFixedClock{t: dpopAnchor}),
+				testkit.WithOptions(
+					scenariokit.WithClientCredentials(),
+					op.WithFeature(feature.DPoP),
+					op.WithFeature(feature.MTLS),
+					op.WithDiscoveryMetadata(op.DiscoveryMetadata{
+						MTLSEndpointAliases: map[string]string{"token_endpoint": alias},
+					}),
+				),
+			)
+			const clientID = "rp-dpop-htu"
+			const secret = "rp-dpop-htu-secret" //nolint:gosec // test fixture: not a real credential.
+			hash, err := op.HashClientSecret(secret)
+			if err != nil {
+				t.Fatalf("HashClientSecret: %v", err)
+			}
+			tk.RegisterClient(t, testkit.ClientFixture{
+				ID:                      clientID,
+				SecretHash:              hash,
+				Scopes:                  []string{"api"},
+				GrantTypes:              []string{"client_credentials"},
+				TokenEndpointAuthMethod: "client_secret_basic",
+			})
+			form := url.Values{"grant_type": {"client_credentials"}, "scope": {"api"}}
+			req, err := http.NewRequestWithContext(context.Background(), http.MethodPost,
+				tk.Server.URL+"/oidc/token", strings.NewReader(form.Encode()))
+			if err != nil {
+				t.Fatalf("NewRequest /token: %v", err)
+			}
+			req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+			req.SetBasicAuth(clientID, secret)
+			req.Header.Set("DPoP", makeDPoPProof(t, newDPoPKey(t), dpopProofOpts{htu: tc.htu(tk)}))
+			resp, err := tk.HTTPClient(nil).Do(req)
+			if err != nil {
+				t.Fatalf("Do /token: %v", err)
+			}
+			if !tc.wantOK {
+				expectTokenErrorDetail(t, resp, "invalid_request", "DPoP proof does not bind to this request")
+				return
+			}
+			defer func() { _ = resp.Body.Close() }()
+			if resp.StatusCode != http.StatusOK {
+				raw, _ := io.ReadAll(resp.Body)
+				t.Fatalf("/token status=%d body=%s", resp.StatusCode, raw)
+			}
+		})
+	}
 }

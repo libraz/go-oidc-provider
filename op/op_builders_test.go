@@ -6,12 +6,14 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/libraz/go-oidc-provider/internal/clientauth"
 	"github.com/libraz/go-oidc-provider/internal/proxy"
+	"github.com/libraz/go-oidc-provider/op/profile"
 	"github.com/libraz/go-oidc-provider/op/storeadapter/inmem"
 )
 
@@ -54,7 +56,7 @@ func TestBuildAssertionVerifiers_EndpointScopedAudience(t *testing.T) {
 	}
 	cfg.applyDefaults()
 
-	verifiers, err := buildAssertionVerifiers(cfg)
+	verifiers, err := testAssertionVerifiers(cfg)
 	if err != nil {
 		t.Fatalf("buildAssertionVerifiers: %v", err)
 	}
@@ -69,6 +71,76 @@ func TestBuildAssertionVerifiers_EndpointScopedAudience(t *testing.T) {
 	assertVerifierAudiences(t, "revoke", verifiers.Revoke, tokenAud, []string{cfg.issuer}, []string{parAud, backchannelAud})
 	assertVerifierAudiences(t, "device", verifiers.Device, tokenAud, []string{cfg.issuer}, []string{parAud, backchannelAud})
 	assertVerifierAudiences(t, "backchannel", verifiers.Backchannel, backchannelAud, []string{cfg.issuer, tokenAud}, []string{parAud})
+}
+
+// TestBuildAssertionVerifiers_FAPI2IssuerOnly pins FAPI 2.0 Security
+// Profile §5.3.2.1 at the wiring layer: under either FAPI 2.0 profile
+// every client-authenticating endpoint accepts the issuer, as a single
+// string, and nothing else. FAPI-CIBA keeps the endpoint-scoped dual
+// acceptance the test above describes.
+func TestBuildAssertionVerifiers_FAPI2IssuerOnly(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 4, 26, 12, 0, 0, 0, time.UTC)
+	for _, tc := range []struct {
+		profile    profile.Profile
+		issuerOnly bool
+	}{
+		{profile.FAPI2Baseline, true},
+		{profile.FAPI2MessageSigning, true},
+		{profile.FAPICIBA, false},
+		{profile.OAuth21, false},
+	} {
+		t.Run(tc.profile.String(), func(t *testing.T) {
+			t.Parallel()
+			cfg := &config{
+				issuer:   "https://op.example.com",
+				store:    inmem.New(inmem.WithClock(builderTestClock{now: now})),
+				clock:    builderTestClock{now: now},
+				profiles: []profile.Profile{tc.profile},
+			}
+			cfg.applyDefaults()
+			verifiers, err := testAssertionVerifiers(cfg)
+			if err != nil {
+				t.Fatalf("buildAssertionVerifiers: %v", err)
+			}
+			for name, v := range map[string]*clientauth.PrivateKeyJWTVerifier{
+				"token": verifiers.Token, "par": verifiers.PAR, "introspect": verifiers.Introspect,
+				"revoke": verifiers.Revoke, "device": verifiers.Device, "backchannel": verifiers.Backchannel,
+			} {
+				if v.SingleStringAudience != tc.issuerOnly {
+					t.Errorf("%s SingleStringAudience=%v want %v", name, v.SingleStringAudience, tc.issuerOnly)
+				}
+				if !tc.issuerOnly {
+					continue
+				}
+				if v.Audience != cfg.issuer || len(v.AuxAudiences) != 0 {
+					t.Errorf("%s Audience=%q Aux=%v, want the issuer alone", name, v.Audience, v.AuxAudiences)
+				}
+			}
+		})
+	}
+}
+
+// TestDPoPHTU_AdvertisedURLAndAlias pins the htu set an OP endpoint
+// compares DPoP proofs against: the URL discovery advertises (issuer,
+// mount prefix, endpoint path) and the endpoint's own
+// mtls_endpoint_aliases entry, never another endpoint's.
+func TestDPoPHTU_AdvertisedURLAndAlias(t *testing.T) {
+	t.Parallel()
+
+	cfg := &config{issuer: "https://op.example.com/tenant", mountPrefix: "/oidc"}
+	cfg.discoveryMetadata.MTLSEndpointAliases = map[string]string{ //nolint:gosec // endpoint URLs, not credentials.
+		"token_endpoint": "https://mtls.op.example.com/tenant/oidc/token",
+	}
+	got := dpopHTU(cfg, "/token", "token_endpoint")
+	want := []string{"https://op.example.com/tenant/oidc/token", "https://mtls.op.example.com/tenant/oidc/token"}
+	if !slices.Equal(got, want) {
+		t.Errorf("token htu=%v want %v", got, want)
+	}
+	if got := dpopHTU(cfg, "/userinfo", "userinfo_endpoint"); !slices.Equal(got, []string{"https://op.example.com/tenant/oidc/userinfo"}) {
+		t.Errorf("userinfo htu=%v want the advertised URL alone", got)
+	}
 }
 
 func assertVerifierAudiences(
@@ -267,13 +339,13 @@ func TestPrivateNetworkRefusals_NameTheirOption(t *testing.T) {
 	cfg := &config{clock: builderTestClock{now: time.Unix(1_700_000_000, 0)}}
 
 	_, err := cfg.relyingPartyJWKS().Fetch(context.Background(), "http://10.0.0.1/jwks")
-	if err == nil || !strings.Contains(err.Error(), "op.WithAllowPrivateNetworkJWKS()") {
-		t.Errorf("jwks err=%v want a hint naming op.WithAllowPrivateNetworkJWKS()", err)
+	if err == nil || !strings.Contains(err.Error(), "op.WithAllowPrivateNetwork(op.OutboundJWKS)") {
+		t.Errorf("jwks err=%v want a hint naming op.WithAllowPrivateNetwork(op.OutboundJWKS)", err)
 	}
 
 	_, err = buildSectorResolver(cfg).Resolve(context.Background(), "https://10.0.0.1/sector.json", nil)
-	if err == nil || !strings.Contains(err.Error(), "op.WithAllowPrivateNetworkSector()") {
-		t.Errorf("sector err=%v want a hint naming op.WithAllowPrivateNetworkSector()", err)
+	if err == nil || !strings.Contains(err.Error(), "op.WithAllowPrivateNetwork(op.OutboundSector)") {
+		t.Errorf("sector err=%v want a hint naming op.WithAllowPrivateNetwork(op.OutboundSector)", err)
 	}
 }
 
@@ -292,9 +364,19 @@ func TestRelyingPartyJWKS_RefusalReachesConfiguredLogger(t *testing.T) {
 		t.Fatal("fetch of a private target succeeded")
 	}
 	out := buf.String()
-	for _, want := range []string{`"level":"WARN"`, `"fetch":"jwks_uri"`, "op.WithAllowPrivateNetworkJWKS()"} {
+	for _, want := range []string{`"level":"WARN"`, `"fetch":"jwks_uri"`, "op.WithAllowPrivateNetwork(op.OutboundJWKS)"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("log output %q missing %q", out, want)
 		}
 	}
+}
+
+// testAssertionVerifiers builds the endpoint assertion verifiers over the
+// client JWKS resolver the router builds.
+func testAssertionVerifiers(cfg *config) (assertionVerifiers, error) {
+	resolver, err := buildClientJWKSResolver(cfg)
+	if err != nil {
+		return assertionVerifiers{}, err
+	}
+	return buildAssertionVerifiers(cfg, resolver), nil
 }

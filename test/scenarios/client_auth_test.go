@@ -2194,28 +2194,65 @@ func getDiscoveryJSON(t *testing.T, u string) map[string]any {
 	return out
 }
 
-// TestScenario_CA_MTLS_PKI_01_ProxyCertificateAuthorisedAccepted is OOS — see catalog out_of_scope_reason.
+// TestScenario_CA_MTLS_PKI_01_ProxyCertificateAuthorisedAccepted checks
+// that a proxy-forwarded certificate authenticates a tls_client_auth
+// client only once it chains to op.WithMTLSRootCAs: a certificate with the
+// registered SAN from an untrusted CA is invalid_client.
+//
+// Spec: RFC 8705 §2.1.
 func TestScenario_CA_MTLS_PKI_01_ProxyCertificateAuthorisedAccepted(t *testing.T) {
 	t.Parallel()
-	t.Skip("out-of-scope: CA-MTLS-PKI-01 (see catalog out_of_scope_reason)")
+	f := newMTLSFixture(t)
+	f.run(t, mtlsCase{"token", "tls", "proxy", mtlsValid, "san_dns"})
+	f.run(t, mtlsCase{"token", "tls", "proxy", mtlsUnverified, "san_dns"})
 }
 
-// TestScenario_CA_MTLS_PKI_02_ExactlyOneSubjectMetadataAllowed is OOS — see catalog out_of_scope_reason.
+// TestScenario_CA_MTLS_PKI_02_ExactlyOneSubjectMetadataAllowed checks that
+// dynamic registration takes exactly one tls_client_auth_* matcher: two
+// yield invalid_client_metadata, one registers and is echoed back.
+//
+// Spec: RFC 8705 §2.1.2.
 func TestScenario_CA_MTLS_PKI_02_ExactlyOneSubjectMetadataAllowed(t *testing.T) {
 	t.Parallel()
-	t.Skip("out-of-scope: CA-MTLS-PKI-02 (see catalog out_of_scope_reason)")
+	f := newMTLSDCRFixture(t)
+	mtlsAssertRegistrationRejected(t, f, map[string]any{ //nolint:gosec // G101 false positive: auth-method metadata, not a credential.
+		"redirect_uris":              []string{"https://rp.test.invalid/cb"},
+		"token_endpoint_auth_method": "tls_client_auth",
+		"tls_client_auth_subject_dn": "CN=rp,O=Example",
+		"tls_client_auth_san_dns":    "rp.example.com",
+	})
+	_, _, _, body := f.register(t, map[string]any{ //nolint:gosec // G101 false positive: auth-method metadata, not a credential.
+		"redirect_uris":              []string{"https://rp.test.invalid/cb"},
+		"token_endpoint_auth_method": "tls_client_auth",
+		"tls_client_auth_subject_dn": "CN=rp,O=Example",
+	})
+	if body["tls_client_auth_subject_dn"] != "CN=rp,O=Example" {
+		t.Fatalf("registration response does not echo tls_client_auth_subject_dn: %v", body)
+	}
 }
 
-// TestScenario_CA_MTLS_PKI_03_RegisteredSubjectExactMatchRequired is OOS — see catalog out_of_scope_reason.
+// TestScenario_CA_MTLS_PKI_03_RegisteredSubjectExactMatchRequired checks
+// that a chain-verified certificate whose subject DN or SAN differs from
+// the registered matcher is invalid_client, for every matcher kind.
+//
+// Spec: RFC 8705 §2.1.
 func TestScenario_CA_MTLS_PKI_03_RegisteredSubjectExactMatchRequired(t *testing.T) {
 	t.Parallel()
-	t.Skip("out-of-scope: CA-MTLS-PKI-03 (see catalog out_of_scope_reason)")
+	f := newMTLSFixture(t)
+	for _, kind := range mtlsMatcherKinds {
+		f.run(t, mtlsCase{"token", "tls", "direct", mtlsMismatch, kind})
+	}
 }
 
-// TestScenario_CA_MTLS_PKI_04_NoCertificateForwardedRejected is OOS — see catalog out_of_scope_reason.
+// TestScenario_CA_MTLS_PKI_04_NoCertificateForwardedRejected checks that a
+// tls_client_auth request the proxy forwards without a certificate is
+// invalid_client.
+//
+// Spec: RFC 8705 §2.1.
 func TestScenario_CA_MTLS_PKI_04_NoCertificateForwardedRejected(t *testing.T) {
 	t.Parallel()
-	t.Skip("out-of-scope: CA-MTLS-PKI-04 (see catalog out_of_scope_reason)")
+	f := newMTLSFixture(t)
+	f.run(t, mtlsCase{"token", "tls", "proxy", mtlsNoCert, "subject_dn"})
 }
 
 // TestScenario_CA_MTLS_PKI_05_ProxyVerifyFailureRejected is OOS — see catalog out_of_scope_reason.
@@ -2302,34 +2339,64 @@ func TestScenario_CA_MTLS_SS_01_ThumbprintMatchesRegisteredJWK(t *testing.T) {
 	t.Skip("delegated: CA-MTLS-SS-01 is asserted by internal/mtls.TestVerifySelfSigned_HappyPath")
 }
 
-// TestScenario_CA_MTLS_SS_02_StaleJWKSURIRefetched is OOS — see catalog out_of_scope_reason.
+// TestScenario_CA_MTLS_SS_02_StaleJWKSURIRefetched is a marker: the assertion for
+// CA-MTLS-SS-02 lives outside the black-box suite because the rule it
+// states is a certificate-matching semantic with no wire surface of
+// its own. The catalog row delegates via covered_by.
+//
+// Asserted by: internal/clientauth.TestMTLSVerifier_SelfSigned
 func TestScenario_CA_MTLS_SS_02_StaleJWKSURIRefetched(t *testing.T) {
 	t.Parallel()
-	t.Skip("out-of-scope: CA-MTLS-SS-02 (see catalog out_of_scope_reason)")
+	t.Skip("delegated: CA-MTLS-SS-02 is asserted by internal/clientauth.TestMTLSVerifier_SelfSigned")
 }
 
-// TestScenario_CA_MTLS_SS_03_RSAECEd25519CertificatesAccepted is OOS — see catalog out_of_scope_reason.
+// TestScenario_CA_MTLS_SS_03_RSAECEd25519CertificatesAccepted is a marker: the assertion for
+// CA-MTLS-SS-03 lives outside the black-box suite because the rule it
+// states is a certificate-matching semantic with no wire surface of
+// its own. The catalog row delegates via covered_by.
+//
+// Asserted by: internal/mtls.TestVerifySelfSignedTLSClientAuthKeySet_KeyTypes
 func TestScenario_CA_MTLS_SS_03_RSAECEd25519CertificatesAccepted(t *testing.T) {
 	t.Parallel()
-	t.Skip("out-of-scope: CA-MTLS-SS-03 (see catalog out_of_scope_reason)")
+	t.Skip("delegated: CA-MTLS-SS-03 is asserted by internal/mtls.TestVerifySelfSignedTLSClientAuthKeySet_KeyTypes")
 }
 
-// TestScenario_CA_MTLS_SS_04_NoMatchingThumbprintRejected is OOS — see catalog out_of_scope_reason.
+// TestScenario_CA_MTLS_SS_04_NoMatchingThumbprintRejected checks that a
+// self-signed certificate whose key is not in the client's jwks is
+// invalid_client.
+//
+// Spec: RFC 8705 §2.2.
 func TestScenario_CA_MTLS_SS_04_NoMatchingThumbprintRejected(t *testing.T) {
 	t.Parallel()
-	t.Skip("out-of-scope: CA-MTLS-SS-04 (see catalog out_of_scope_reason)")
+	f := newMTLSFixture(t)
+	f.run(t, mtlsCase{"token", "self", "direct", mtlsMismatch, "-"})
 }
 
-// TestScenario_CA_MTLS_SS_05_NoCertificateAvailableRejected is OOS — see catalog out_of_scope_reason.
+// TestScenario_CA_MTLS_SS_05_NoCertificateAvailableRejected checks that a
+// self_signed_tls_client_auth request the proxy forwards without a
+// certificate is invalid_client.
+//
+// Spec: RFC 8705 §2.2.
 func TestScenario_CA_MTLS_SS_05_NoCertificateAvailableRejected(t *testing.T) {
 	t.Parallel()
-	t.Skip("out-of-scope: CA-MTLS-SS-05 (see catalog out_of_scope_reason)")
+	f := newMTLSFixture(t)
+	f.run(t, mtlsCase{"token", "self", "proxy", mtlsNoCert, "-"})
 }
 
-// TestScenario_CA_MTLS_SS_06_TLSSubjectMetadataNotAllowed is OOS — see catalog out_of_scope_reason.
+// TestScenario_CA_MTLS_SS_06_TLSSubjectMetadataNotAllowed checks that a
+// self_signed_tls_client_auth registration carrying a tls_client_auth_*
+// matcher is invalid_client_metadata.
+//
+// Spec: RFC 8705 §2.2.
 func TestScenario_CA_MTLS_SS_06_TLSSubjectMetadataNotAllowed(t *testing.T) {
 	t.Parallel()
-	t.Skip("out-of-scope: CA-MTLS-SS-06 (see catalog out_of_scope_reason)")
+	f := newMTLSDCRFixture(t)
+	mtlsAssertRegistrationRejected(t, f, map[string]any{ //nolint:gosec // G101 false positive: auth-method metadata, not a credential.
+		"redirect_uris":              []string{"https://rp.test.invalid/cb"},
+		"token_endpoint_auth_method": "self_signed_tls_client_auth",
+		"jwks_uri":                   "https://rp.test.invalid/jwks.json",
+		"tls_client_auth_san_dns":    "rp.example.com",
+	})
 }
 
 // TestScenario_CA_ATT_01_BothAttestationAndPoPHeadersRequired is OOS — see catalog out_of_scope_reason.

@@ -64,7 +64,7 @@ type AssertionIssuer struct {
 
 	// JWKSURI is the https URL of the issuer's JWK Set. Exactly one of
 	// JWKSURI and JWKS is set. Fetching follows the same network policy
-	// as client jwks_uri, including [WithAllowPrivateNetworkJWKS].
+	// as client jwks_uri, including [WithAllowPrivateNetwork] ([OutboundJWKS]).
 	JWKSURI string
 
 	// JWKS is the issuer's JWK Set inline, in the same JSON

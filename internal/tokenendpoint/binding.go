@@ -78,8 +78,8 @@ func refreshDPoPJKT(client *store.Client, dpopJKT string) string {
 // proof, and applies the FAPI sender-constraint requirement. On failure the
 // error response is already written. The returned outcome carries the parsed
 // certificate for callers that forward it.
-func bindRequest(w http.ResponseWriter, r *http.Request, deps Deps, dpopOut *dpopOutcome) (tokenBinding, *mtlsOutcome, bool) {
-	mtlsOut, ok := verifyTokenMTLS(w, r, deps)
+func bindRequest(w http.ResponseWriter, r *http.Request, deps Deps, client *store.Client, dpopOut *dpopOutcome) (tokenBinding, *mtlsOutcome, bool) {
+	mtlsOut, ok := verifyTokenMTLS(w, r, deps, client)
 	if !ok {
 		return tokenBinding{}, nil, false
 	}

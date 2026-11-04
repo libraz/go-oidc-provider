@@ -89,6 +89,12 @@ type Deps struct {
 	// the asymmetric authentication path.
 	AssertionVerifier clientauth.AssertionVerifier
 
+	// CertificateVerifier verifies RFC 8705 §2 mTLS client
+	// authentication (tls_client_auth, self_signed_tls_client_auth). Nil
+	// when feature.MTLS is off, which rejects a client registered for
+	// either method as invalid_client.
+	CertificateVerifier clientauth.CertificateVerifier
+
 	// AllowedClientAuthMethods optionally restricts which client
 	// authentication methods the endpoint accepts. See
 	// tokenendpoint.Deps.AllowedClientAuthMethods for the full
@@ -137,6 +143,12 @@ type Deps struct {
 	// DPoP proofs, so /par and /token symmetrically issue nonces
 	// from the same pool.
 	DPoPNonces dpop.NonceIssuer
+
+	// DPoPHTU is the set of absolute URLs a DPoP proof's "htu" must name
+	// at this endpoint: what discovery advertises for it, plus its RFC
+	// 8705 mtls_endpoint_aliases URL when one is configured. Empty falls
+	// back to the request-derived URL ([dpop.Gate.HTU]).
+	DPoPHTU []string
 
 	// RequireSignedRequestObject, when true, makes /par reject any
 	// request that omits the "request" parameter. FAPI 2.0 Message

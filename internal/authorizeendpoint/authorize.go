@@ -137,7 +137,7 @@ const (
 //     the URI MUST appear verbatim in the client's preregistered
 //     [op/store.Client.RequestURIs], and the retrieval goes through the
 //     shared SSRF-gated envelope (https-only unless
-//     [op.WithAllowPrivateNetworkJAR] is set, cloud-metadata always
+//     [op.WithAllowPrivateNetwork] ([op.OutboundJAR]) is set, cloud-metadata always
 //     blocked, no redirects, JWS media types only, capped body).
 //     [authorize.ParseValues]'s [authorize.ErrInvalidRequestURI] branch
 //     is the parser-side backstop behind that gate: by the time it runs,

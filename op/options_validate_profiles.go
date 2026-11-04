@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"github.com/libraz/go-oidc-provider/internal/cibaendpoint"
-	"github.com/libraz/go-oidc-provider/internal/grants/refresh"
 	"github.com/libraz/go-oidc-provider/op/feature"
 	"github.com/libraz/go-oidc-provider/op/grant"
 	"github.com/libraz/go-oidc-provider/op/profile"
@@ -153,7 +152,7 @@ func (c *config) validateProfile(p profile.Profile, enabled map[feature.Flag]str
 			continue
 		}
 		return newConfigurationError(withProfileName(p)+
-			" requires WithFeature("+req.String()+")", nil)
+			" requires WithFeature("+featureOptionName(req)+")", nil)
 	}
 	for _, anyOf := range profile.RequiredAnyOf(p) {
 		if anyEnabled(enabled, anyOf) {
@@ -171,8 +170,8 @@ func (c *config) validateProfile(p profile.Profile, enabled map[feature.Flag]str
 
 // validateProfileTiming checks the [profile.Profile] MUST clauses that
 // bound a TTL or a window: the max access-token TTL, the PAR lifetime
-// ceiling, the DPoP nonce-source requirement, and the FAPI 2.0 refresh-
-// grace cap. Extracted from [config.validateProfile] so the outer
+// ceiling, the DPoP nonce-source requirement, and the refresh-grace
+// option a non-rotating profile has no use for. Extracted from [config.validateProfile] so the outer
 // function stays under the linter's complexity budget; the checks run
 // in the same order.
 func (c *config) validateProfileTiming(p profile.Profile, enabled map[feature.Flag]struct{}) error {
@@ -183,7 +182,7 @@ func (c *config) validateProfileTiming(p profile.Profile, enabled map[feature.Fl
 	}
 	if ceiling := profile.PARLifetimeCeiling(p); ceiling > 0 && c.parLifetime >= ceiling {
 		return newConfigurationError(withProfileName(p)+
-			" requires WithPARLifetime below "+ceiling.String()+
+			" requires WithPARTTL below "+ceiling.String()+
 			"; got "+c.parLifetime.String(), nil)
 	}
 	if p == profile.FAPICIBA {
@@ -195,21 +194,11 @@ func (c *config) validateProfileTiming(p profile.Profile, enabled map[feature.Fl
 		return newConfigurationError(withProfileName(p)+
 			" requires WithDPoPNonceSource because DPoP is active (enabled by the profile or by WithFeature)", nil)
 	}
-	// The bound is the window the profile itself resolves to when the
-	// option is absent, not a strict zero. FAPI 2.0 §3.1.7 argues for
-	// the tightest window a deployment can run, but a FAPI 2.0
-	// deployment that configures nothing already runs
-	// [refresh.GraceTTLDefault] — see [config.effectiveRefreshGrace]
-	// for why that default cannot be narrowed. Rejecting every
-	// non-zero value would therefore refuse configurations STRICTER
-	// than the one the OP applies, pushing an embedder that asked for
-	// a five-second window back onto the sixty-second default.
-	if isFAPI2Profile(p) && c.refreshGracePeriodSet &&
-		c.refreshGracePeriod > refresh.GraceTTLDefault {
+	// The grace window absorbs a retry of a rotation; a profile that
+	// never rotates leaves the option nothing to configure.
+	if profile.ForbidsRefreshTokenRotation(p) && c.refreshGracePeriodSet {
 		return newConfigurationError(withProfileName(p)+
-			" caps WithRefreshGracePeriod at "+
-			refresh.GraceTTLDefault.String()+"; got "+
-			c.refreshGracePeriod.String(), nil)
+			" does not rotate refresh tokens, so WithRefreshGracePeriod has no window to set; remove the option", nil)
 	}
 	return nil
 }
@@ -284,10 +273,13 @@ func grantActivationOption(g grant.Type) string {
 	return "WithGrants"
 }
 
-// profileForcesDPoPNonce reports whether p mandates the RFC 9449 §8/§9
-// nonce challenge flow. FAPI 2.0 Message Signing §5.3.4 requires the
-// AS to issue a server-side DPoP nonce; FAPI-CIBA inherits the same
-// posture by reference (FAPI-CIBA-ID1 §5).
+// profileForcesDPoPNonce reports whether p requires a DPoP nonce source,
+// and with it the RFC 9449 §8/§9 nonce challenge, whenever DPoP is
+// active. For FAPI2MessageSigning this is the library preset, not a FAPI
+// 2.0 Security Profile MUST; FAPI-CIBA inherits the same posture by
+// reference (FAPI-CIBA-ID1 §5). Because a FAPI 2.0 profile enables DPoP
+// itself when neither feature.DPoP nor feature.MTLS is configured, an
+// otherwise unconfigured Message Signing deployment needs the source.
 func profileForcesDPoPNonce(p profile.Profile) bool {
 	switch p {
 	case profile.FAPI2MessageSigning, profile.FAPICIBA:
@@ -318,15 +310,47 @@ func anyEnabled(have map[feature.Flag]struct{}, want []feature.Flag) bool {
 	return false
 }
 
-// featureFlagNames returns the canonical string identifier of every
-// flag in fs in the same order, suitable for joining into a
-// human-readable error message. Centralising the conversion keeps
-// the formatting consistent across [config.validateProfiles] and any
-// future profile-aware diagnostics.
+// featureFlagNames returns the [featureOptionName] of every flag in fs
+// in the same order, suitable for joining into a human-readable error
+// message. Centralising the conversion keeps the formatting consistent
+// across [config.validateProfiles] and any future profile-aware
+// diagnostics.
 func featureFlagNames(fs []feature.Flag) []string {
 	names := make([]string, len(fs))
 	for i, f := range fs {
-		names[i] = f.String()
+		names[i] = featureOptionName(f)
 	}
 	return names
+}
+
+// featureOptionName returns the exported identifier an embedder passes
+// to [WithFeature] ("feature.DPoP"), for error text, as
+// [profileOptionName] does for profiles. Wire output keeps
+// [feature.Flag.String].
+func featureOptionName(f feature.Flag) string {
+	switch f {
+	case feature.PKCE:
+		return "feature.PKCE"
+	case feature.PAR:
+		return "feature.PAR"
+	case feature.JAR:
+		return "feature.JAR"
+	case feature.JARM:
+		return "feature.JARM"
+	case feature.DPoP:
+		return "feature.DPoP"
+	case feature.MTLS:
+		return "feature.MTLS"
+	case feature.Introspect:
+		return "feature.Introspect"
+	case feature.Revoke:
+		return "feature.Revoke"
+	case feature.DynamicRegistration:
+		return "feature.DynamicRegistration"
+	case feature.RAR:
+		return "feature.RAR"
+	case feature.GrantManagement:
+		return "feature.GrantManagement"
+	}
+	return "feature.Flag(" + strconv.Itoa(int(f)) + ")"
 }

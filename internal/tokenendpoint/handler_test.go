@@ -70,6 +70,12 @@ type fixture struct {
 	clock    fixedClock
 }
 
+// htu returns the URL the OP advertises for the fixture's endpoint. A
+// DPoP proof at an OP endpoint names that URL, not the test server's.
+func (f *fixture) htu() string {
+	return f.prov.Issuer + strings.TrimPrefix(f.endpoint, f.prov.Server.URL)
+}
+
 // newFixture builds a fixture pinned to a deterministic clock. The
 // 2026-04-26 anchor matches the existing test suites and the docs'
 // "today" baseline.

@@ -90,7 +90,7 @@ func preflightRefreshBeforeConsume(
 	if !enforceStrictOfflineAccess(w, deps, rec.Scope, rec.Origin) {
 		return nil, false
 	}
-	if !preflightRefreshSenderConstraint(w, r, deps, rec, dpopOut) {
+	if !preflightRefreshSenderConstraint(w, r, deps, client, rec, dpopOut) {
 		return nil, false
 	}
 	return rec, true
@@ -104,13 +104,14 @@ func preflightRefreshSenderConstraint(
 	w http.ResponseWriter,
 	r *http.Request,
 	deps Deps,
+	client *store.Client,
 	rec *store.RefreshToken,
 	dpopOut *dpopOutcome,
 ) bool {
 	if !enforceDPoPRefreshBinding(w, deps, dpopOut, rec.DPoPJKT) {
 		return false
 	}
-	if !requireMTLSMatch(w, r, deps, rec.MTLSCertThumbprint) {
+	if !requireMTLSMatch(w, r, deps, client, rec.MTLSCertThumbprint) {
 		return false
 	}
 	// A request shape the deployment refuses (no proof or certificate where

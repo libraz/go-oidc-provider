@@ -23,11 +23,11 @@ func newGMFixture(tb testing.TB) *fixture {
 		testkit.WithClock(clock),
 		testkit.WithOptions(
 			op.WithFeature(feature.PAR),
-			op.WithGrantManagement([]op.GrantManagementAction{
+			op.WithGrantManagement(op.GrantManagement{Actions: []op.GrantManagementAction{
 				op.GrantActionCreate,
 				op.GrantActionReplace,
 				op.GrantActionQuery,
-			}, false),
+			}}),
 		),
 	)
 	return &fixture{

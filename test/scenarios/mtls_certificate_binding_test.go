@@ -330,7 +330,7 @@ func TestScenario_MTLS_004_UserinfoMalformedCertRejected(t *testing.T) {
 
 	const headerName = "X-Client-Cert"
 	f := newMTLSConfidentialFixture(t,
-		op.WithMTLSProxy(headerName, []string{"127.0.0.1/32", "::1/128"}),
+		op.WithMTLSProxy(op.MTLSProxy{HeaderName: headerName, TrustedProxies: []string{"127.0.0.1/32", "::1/128"}}),
 	)
 	cert := mtlsCert(t)
 	at := mtlsIssueAuthCodeAccessToken(t, f, cert)

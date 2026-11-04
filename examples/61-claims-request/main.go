@@ -95,7 +95,6 @@ func run() error {
 		op.WithCookieKeys(keys.CookieKey),
 		op.WithProfile(profile.OAuth21),
 		op.WithLoginFlow(flow),
-		op.WithClaimsParameterSupported(true),
 		op.WithClaimsSupported(
 			"sub", "iss", "aud", "exp", "iat", "auth_time", "nonce",
 			"name", "given_name", "family_name", "preferred_username",

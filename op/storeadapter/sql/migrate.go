@@ -13,9 +13,10 @@ import (
 	"time"
 )
 
-// versionTableSuffix follows the [WithTablePrefix] in the name of the table
-// [Store.Migrate] records the last applied migration in.
-const versionTableSuffix = "schema_migrations"
+// versionTableKey is the [WithNaming] key of the table [Store.Migrate]
+// records the last applied migration in; the [WithTablePrefix] precedes it
+// in the default name.
+const versionTableKey = "schema_migrations"
 
 // migrateCleanupTimeout bounds the statements that release the lock or roll
 // back once the caller's ctx may be done.
@@ -27,7 +28,8 @@ const lockKeySalt uint32 = 1486364155
 
 // errEmptyPrefix is the refusal of [Store.Migrate] under WithTablePrefix("").
 var errEmptyPrefix = errors.New(`oidcsql: Migrate needs a table prefix: with WithTablePrefix("") the version table would be ` +
-	`"schema_migrations", golang-migrate's default table; apply Store.Migrations() with your migration tool instead`)
+	`"schema_migrations", golang-migrate's default table; name it with WithNaming(map[string]string{"schema_migrations": ...}) ` +
+	`or apply Store.Migrations() with your migration tool instead`)
 
 // lockKey derives the advisory lock key golang-migrate takes for the same
 // input, so the two exclude each other. The product wraps around in uint32.
@@ -37,7 +39,7 @@ func lockKey(s string) uint32 {
 
 // versionTable is the name of the table [Store.Migrate] records in.
 func (s *Store) versionTable() string {
-	return s.prefix + versionTableSuffix
+	return s.names.versionTable
 }
 
 // connRunner adapts *sql.Conn to [runner], so the schema checks read the
@@ -72,7 +74,7 @@ type migrator struct {
 
 // migrate is [Store.Migrate].
 func (s *Store) migrate(ctx context.Context) error {
-	if s.prefix == "" {
+	if s.versionTable() == versionTableKey {
 		return errEmptyPrefix
 	}
 	sess, err := s.openMigrationSession(ctx)

@@ -1,6 +1,11 @@
 ALTER TABLE oidc_clients
     ADD COLUMN previous_secret_hash TEXT NOT NULL DEFAULT '',
-    ADD COLUMN previous_secret_expires_at BIGINT NOT NULL DEFAULT 0;
+    ADD COLUMN previous_secret_expires_at BIGINT NOT NULL DEFAULT 0,
+    ADD COLUMN tls_client_auth_subject_dn TEXT NOT NULL DEFAULT '',
+    ADD COLUMN tls_client_auth_san_dns TEXT NOT NULL DEFAULT '',
+    ADD COLUMN tls_client_auth_san_uri TEXT NOT NULL DEFAULT '',
+    ADD COLUMN tls_client_auth_san_ip TEXT NOT NULL DEFAULT '',
+    ADD COLUMN tls_client_auth_san_email TEXT NOT NULL DEFAULT '';
 
 CREATE TABLE IF NOT EXISTS oidc_ssf_streams (
     id TEXT PRIMARY KEY,

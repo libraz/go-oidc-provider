@@ -154,7 +154,7 @@ func buildProvider(issuer string, auditLogger *slog.Logger, extra ...op.Option) 
 		op.WithKeyset(keys.Keyset()),
 		op.WithCookieKeys(keys.CookieKey),
 		// The demo redirect_uri uses the textual "localhost" host.
-		op.WithAllowLocalhostLoopback(),
+		op.WithAllowLocalhostRedirectURIs(),
 		op.WithLoginFlow(op.LoginFlow{
 			Primary: op.PrimaryPassword{Store: st.UserPasswords()},
 		}),

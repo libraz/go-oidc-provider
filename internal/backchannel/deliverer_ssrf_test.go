@@ -190,7 +190,7 @@ func TestHTTPDeliverer_DeliverResolvesOnce(t *testing.T) {
 func TestHTTPDeliverer_PrivateRefusalNamesOptIn(t *testing.T) {
 	t.Parallel()
 
-	const optIn = "op.WithAllowPrivateNetworkBackchannel()"
+	const optIn = "op.WithAllowPrivateNetwork(op.OutboundBackchannel)"
 	d := &HTTPDeliverer{Timeout: time.Second, OptIn: optIn}
 	err := requestGate(d, "http://10.0.0.1/logout")
 	if !errors.Is(err, ErrPrivateNetworkBlocked) || !strings.Contains(err.Error(), optIn) {

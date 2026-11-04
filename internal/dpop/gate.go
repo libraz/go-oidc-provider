@@ -30,6 +30,13 @@ type Gate struct {
 	// `use_dpop_nonce` challenge. Nil omits the DPoP-Nonce response
 	// header; see [WriteError].
 	Nonces NonceIssuer
+
+	// HTU is the set of absolute URLs the OP advertises for the guarded
+	// endpoint: its discovery URL and, when configured, its RFC 8705
+	// mtls_endpoint_aliases URL. A proof's "htu" must name one of them;
+	// see [VerifyInput.AdvertisedHTU]. Empty falls back to the
+	// request-derived URL.
+	HTU []string
 }
 
 // Authenticate runs proof verification, the caller's client
@@ -92,7 +99,7 @@ func (g Gate) Check(ctx context.Context, w http.ResponseWriter, r *http.Request)
 	if g.Verifier == nil || !HasProof(r) {
 		return nil, true
 	}
-	checked, err := g.Verifier.CheckHTTPRequest(ctx, r, "")
+	checked, err := g.Verifier.CheckHTTPRequestAt(ctx, r, "", g.HTU)
 	if err != nil {
 		g.WriteError(ctx, w, err)
 		return nil, false

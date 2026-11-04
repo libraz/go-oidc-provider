@@ -8,8 +8,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/libraz/go-oidc-provider/internal/authn"
 	"github.com/libraz/go-oidc-provider/internal/nilcheck"
+	"github.com/libraz/go-oidc-provider/op/authn"
 	"github.com/libraz/go-oidc-provider/op/interaction"
 	"github.com/libraz/go-oidc-provider/op/store"
 )
@@ -58,7 +58,8 @@ type EmailDelivery interface {
 }
 
 // Step is the embedder-facing unit of authentication a [LoginFlow]
-// composes. The interface mirrors [Authenticator]'s Begin / Continue
+// composes; it is not the [interaction.Step] a UI driver renders.
+// The interface mirrors [Authenticator]'s Begin / Continue
 // shape so the orchestrator's Step → Authenticator wrapper is a
 // trivial adapter, but a Step additionally carries a [StepKind] used
 // by the orchestrator for completed-step deduplication and by rule
@@ -161,7 +162,8 @@ func (k StepKind) IsUserDefined() bool {
 // verified by the first scheme that recognizes it, and on success it is
 // rewritten as argon2id when Store implements
 // [store.UserPasswordHashUpdater]. A hash no scheme recognizes is treated
-// like a wrong password.
+// like a wrong password, and the first one met is logged as a warning
+// that names no user and no hash.
 type PrimaryPassword struct {
 	// Store is the user-account store the password is verified
 	// against. MUST be non-nil; the orchestrator rejects a flow with

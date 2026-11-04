@@ -41,7 +41,14 @@ func validNamingKeys(t *testing.T) []string {
 	if !ok {
 		t.Fatalf("unknown-key error missing %q: %v", marker, err)
 	}
-	return strings.Split(strings.TrimSuffix(keysText, ")"), ", ")
+	// The version table is named by a key too, but the DDL does not create it.
+	var keys []string
+	for _, k := range strings.Split(strings.TrimSuffix(keysText, ")"), ", ") {
+		if k != "schema_migrations" {
+			keys = append(keys, k)
+		}
+	}
+	return keys
 }
 
 func defaultTableNames(t *testing.T) []string {

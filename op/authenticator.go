@@ -1,14 +1,12 @@
 package op
 
-import "github.com/libraz/go-oidc-provider/internal/authn"
+import "github.com/libraz/go-oidc-provider/op/authn"
 
-// FactorType / Authenticator-related symbols are re-exported from
-// their canonical home in the orchestrator package. The op surface is
-// the public-API contract embedders consume; internal/authn carries
-// the orchestrator wiring that consumes the same types. Aliasing
-// keeps both sides referencing one canonical declaration so there is
-// no schema drift between the public surface and the internal
-// machinery.
+// FactorType / Authenticator-related symbols are declared in the public
+// leaf package [github.com/libraz/go-oidc-provider/op/authn], where their
+// fields and methods are documented, and re-exported here so embedders
+// stay on the op surface. The internal orchestrator aliases the same
+// declarations, so there is one type on both sides.
 
 // FactorType is an alias for [authn.FactorType].
 type FactorType = authn.FactorType
@@ -70,7 +68,10 @@ var (
 // Stable since v1.5.
 type EnrollmentChecker = authn.EnrollmentProber
 
-// Interaction is an alias for [authn.Interaction].
+// Interaction is an alias for [authn.Interaction], the non-factor step an
+// embedder registers through [WithInteractions]; it is neither the persisted
+// authorize-transaction record [store.Interaction] nor the UI contract of
+// package op/interaction.
 type Interaction = authn.Interaction
 
 // InteractionTrigger is an alias for [authn.InteractionTrigger].

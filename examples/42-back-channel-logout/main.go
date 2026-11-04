@@ -58,12 +58,11 @@
 //     into store.ClientRegistry. The OP advertises session support as
 //     false and sends sub-only Logout Tokens until it can persist an
 //     RP-specific SID lineage.
-//   - WithBackchannelLogoutHTTPClient is OPTIONAL — the package
-//     default applies WithBackchannelLogoutTimeout to a fresh client
-//     and refuses 3xx redirects on the POST. Override only when the
-//     deployment ships a shared outbound transport.
-//   - WithBackchannelLogoutTimeout caps the per-RP wait; a slow RP
-//     does not delay deliveries to its peers.
+//   - WithBackchannelLogout is OPTIONAL — the package default applies
+//     a 5-second timeout to a fresh client and refuses 3xx redirects on
+//     the POST. Its Transport field is for a shared outbound transport,
+//     and Timeout caps the per-RP wait; a slow RP does not delay
+//     deliveries to its peers.
 //
 // PRODUCTION CAVEATS:
 //   - Keys: ephemeral; load from a vault / KMS in production.
@@ -125,7 +124,7 @@ func main() {
 		// Production deployments leave this off; OIDC Back-Channel Logout
 		// 1.0 §2.2 requires https for backchannel_logout_uri on the public
 		// Internet.
-		op.WithAllowInsecureBackchannelLogoutForDev(),
+		op.WithAllowInsecureOutboundForDev(op.OutboundBackchannel),
 		op.WithStaticClients(op.ConfidentialClient{
 			ID:                   clientID,
 			Secret:               "bcl-demo-secret-rotate-me-42-back-channel-logout",
@@ -138,7 +137,7 @@ func main() {
 		// budget is the right posture for back-channel logout — the
 		// flow is best-effort and a long wait merely keeps the OP
 		// holding state on a likely-broken RP.
-		op.WithBackchannelLogoutTimeout(2*time.Second),
+		op.WithBackchannelLogout(op.BackchannelLogout{Timeout: 2 * time.Second}),
 	)
 	if err != nil {
 		log.Fatalf("op.New: %v", err)

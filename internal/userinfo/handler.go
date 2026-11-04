@@ -115,6 +115,12 @@ type HandlerDeps struct {
 	// issuance and validation share a rotation pipeline.
 	DPoPNonces dpop.NonceIssuer
 
+	// DPoPHTU is the set of absolute URLs a DPoP proof's "htu" must name
+	// at this endpoint: what discovery advertises for it, plus its RFC
+	// 8705 mtls_endpoint_aliases URL when one is configured. Empty falls
+	// back to the request-derived URL ([dpop.Gate.HTU]).
+	DPoPHTU []string
+
 	// MTLS is the RFC 8705 client-cert verifier. A nil value
 	// disables mTLS enforcement entirely; tokens carrying
 	// cnf.x5t#S256 are then rejected to fail closed.
@@ -225,6 +231,7 @@ func bearerDeps(deps HandlerDeps) endpointsupport.BearerDeps {
 		RevocationStrategy: deps.RevocationStrategy,
 		DPoP:               deps.DPoP,
 		DPoPNonces:         deps.DPoPNonces,
+		DPoPHTU:            deps.DPoPHTU,
 		MTLS:               deps.MTLS,
 	}
 }

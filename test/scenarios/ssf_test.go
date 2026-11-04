@@ -482,7 +482,7 @@ func TestScenario_SSF_003_DisabledByDefault(t *testing.T) {
 // with 409, and the authorization header never echoed.
 func TestScenario_SSF_010_CreateStream(t *testing.T) {
 	t.Parallel()
-	tk := newSSFProvider(t, op.WithAllowInsecureSharedSignalsPushForDev())
+	tk := newSSFProvider(t, op.WithAllowInsecureOutboundForDev(op.OutboundSharedSignals))
 	token := ssfManageToken(t, tk, ssfRxA)
 
 	status, created, raw := ssfReq(t, tk, http.MethodPost, "/oidc/ssf/streams", &token, map[string]any{
@@ -789,7 +789,7 @@ func TestScenario_SSF_016_DeleteStream(t *testing.T) {
 // user, and the receiver's authorization header presented.
 func TestScenario_SSF_020_LogoutPushesSessionRevoked(t *testing.T) {
 	t.Parallel()
-	tk := newSSFProvider(t, op.WithAllowInsecureSharedSignalsPushForDev())
+	tk := newSSFProvider(t, op.WithAllowInsecureOutboundForDev(op.OutboundSharedSignals))
 	rx := newSSFPushReceiver(t)
 	token := ssfManageToken(t, tk, ssfRxA)
 	ssfCreateStream(t, tk, token, map[string]any{

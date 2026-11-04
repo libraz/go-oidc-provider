@@ -15,7 +15,7 @@ import (
 // "Bearer" tag on a refresh token would tell a resource server it may
 // treat the value as an access token.
 //
-// Tracks: CVE-2025-7043 (ForgeRock — a refresh token was accepted as an
+// Tracks: CVE-2025-7043 (another OP — a refresh token was accepted as an
 // access token at protected resources).
 func TestHandler_RefreshToken_CarriesNoAccessTokenType(t *testing.T) {
 	t.Parallel()

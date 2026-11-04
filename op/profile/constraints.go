@@ -267,6 +267,47 @@ func RequiresPAR(p Profile) bool {
 	}
 }
 
+// RequiresIssuerAssertionAudience reports whether p accepts a client
+// authentication assertion only when its "aud" is the issuer identifier
+// as a single JSON string (FAPI 2.0 Security Profile §5.3.2.1): an
+// array, the token endpoint URL and any other endpoint URL are refused.
+// Every other profile keeps the wider RFC 7523 §3 acceptance of the
+// issuer or the endpoint URL.
+//
+// [FAPICIBA] returns false: FAPI-CIBA-ID1 inherits CIBA Core §7.1, which
+// permits the issuer, the token endpoint URL and the backchannel
+// authentication endpoint URL.
+func RequiresIssuerAssertionAudience(p Profile) bool {
+	switch p {
+	case FAPI2Baseline, FAPI2MessageSigning:
+		return true
+	case OAuth21, OIDCCore, FAPICIBA, profileUnspecified:
+		return false
+	default:
+		return false
+	}
+}
+
+// ForbidsRefreshTokenRotation reports whether p requires the refresh
+// token grant to leave the presented refresh token in place rather than
+// rotate it (FAPI 2.0 Security Profile §5.3.2.1). Under such a profile a
+// refresh response carries no refresh_token and the presented one stays
+// redeemable until it expires or is revoked; every other profile rotates
+// per RFC 9700 §2.2.2.
+//
+// [FAPICIBA] returns false: it keeps the rotating posture its conformance
+// suite exercises.
+func ForbidsRefreshTokenRotation(p Profile) bool {
+	switch p {
+	case FAPI2Baseline, FAPI2MessageSigning:
+		return true
+	case OAuth21, OIDCCore, FAPICIBA, profileUnspecified:
+		return false
+	default:
+		return false
+	}
+}
+
 // AllowedClientAuthMethods returns the closed set of client
 // authentication methods p accepts at the token endpoint, or nil
 // when p imposes no restriction. Returned values are the canonical
@@ -274,23 +315,14 @@ func RequiresPAR(p Profile) bool {
 // discovery and dynamic client registration (RFC 8414 / RFC 7591).
 //
 // FAPI 2.0 §3.1.3 permits one of "private_key_jwt", "tls_client_auth"
-// (RFC 8705 §2.1) or "self_signed_tls_client_auth" (RFC 8705 §2.2).
-// Public clients ("none") and shared-secret methods
-// ("client_secret_basic", "client_secret_post", "client_secret_jwt")
-// are forbidden by the profile, and this library additionally leaves
-// the two mTLS methods out of the returned set: it does not implement
-// RFC 8705 §2 client authentication, so a client registered with
-// either method could never authenticate. What the mTLS feature flag
-// delivers is RFC 8705 §3 certificate-BOUND tokens (cnf."x5t#S256"),
-// which is orthogonal to how the client proves its identity. FAPI 2.0
-// remains satisfiable through private_key_jwt.
-//
-// The list is therefore directly usable as a seed source: a client
-// registered with any method it returns constructs cleanly and can
-// authenticate at runtime. Baseline, Message Signing, and FAPI-CIBA
-// share the same set; Message Signing's additional constraints
-// concern response signing rather than client auth, and FAPI-CIBA
-// inherits the FAPI 2.0 §3.1.3 set.
+// (RFC 8705 §2.1) or "self_signed_tls_client_auth" (RFC 8705 §2.2), and
+// the returned set is exactly those three. Public clients ("none") and
+// shared-secret methods ("client_secret_basic", "client_secret_post",
+// "client_secret_jwt") are forbidden by the profile. The two mTLS
+// methods are usable only with feature.MTLS, so the OP drops them from
+// what it advertises and admits when that flag is off. Baseline,
+// Message Signing, and FAPI-CIBA share the same set; FAPI-CIBA inherits
+// the FAPI 2.0 §3.1.3 set.
 //
 // [OAuth21] returns nil: OAuth 2.1 keeps every registered client
 // authentication method available, including public clients, and
@@ -301,7 +333,7 @@ func RequiresPAR(p Profile) bool {
 // it freely.
 func AllowedClientAuthMethods(p Profile) []string {
 	if IsFAPI(p) {
-		return []string{"private_key_jwt"}
+		return []string{"private_key_jwt", "tls_client_auth", "self_signed_tls_client_auth"}
 	}
 	return nil
 }

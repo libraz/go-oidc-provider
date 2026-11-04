@@ -113,7 +113,8 @@ func TestMigrate_RefusesEmptyPrefix(t *testing.T) {
 	}
 	err = s.Migrate(ctx)
 	const want = `oidcsql: Migrate needs a table prefix: with WithTablePrefix("") the version table would be "schema_migrations", ` +
-		`golang-migrate's default table; apply Store.Migrations() with your migration tool instead`
+		`golang-migrate's default table; name it with WithNaming(map[string]string{"schema_migrations": ...}) ` +
+		`or apply Store.Migrations() with your migration tool instead`
 	if err == nil || err.Error() != want {
 		t.Fatalf("Migrate error = %v, want %q", err, want)
 	}

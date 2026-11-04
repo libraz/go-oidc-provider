@@ -21,13 +21,27 @@ func checkDefaultMaxAge(kind, id string, maxAge *int64) error {
 	return nil
 }
 
+// checkSeedKeySource requires exactly one of a seed's JWKS and JWKSURI.
+func checkSeedKeySource(kind, id string, jwks []byte, jwksURI string) error {
+	hasJWKS, hasURI := len(jwks) > 0, jwksURI != ""
+	if hasJWKS != hasURI {
+		return nil
+	}
+	reason := "neither is set"
+	if hasJWKS {
+		reason = "both are set"
+	}
+	return newConfigurationError(kind+" "+id+": exactly one of JWKS and JWKSURI is required, but "+reason, nil)
+}
+
 // ClientSeed is the unexported-method interface every typed client
 // builder satisfies. The single method [ClientSeed.seed] projects the
 // builder onto the canonical [store.Client] record the OP persists.
 // Embedders never implement this interface themselves: the library
-// ships three concrete builders ([PublicClient], [ConfidentialClient],
-// [PrivateKeyJWTClient]) that cover every static-client posture the
-// option layer admits today.
+// ships the concrete builders ([PublicClient], [ConfidentialClient],
+// [PrivateKeyJWTClient], [TLSClientAuthClient],
+// [SelfSignedTLSClientAuthClient]) that cover every static-client posture
+// the option layer admits.
 // The unexported method is deliberate: it locks the surface to the
 // shipped builders so an embedder cannot accidentally bypass the
 // Source: ClientSourceStatic invariant by constructing a custom
@@ -496,7 +510,19 @@ type PrivateKeyJWTClient struct {
 	// verbatim on [store.Client.JWKs]; pass the output of
 	// [LoadPublicJWKS] (or an equivalent key-type-specific public
 	// member normalizer) so private material never reaches the OP.
+	//
+	// Exactly one of JWKS and JWKSURI must be set; setting both or
+	// neither is a construction error.
 	JWKS []byte
+
+	// JWKSURI is the https URL the OP fetches the client's public
+	// JSON Web Key Set from, for clients that publish and rotate
+	// their keys remotely. The value is stored on
+	// [store.Client.JWKsURI] and resolved through the same fetcher a
+	// dynamically registered client's jwks_uri uses: the SSRF gate,
+	// the [WithAllowPrivateNetwork] ([OutboundJWKS]) opt-in, and
+	// [WithJWKSHTTPTransport] all apply. Mutually exclusive with JWKS.
+	JWKSURI string
 
 	// RedirectURIs lists the exact-match redirect_uri values the
 	// client may present at /authorize.
@@ -552,9 +578,12 @@ type PrivateKeyJWTClient struct {
 
 // seed projects c onto a [store.Client] with the private_key_jwt
 // invariants applied: TokenEndpointAuthMethod set to
-// AuthPrivateKeyJWT, JWKS bytes embedded inline, and Source
-// ClientSourceStatic.
+// AuthPrivateKeyJWT, the key source (inline JWKS bytes or JWKSURI)
+// carried through, and Source ClientSourceStatic.
 func (c PrivateKeyJWTClient) seed() (store.Client, error) {
+	if err := checkSeedKeySource("PrivateKeyJWTClient", c.ID, c.JWKS, c.JWKSURI); err != nil {
+		return store.Client{}, err
+	}
 	if err := checkDefaultMaxAge("PrivateKeyJWTClient", c.ID, c.DefaultMaxAge); err != nil {
 		return store.Client{}, err
 	}
@@ -569,6 +598,7 @@ func (c PrivateKeyJWTClient) seed() (store.Client, error) {
 		TokenEndpointAuthMethod:     AuthPrivateKeyJWT.String(),
 		TokenEndpointAuthSigningAlg: c.TokenEndpointAuthSigningAlg,
 		JWKs:                        slices.Clone(c.JWKS),
+		JWKsURI:                     c.JWKSURI,
 		Source:                      store.ClientSourceStatic,
 		PostLogoutRedirectURIs:      slices.Clone(c.PostLogoutRedirectURIs),
 		BackchannelLogoutURI:        c.BackchannelLogoutURI,
@@ -577,5 +607,241 @@ func (c PrivateKeyJWTClient) seed() (store.Client, error) {
 		DefaultMaxAge:               clone.Int64Ptr(c.DefaultMaxAge),
 		RequireAuthTime:             c.RequireAuthTime,
 		DefaultACRValues:            slices.Clone(c.DefaultACRValues),
+	}, nil
+}
+
+// TLSClientAuthClient is the typed builder for a client that
+// authenticates with a PKI-issued certificate (RFC 8705 §2.1,
+// tls_client_auth). The OP admits a certificate whose chain is verified —
+// by the TLS handshake, or by [WithMTLSRootCAs] when [WithMTLSProxy]
+// forwards it — and whose subject DN or SAN equals the one matcher set
+// here. Exactly one of SubjectDN, SANDNS, SANURI, SANIP and SANEmail must
+// be set; none or several is a construction error. Requires
+// WithFeature(feature.MTLS).
+//
+//	op.WithFeature(feature.MTLS),
+//	op.WithStaticClients(
+//	    op.TLSClientAuthClient{
+//	        ID:           "demo-mtls",
+//	        SubjectDN:    "CN=demo-mtls,O=Example",
+//	        RedirectURIs: []string{"https://app.example.com/callback"},
+//	        Scopes:       []string{"openid"},
+//	    },
+//	)
+//
+// Stable since v1.5.
+type TLSClientAuthClient struct {
+	// ID is the OAuth client_id. MUST be unique within the OP.
+	ID string
+
+	// SubjectDN is tls_client_auth_subject_dn: the RFC 4514 subject DN
+	// of the client certificate, for example "CN=demo-mtls,O=Example".
+	SubjectDN string
+
+	// SANDNS is tls_client_auth_san_dns: a dNSName SAN of the client
+	// certificate, compared case-insensitively.
+	SANDNS string
+
+	// SANURI is tls_client_auth_san_uri: a uniformResourceIdentifier SAN
+	// of the client certificate, compared byte-for-byte.
+	SANURI string
+
+	// SANIP is tls_client_auth_san_ip: an iPAddress SAN of the client
+	// certificate, as an IPv4 or IPv6 literal.
+	SANIP string
+
+	// SANEmail is tls_client_auth_san_email: an rfc822Name SAN of the
+	// client certificate.
+	SANEmail string
+
+	// RedirectURIs lists the exact-match redirect_uri values the
+	// client may present at /authorize.
+	RedirectURIs []string
+
+	// Scopes lists the scopes the client is registered to request.
+	Scopes []string
+
+	// Resources mirrors [PublicClient.Resources].
+	Resources []string
+
+	// GrantTypes overrides the default
+	// {"authorization_code", "refresh_token"}. Empty applies the
+	// default; non-empty replaces it entirely.
+	GrantTypes []string
+
+	// ResponseTypes overrides the default {"code"}. Empty applies
+	// the default; non-empty replaces it entirely.
+	ResponseTypes []string
+
+	// PostLogoutRedirectURIs mirrors [PublicClient.PostLogoutRedirectURIs].
+	PostLogoutRedirectURIs []string
+
+	// BackchannelLogoutURI mirrors [PublicClient.BackchannelLogoutURI].
+	BackchannelLogoutURI string
+
+	// ApplicationType mirrors [PublicClient.ApplicationType].
+	ApplicationType string
+
+	// SubjectType requests the OIDC subject_type for this client; see
+	// [PublicClient.SubjectType].
+	SubjectType string
+
+	// DefaultMaxAge mirrors [PublicClient.DefaultMaxAge].
+	DefaultMaxAge *int64
+
+	// RequireAuthTime mirrors [PublicClient.RequireAuthTime].
+	RequireAuthTime bool
+
+	// DefaultACRValues mirrors [PublicClient.DefaultACRValues].
+	DefaultACRValues []string
+}
+
+// seed projects c onto a [store.Client] with the tls_client_auth
+// invariants applied: TokenEndpointAuthMethod set to AuthTLSClientAuth,
+// the single matcher carried through, and Source ClientSourceStatic.
+func (c TLSClientAuthClient) seed() (store.Client, error) {
+	matcher := clientauth.ClientMatcher(&store.Client{
+		TLSClientAuthSubjectDN: c.SubjectDN,
+		TLSClientAuthSANDNS:    c.SANDNS,
+		TLSClientAuthSANURI:    c.SANURI,
+		TLSClientAuthSANIP:     c.SANIP,
+		TLSClientAuthSANEmail:  c.SANEmail,
+	})
+	if err := matcher.Validate(); err != nil {
+		return store.Client{}, newConfigurationError("TLSClientAuthClient "+c.ID+
+			": exactly one of SubjectDN, SANDNS, SANURI, SANIP and SANEmail is required", err)
+	}
+	if err := checkDefaultMaxAge("TLSClientAuthClient", c.ID, c.DefaultMaxAge); err != nil {
+		return store.Client{}, err
+	}
+	grants, responses := seedGrantAndResponseTypes(c.GrantTypes, c.ResponseTypes)
+	return store.Client{
+		ID:                      c.ID,
+		RedirectURIs:            slices.Clone(c.RedirectURIs),
+		Scopes:                  slices.Clone(c.Scopes),
+		Resources:               slices.Clone(c.Resources),
+		GrantTypes:              grants,
+		ResponseTypes:           responses,
+		TokenEndpointAuthMethod: AuthTLSClientAuth.String(),
+		TLSClientAuthSubjectDN:  c.SubjectDN,
+		TLSClientAuthSANDNS:     c.SANDNS,
+		TLSClientAuthSANURI:     c.SANURI,
+		TLSClientAuthSANIP:      c.SANIP,
+		TLSClientAuthSANEmail:   c.SANEmail,
+		Source:                  store.ClientSourceStatic,
+		PostLogoutRedirectURIs:  slices.Clone(c.PostLogoutRedirectURIs),
+		BackchannelLogoutURI:    c.BackchannelLogoutURI,
+		ApplicationType:         c.ApplicationType,
+		SubjectType:             c.SubjectType,
+		DefaultMaxAge:           clone.Int64Ptr(c.DefaultMaxAge),
+		RequireAuthTime:         c.RequireAuthTime,
+		DefaultACRValues:        slices.Clone(c.DefaultACRValues),
+	}, nil
+}
+
+// SelfSignedTLSClientAuthClient is the typed builder for a client that
+// authenticates with a self-signed certificate (RFC 8705 §2.2,
+// self_signed_tls_client_auth). The OP admits a certificate whose public
+// key is in the client's JWK Set; no chain is validated. The key source
+// follows [PrivateKeyJWTClient]: exactly one of JWKS and JWKSURI.
+// Requires WithFeature(feature.MTLS).
+//
+//	op.WithFeature(feature.MTLS),
+//	op.WithStaticClients(
+//	    op.SelfSignedTLSClientAuthClient{
+//	        ID:           "demo-self-signed",
+//	        JWKSURI:      "https://client.example.com/jwks.json",
+//	        RedirectURIs: []string{"https://app.example.com/callback"},
+//	        Scopes:       []string{"openid"},
+//	    },
+//	)
+//
+// Stable since v1.5.
+type SelfSignedTLSClientAuthClient struct {
+	// ID is the OAuth client_id. MUST be unique within the OP.
+	ID string
+
+	// JWKS is the public JSON Web Key Set holding the certificate's
+	// public key, as [PrivateKeyJWTClient.JWKS]. Exactly one of JWKS and
+	// JWKSURI must be set.
+	JWKS []byte
+
+	// JWKSURI is the https URL the OP fetches the client's JWK Set from,
+	// through the same fetcher as [PrivateKeyJWTClient.JWKSURI]. Mutually
+	// exclusive with JWKS.
+	JWKSURI string
+
+	// RedirectURIs lists the exact-match redirect_uri values the
+	// client may present at /authorize.
+	RedirectURIs []string
+
+	// Scopes lists the scopes the client is registered to request.
+	Scopes []string
+
+	// Resources mirrors [PublicClient.Resources].
+	Resources []string
+
+	// GrantTypes overrides the default
+	// {"authorization_code", "refresh_token"}. Empty applies the
+	// default; non-empty replaces it entirely.
+	GrantTypes []string
+
+	// ResponseTypes overrides the default {"code"}. Empty applies
+	// the default; non-empty replaces it entirely.
+	ResponseTypes []string
+
+	// PostLogoutRedirectURIs mirrors [PublicClient.PostLogoutRedirectURIs].
+	PostLogoutRedirectURIs []string
+
+	// BackchannelLogoutURI mirrors [PublicClient.BackchannelLogoutURI].
+	BackchannelLogoutURI string
+
+	// ApplicationType mirrors [PublicClient.ApplicationType].
+	ApplicationType string
+
+	// SubjectType requests the OIDC subject_type for this client; see
+	// [PublicClient.SubjectType].
+	SubjectType string
+
+	// DefaultMaxAge mirrors [PublicClient.DefaultMaxAge].
+	DefaultMaxAge *int64
+
+	// RequireAuthTime mirrors [PublicClient.RequireAuthTime].
+	RequireAuthTime bool
+
+	// DefaultACRValues mirrors [PublicClient.DefaultACRValues].
+	DefaultACRValues []string
+}
+
+// seed projects c onto a [store.Client] with the
+// self_signed_tls_client_auth invariants applied: TokenEndpointAuthMethod
+// set to AuthSelfSignedTLSClientAuth, the key source carried through,
+// and Source ClientSourceStatic.
+func (c SelfSignedTLSClientAuthClient) seed() (store.Client, error) {
+	if err := checkSeedKeySource("SelfSignedTLSClientAuthClient", c.ID, c.JWKS, c.JWKSURI); err != nil {
+		return store.Client{}, err
+	}
+	if err := checkDefaultMaxAge("SelfSignedTLSClientAuthClient", c.ID, c.DefaultMaxAge); err != nil {
+		return store.Client{}, err
+	}
+	grants, responses := seedGrantAndResponseTypes(c.GrantTypes, c.ResponseTypes)
+	return store.Client{
+		ID:                      c.ID,
+		RedirectURIs:            slices.Clone(c.RedirectURIs),
+		Scopes:                  slices.Clone(c.Scopes),
+		Resources:               slices.Clone(c.Resources),
+		GrantTypes:              grants,
+		ResponseTypes:           responses,
+		TokenEndpointAuthMethod: AuthSelfSignedTLSClientAuth.String(),
+		JWKs:                    slices.Clone(c.JWKS),
+		JWKsURI:                 c.JWKSURI,
+		Source:                  store.ClientSourceStatic,
+		PostLogoutRedirectURIs:  slices.Clone(c.PostLogoutRedirectURIs),
+		BackchannelLogoutURI:    c.BackchannelLogoutURI,
+		ApplicationType:         c.ApplicationType,
+		SubjectType:             c.SubjectType,
+		DefaultMaxAge:           clone.Int64Ptr(c.DefaultMaxAge),
+		RequireAuthTime:         c.RequireAuthTime,
+		DefaultACRValues:        slices.Clone(c.DefaultACRValues),
 	}, nil
 }

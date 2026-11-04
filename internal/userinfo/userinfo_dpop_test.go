@@ -98,7 +98,7 @@ func TestUserInfo_DPoP_HappyPath(t *testing.T) {
 		c.Scope = []string{"openid", "email"}
 		c.Confirmation = map[string]string{"jkt": key.jkt}
 	})
-	proof := proofFor(t, key, "GET", f.endpoint, f.clock.now, "jti-uinfo-1", dpop.AccessTokenHash(token))
+	proof := proofFor(t, key, "GET", f.prov.Issuer+"/oidc/userinfo", f.clock.now, "jti-uinfo-1", dpop.AccessTokenHash(token))
 	req := f.newGetDPoP(t, token)
 	req.Header.Set("DPoP", proof)
 	resp := f.doRequest(t, req)
@@ -124,7 +124,7 @@ func TestUserInfo_DPoP_BearerSchemeRejected(t *testing.T) {
 		c.Scope = []string{"openid", "email"}
 		c.Confirmation = map[string]string{"jkt": key.jkt}
 	})
-	proof := proofFor(t, key, "GET", f.endpoint, f.clock.now, "jti-uinfo-bearer-scheme", dpop.AccessTokenHash(token))
+	proof := proofFor(t, key, "GET", f.prov.Issuer+"/oidc/userinfo", f.clock.now, "jti-uinfo-bearer-scheme", dpop.AccessTokenHash(token))
 	// Wrong scheme (Bearer) but a valid proof header: must still be rejected.
 	req := f.newGet(t, token)
 	req.Header.Set("DPoP", proof)
@@ -173,7 +173,7 @@ func TestUserInfo_DPoP_EmptyFirstProofValueIsNotMissingProof(t *testing.T) {
 		c.Scope = []string{"openid", "email"}
 		c.Confirmation = map[string]string{"jkt": key.jkt}
 	})
-	proof := proofFor(t, key, "GET", f.endpoint, f.clock.now, "jti-uinfo-empty-first", dpop.AccessTokenHash(token))
+	proof := proofFor(t, key, "GET", f.prov.Issuer+"/oidc/userinfo", f.clock.now, "jti-uinfo-empty-first", dpop.AccessTokenHash(token))
 	req := f.newGetDPoP(t, token)
 	req.Header.Add("DPoP", "")
 	req.Header.Add("DPoP", proof)
@@ -230,7 +230,7 @@ func TestUserInfo_DPoP_DifferentKey(t *testing.T) {
 	token := f.signAccessToken(t, func(c *tokens.AccessTokenClaims) {
 		c.Confirmation = map[string]string{"jkt": bound.jkt}
 	})
-	proof := proofFor(t, other, "GET", f.endpoint, f.clock.now, "jti-uinfo-other", dpop.AccessTokenHash(token))
+	proof := proofFor(t, other, "GET", f.prov.Issuer+"/oidc/userinfo", f.clock.now, "jti-uinfo-other", dpop.AccessTokenHash(token))
 	req := f.newGetDPoP(t, token)
 	req.Header.Set("DPoP", proof)
 	resp := f.doRequest(t, req)
@@ -254,7 +254,7 @@ func TestUserInfo_DPoP_ATHMismatch(t *testing.T) {
 	})
 	// ath hashes a different value; the request still presents the
 	// real token.
-	proof := proofFor(t, key, "GET", f.endpoint, f.clock.now, "jti-uinfo-ath", dpop.AccessTokenHash("not-the-real-token"))
+	proof := proofFor(t, key, "GET", f.prov.Issuer+"/oidc/userinfo", f.clock.now, "jti-uinfo-ath", dpop.AccessTokenHash("not-the-real-token"))
 	req := f.newGetDPoP(t, token)
 	req.Header.Set("DPoP", proof)
 	resp := f.doRequest(t, req)
@@ -298,7 +298,7 @@ func TestUserInfo_DPoP_Replay(t *testing.T) {
 		c.Scope = []string{"openid", "email"}
 		c.Confirmation = map[string]string{"jkt": key.jkt}
 	})
-	proof := proofFor(t, key, "GET", f.endpoint, f.clock.now, "jti-uinfo-replay", dpop.AccessTokenHash(token))
+	proof := proofFor(t, key, "GET", f.prov.Issuer+"/oidc/userinfo", f.clock.now, "jti-uinfo-replay", dpop.AccessTokenHash(token))
 
 	req1 := f.newGetDPoP(t, token)
 	req1.Header.Set("DPoP", proof)

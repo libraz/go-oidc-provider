@@ -14,14 +14,11 @@ package op
 // storage layer is opaque) but the library will treat them as unknown
 // when negotiating client authentication.
 //
-// Naming a method is not the same as being able to select it. The two
-// RFC 8705 mTLS methods — [AuthTLSClientAuth] and
-// [AuthSelfSignedTLSClientAuth] — are enumerated because the type
-// mirrors the IANA registry, but this release admits neither on any
-// client: [New] rejects a static seed carrying one, dynamic
-// registration rejects it, and discovery never advertises it. Use
-// [AuthPrivateKeyJWT] for the asymmetric-credential deployments those
-// two would otherwise serve.
+// The two RFC 8705 mTLS methods — [AuthTLSClientAuth] and
+// [AuthSelfSignedTLSClientAuth] — are selectable only with
+// WithFeature(feature.MTLS); without it [New] rejects a static seed
+// carrying one, dynamic registration rejects it, and discovery does not
+// advertise it.
 type AuthMethod string
 
 const (
@@ -42,30 +39,22 @@ const (
 	AuthPrivateKeyJWT AuthMethod = "private_key_jwt"
 
 	// AuthTLSClientAuth is "tls_client_auth" (RFC 8705 §2.1.1). The
-	// client authenticates with a PKI-issued X.509 certificate
-	// presented during the mTLS handshake.
+	// client authenticates with a PKI-issued X.509 certificate whose
+	// chain is verified and whose subject DN or SAN matches the one
+	// registered matcher. Seed it with [TLSClientAuthClient]; requires
+	// [feature.MTLS].
 	//
-	// Not selectable in this release. [New] rejects a static client
-	// seeded with it, dynamic registration rejects it as unsupported
-	// client metadata, and discovery never lists it in
-	// token_endpoint_auth_methods_supported — the runtime client-auth
-	// negotiator does not implement the method, so admitting it
-	// anywhere would advertise a credential the OP cannot check. Use
-	// [AuthPrivateKeyJWT] instead. The constant is retained so a record
-	// already carrying the wire value can be named and compared.
-	//
-	// Certificate-BOUND tokens (RFC 8705 §3) are a separate, shipped
-	// feature and do not require this method: enable [feature.MTLS] and
-	// the OP stamps cnf.x5t#S256 onto tokens issued to a client that
-	// presented a certificate, whichever method it authenticated with.
+	// Certificate-BOUND tokens (RFC 8705 §3) do not require this method:
+	// with [feature.MTLS] the OP stamps cnf.x5t#S256 onto tokens issued
+	// to a client that presented a certificate, whichever method it
+	// authenticated with.
 	AuthTLSClientAuth AuthMethod = "tls_client_auth"
 
 	// AuthSelfSignedTLSClientAuth is "self_signed_tls_client_auth"
 	// (RFC 8705 §2.2.1). The client authenticates with a self-signed
-	// certificate whose JWK is registered in the client's JWKS.
-	//
-	// Not selectable in this release, on the same terms as
-	// [AuthTLSClientAuth]; use [AuthPrivateKeyJWT] instead.
+	// certificate whose public key is in the client's JWKS or jwks_uri.
+	// Seed it with [SelfSignedTLSClientAuthClient]; requires
+	// [feature.MTLS].
 	AuthSelfSignedTLSClientAuth AuthMethod = "self_signed_tls_client_auth"
 
 	// AuthNone is "none" (OIDC Core 1.0 §9). Public clients (SPAs,
@@ -80,12 +69,11 @@ const (
 // against a typo before a value is persisted or compared.
 //
 // It is NOT a test of whether this OP will accept the method on a
-// client. [AuthTLSClientAuth] and [AuthSelfSignedTLSClientAuth] are
-// recognised names that no surface admits (see the type's godoc), so a
-// true answer here does not mean [New], dynamic registration, or the
-// token endpoint will take it. Nothing in the library gates negotiation
-// on this predicate; the authoritative answer is whether the method
-// appears in the OP's advertised token_endpoint_auth_methods_supported.
+// client: [AuthTLSClientAuth] and [AuthSelfSignedTLSClientAuth] need
+// [feature.MTLS], and a profile may narrow the set further. Nothing in
+// the library gates negotiation on this predicate; the authoritative
+// answer is whether the method appears in the OP's advertised
+// token_endpoint_auth_methods_supported.
 func (m AuthMethod) Valid() bool {
 	switch m {
 	case AuthClientSecretBasic,
@@ -104,9 +92,8 @@ func (m AuthMethod) Valid() bool {
 // library writes into [store.Client.TokenEndpointAuthMethod].
 //
 // For the methods this OP admits it is also the value discovery
-// publishes in token_endpoint_auth_methods_supported, but the
-// conversion carries no such guarantee on its own: the two mTLS methods
-// round-trip through String and are still never advertised.
+// publishes in token_endpoint_auth_methods_supported; the conversion
+// carries no such guarantee on its own.
 func (m AuthMethod) String() string {
 	return string(m)
 }
