@@ -33,9 +33,19 @@ go get github.com/libraz/go-oidc-provider/op/storeadapter/dynamodb@v1.5.0
 ## クイックスタート
 
 ```go
-db, _ := sql.Open("mysql", dsn)          // 既存のデータベース
+db, err := sql.Open("mysql", dsn) // 既存のデータベース
+if err != nil {
+    log.Fatal(err)
+}
 st, err := oidcsql.New(db, oidcsql.MySQL()) // op/storeadapter/sql
-// st.Migrations() を migration ツールで適用する。
+if err != nil {
+    log.Fatal(err)
+}
+// 開発時のみ: OP のテーブルをその場で作成する。
+// 本番では代わりに st.Migrations() を migration ツールで適用する。
+if err := st.Migrate(context.Background()); err != nil {
+    log.Fatal(err)
+}
 
 keys, err := op.LoadKeyset("signing.pem") // PEM 形式の秘密鍵
 if err != nil {
@@ -53,6 +63,12 @@ handler, err := op.New(
     op.WithCookieKeys(cookieKeys...),
     op.WithLoginFlow(op.LoginFlow{
         Primary: op.PrimaryPassword{Store: users{db}}, // 下の 3 メソッドを持つあなたの型
+    }),
+    op.WithStaticClients(op.ConfidentialClient{ // ユーザをサインインさせるリライングパーティ
+        ID:           "my-app",
+        Secret:       os.Getenv("MY_APP_CLIENT_SECRET"),
+        RedirectURIs: []string{"https://app.example.com/callback"},
+        Scopes:       []string{"openid", "profile", "email"},
     }),
 )
 if err != nil {
@@ -78,7 +94,11 @@ func (u users) ReadPasswordHash(ctx context.Context, sub string) ([]byte, error)
 
 一度だけ割り当てられ再利用されない不透明な識別子（自動採番の id やメールアドレスは不可）の列がすでにあれば、テーブルに列を足す必要はありません。ID トークンと `/userinfo` のクレームも同じストアから読みます。クレームを別の場所に持つ場合だけ `op.WithUserStore` を使います。bcrypt などのレガシーハッシュは `PrimaryPassword.LegacySchemes` で検証できます。詳しくは [Bring your own user store](https://go-oidc-provider.libraz.net/ja/use-cases/byo-userstore) を参照してください。
 
-`st` は OP 自身のレコード（クライアント、コード、トークン、セッション）を、利用者のテーブルと並ぶ `oidc_*` テーブルに保存します。`op.New` は構成が使うテーブルを構築時に検査し、足りないものを 1 つのエラーですべて挙げます。対象のテーブルは [`TABLES.md`](op/storeadapter/sql/schema/TABLES.md) にまとめてあります。
+`st` は OP 自身のレコード（クライアント、コード、トークン、セッション）を、利用者のテーブルと並ぶ `oidc_*` テーブルに保存します。`op.New` は構成が使うテーブルを構築時に検査し、足りないものを 1 つのエラーですべて挙げます。対象のテーブルは [`TABLES.md`](op/storeadapter/sql/schema/TABLES.md) にまとめてあります。アダプタが `db` を閉じることはなく、閉じるのは利用者側です。
+
+起動時、ストアにない静的クライアントは追加されますが、保存済みの内容と異なるクライアントがあると起動を拒否します。そのため、クライアントを変更したとき（redirect URI の追加、シークレットのローテーションなど）は、新しいバージョンを起動する前にデプロイジョブから `op.SyncStaticClients` で書き込みます。本番では平文の `Secret` ではなく、`go run github.com/libraz/go-oidc-provider/cmd/op-client-secret` が出力するハッシュを `SecretHash` に設定します。詳しくは [クライアントの登録パターン](https://go-oidc-provider.libraz.net/ja/use-cases/client-onboarding) を参照してください。
+
+ログインと同意は、差し替えるまでは OP 組み込みの HTML ページで表示されます。`op.WithSPAUI` を使えば両方を自前の SPA に、`op.WithInteractionDriver` を使えばサーバ側で描画する自前の `interaction.Driver` に任せられます。同意画面のテンプレートだけを差し替えるなら `op.WithConsentUI` です。UI 系オプションのうちどれを併用でき、どれを `op.New` が拒否するかは [UI の方式を選ぶ](https://go-oidc-provider.libraz.net/ja/use-cases/spa-custom-interaction#choosing-a-ui-path) の表にまとめています。OP を専用のリスナではなく既存のルータから配信する方法は [ハンドラのマウント](https://go-oidc-provider.libraz.net/ja/getting-started/mount) にあります。
 
 `Issuer` / `Store` / `Keyset` は常に必須です。認可コード（`authorization_code`）による認可は既定で有効になっており、これを使う場合は `CookieKeys` と `LoginFlow` も必須です。`op.New` は安全でない構成のままでは起動せずにエラーを返すので、不完全な設定は構築時に弾かれます。
 
@@ -97,13 +117,13 @@ op.WithProfile(profile.OIDCCore)      // confidential client の PKCE を任意�
 
 どのページから読むか迷う場合は、[Start here](https://go-oidc-provider.libraz.net/ja/getting-started/start-here) が目的に合うページと example を案内します。
 
-既定値は本番環境を前提にしており、https のみ・公開ネットワークのみを受け付けます。`http://127.0.0.1` は `redirect_uri` と issuer の検査から除外されているため、サンプルの大半はそこでは開発用オプションなしで動きます。IP リテラルでは足りないケースは 2 つあり、文字列ホストの `localhost` を使う場合と、平文 http の `backchannel_logout_uri` を登録する場合です。この除外は OP が持つ他の SSRF ゲート — JWKS、JAR の `request_uri`、`sector_identifier_uri`、バックチャネル配送 — には及びません。いずれもループバック宛てを既定で拒否し、それぞれ個別のオプトインが必要です。詳細は [`redirect_uri`](https://go-oidc-provider.libraz.net/ja/concepts/redirect-uri) と [Issuer](https://go-oidc-provider.libraz.net/ja/concepts/issuer) で説明しています。
+既定値は本番環境を前提にしており、https のみ・公開ネットワークのみを受け付けます。`http://127.0.0.1` は `redirect_uri` と issuer の検査から除外されているため、サンプルの大半はそこでは開発用オプションなしで動きます。IP リテラルでは足りないケースは 2 つあり、文字列ホストの `localhost` を使う場合と、平文 http の `backchannel_logout_uri` を登録する場合です。この除外は OP が持つ他の SSRF ゲート — JWKS、JAR の `request_uri`、`sector_identifier_uri`、バックチャネル配送 — には及びません。いずれもループバックやプライベートネットワーク宛てを既定で拒否し、それぞれ個別のオプトイン（`op.WithAllowPrivateNetworkJWKS`、`op.WithAllowPrivateNetworkJAR`、`op.WithAllowPrivateNetworkSector`、`op.WithAllowPrivateNetworkBackchannel`）が必要です。リライングパーティを別コンテナのアドレスで動かすローカル環境では、使う機能に応じたものを指定することになります。詳細は [`redirect_uri`](https://go-oidc-provider.libraz.net/ja/concepts/redirect-uri) と [Issuer](https://go-oidc-provider.libraz.net/ja/concepts/issuer) で説明しています。
 
 ## スコープ
 
 - **`http.Handler` として埋め込みます**。フレームワークに依存せず、任意のプレフィックスにマウントできます。
 - **ユーザモデルとストレージは持ち込みです**。小さな `store.*` サブストアのインターフェースを介すだけで、利用者の `users` テーブルをライブラリが直接触ることはありません。
-- **対話ドライバはヘッドレスです**。`op.WithSPAUI` でログインと同意を SPA に委譲でき、`op.WithConsentUI` で独自テンプレートに差し替えることもできます。ログアウトの確認画面とサインアウト完了画面は既定では OP 組み込みの（ロケール対応済みの）ページで、`op.WithLogoutUI` を使えば独自テンプレートに差し替えられます。
+- **対話ドライバはヘッドレスです**。ログインと同意は `op.WithSPAUI` で SPA に委譲することも、`op.WithInteractionDriver` で独自の `interaction.Driver` に描かせることもできます。同意画面のテンプレートだけを差し替えるなら `op.WithConsentUI` を使います。ログアウトの確認画面とサインアウト完了画面は既定では OP 組み込みの（ロケール対応済みの）ページで、`op.WithLogoutUI` を使えば独自テンプレートに差し替えられます。
 - **観測性は監査を起点にします**。業務イベントは `audit.Emitter` を通じて集約され、`op.WithPrometheus(reg)` は厳選したカウンタ群を利用者のレジストリに登録します。`/metrics` の公開、リクエスト所要時間を測るミドルウェアの導入、ルータのラップはライブラリ側では**行いません**。これらは組み込み側の責務です。
 
 次のものは意図的にスコープ外です。IdP ではありません（ユーザのレコードを所有せず、メール送信も持ちません）。汎用の OAuth2 フレームワークでも、UI フレームワークでもありません。詳しくは [Why this library](https://go-oidc-provider.libraz.net/ja/why) を参照してください。

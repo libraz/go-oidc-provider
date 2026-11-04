@@ -54,9 +54,19 @@ go get github.com/libraz/go-oidc-provider/op/storeadapter/dynamodb@v1.5.0
 ## Quickstart
 
 ```go
-db, _ := sql.Open("mysql", dsn)          // your existing database
+db, err := sql.Open("mysql", dsn) // your existing database
+if err != nil {
+    log.Fatal(err)
+}
 st, err := oidcsql.New(db, oidcsql.MySQL()) // op/storeadapter/sql
-// Apply st.Migrations() with your migration tool.
+if err != nil {
+    log.Fatal(err)
+}
+// Development only: create the OP's tables in place.
+// Production applies st.Migrations() with your migration tool instead.
+if err := st.Migrate(context.Background()); err != nil {
+    log.Fatal(err)
+}
 
 keys, err := op.LoadKeyset("signing.pem") // PEM private key
 if err != nil {
@@ -74,6 +84,12 @@ handler, err := op.New(
     op.WithCookieKeys(cookieKeys...),
     op.WithLoginFlow(op.LoginFlow{
         Primary: op.PrimaryPassword{Store: users{db}}, // your type with the three methods below
+    }),
+    op.WithStaticClients(op.ConfidentialClient{ // the relying party that signs users in
+        ID:           "my-app",
+        Secret:       os.Getenv("MY_APP_CLIENT_SECRET"),
+        RedirectURIs: []string{"https://app.example.com/callback"},
+        Scopes:       []string{"openid", "profile", "email"},
     }),
 )
 if err != nil {
@@ -109,7 +125,25 @@ is for claims kept elsewhere. Legacy hashes such as bcrypt verify through
 `st` holds the OP's own records (clients, codes, tokens, sessions) in
 `oidc_*` tables next to yours. `op.New` checks the tables your configuration
 uses and names every missing one in one error;
-[`TABLES.md`](op/storeadapter/sql/schema/TABLES.md) lists them.
+[`TABLES.md`](op/storeadapter/sql/schema/TABLES.md) lists them. The adapter
+never closes `db`; it stays yours.
+
+Startup inserts a static client that the store lacks and refuses one whose
+stored record differs, so an edited client (a new redirect URI, a rotated
+secret) is written by `op.SyncStaticClients` from a deploy job before the new
+version starts. Production seeds `SecretHash` from
+`go run github.com/libraz/go-oidc-provider/cmd/op-client-secret` rather than a
+plaintext `Secret`. See
+[Client onboarding](https://go-oidc-provider.libraz.net/use-cases/client-onboarding).
+
+Login and consent render the OP's built-in HTML pages until you replace
+them: `op.WithSPAUI` hands both to your own SPA, `op.WithInteractionDriver`
+to your own server-rendered `interaction.Driver`, and `op.WithConsentUI`
+swaps the consent screen's template alone.
+[Choosing a UI path](https://go-oidc-provider.libraz.net/use-cases/spa-custom-interaction#choosing-a-ui-path)
+tabulates which of the UI options combine and which `op.New` refuses together.
+To serve the OP from your existing router rather than its own listener, see
+[Mounting the handler](https://go-oidc-provider.libraz.net/getting-started/mount).
 
 `Issuer`, `Store` and `Keyset` are always required. `CookieKeys` and
 `LoginFlow` are required whenever the `authorization_code` grant is enabled,
@@ -151,8 +185,12 @@ most examples run without any development option there. Two options cover
 what the IP literal does not: the textual host `localhost`, and a plain-http
 `backchannel_logout_uri`. That carve-out does not extend to the OP's other
 SSRF gates: JWKS, the JAR `request_uri`, `sector_identifier_uri`, and
-back-channel delivery each reject a loopback target by default too and need
-their own opt-in. Documented under
+back-channel delivery each reject a loopback or private-network target by
+default too and need their own opt-in: `op.WithAllowPrivateNetworkJWKS`,
+`op.WithAllowPrivateNetworkJAR`, `op.WithAllowPrivateNetworkSector` and
+`op.WithAllowPrivateNetworkBackchannel`. A local setup where the relying
+party runs on another container's address usually needs the ones for the
+features it uses. Documented under
 [`redirect_uri`](https://go-oidc-provider.libraz.net/concepts/redirect-uri) and
 [Issuer](https://go-oidc-provider.libraz.net/concepts/issuer).
 
@@ -162,8 +200,9 @@ their own opt-in. Documented under
 - **Bring your own user model and storage.** Small `store.*` substore
   interfaces; the library never touches your `users` table directly.
 - **Headless interaction driver.** Login and consent can be driven from a SPA
-  via `op.WithSPAUI`, or rendered from your own templates with
-  `op.WithConsentUI`. The logout confirmation and signed-out pages are the
+  via `op.WithSPAUI` or rendered by your own `interaction.Driver` through
+  `op.WithInteractionDriver`, and `op.WithConsentUI` replaces the consent
+  template alone. The logout confirmation and signed-out pages are the
   OP's built-in, localised ones unless `op.WithLogoutUI` replaces them with
   your own templates.
 - **Audit-first observability.** Business events go through `audit.Emitter`,
