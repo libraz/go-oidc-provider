@@ -90,6 +90,13 @@
     },
     {
       "result": "REVIEW",
+      "module": "fapi2-security-profile-final-ensure-authorization-request-with-long-*",
+      "reason": "Long state and nonce on the authorization request. The OP accepts the long value and completes the flow: the state comes back in the authorization response and the token request succeeds. The module's ExpectRequestObjectWithLongStateErrorPage / LongNonce condition allows either an error page or a successful flow and records a review item in both cases, so the module finishes as REVIEW even when every assertion passes.",
+      "owner": "@libraz",
+      "expires": "2027-01-31"
+    },
+    {
+      "result": "REVIEW",
       "module": "fapi2-security-profile-final-state-only-outside-request-object-not-used",
       "reason": "Same shape as the request-object mismatch family: a state supplied only outside the request object must be ignored, the request refused pre-redirect, and the resulting error page reviewed by a human.",
       "owner": "@libraz",
