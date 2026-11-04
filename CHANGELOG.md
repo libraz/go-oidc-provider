@@ -314,6 +314,13 @@ must implement `AuthnLockouts()` or be paired with
   caller-chosen through open dynamic registration or Client ID Metadata
   Documents, which includes a registered `backchannel_logout_uri`.
 
+- An outbound fetch refused by the private-network deny-list names the option
+  that lifts it (`; pass op.WithAllowPrivateNetworkSector() to admit
+  private-network targets`, and `rs.Config.AllowPrivateNetwork` in `op/rs`).
+  The refusal reaches the logs for `sector_identifier_uri`, back-channel
+  logout and Shared Signals delivery, and the `op/rs` verifier's logger.
+  Cloud-metadata refusals carry no hint, because no option lifts them.
+
 - The keyset error for an RSA key under ES256 suggests
   `op.WithSigningAlgorithm(op.AlgRS256)`, and the cookie-key length error
   reports the length it received.
