@@ -97,7 +97,7 @@ func (u users) FindByUsername(ctx context.Context, login string) (*store.User, e
 func (u users) ReadPasswordHash(ctx context.Context, sub string) ([]byte, error) // PHC 形式の argon2id。bcrypt は PrimaryPassword.LegacySchemes
 ```
 
-一度だけ割り当てられ再利用されない不透明な識別子（自動採番の id やメールアドレスは不可）の列がすでにあれば、テーブルに列を足す必要はありません。ID トークンと `/userinfo` のクレームも同じストアから読みます。クレームを別の場所に持つ場合だけ `op.WithUserStore` を使います。bcrypt ハッシュのテーブルには上の `LegacySchemes` の行が必要です。指定しないと、そのハッシュを持つユーザは全員ログインに失敗し、OP はこのフィールドを名指しした WARN ログを `op.WithLogger` に渡したロガーへ 1 回出力します。詳しくは [Bring your own user store](https://go-oidc-provider.libraz.net/ja/use-cases/byo-userstore) を参照してください。
+一度だけ割り当てられ再利用されない不透明な識別子（自動採番の id やメールアドレスは不可）の列がすでにあれば、テーブルに列を足す必要はありません。クレームも同じストアから読みます。`/userinfo` はそのクレームを返しますが、ID トークンに載るのは `op.WithIDTokenScopeClaims` に挙げたスコープの分だけです（例: `op.WithIDTokenScopeClaims("profile", "email")`）。クレームを別の場所に持つ場合だけ `op.WithUserStore` を使います。bcrypt ハッシュのテーブルには上の `LegacySchemes` の行が必要です。指定しないと、そのハッシュを持つユーザは全員ログインに失敗し、OP はこのフィールドを名指しした WARN ログを `op.WithLogger` に渡したロガーへ 1 回出力します。詳しくは [Bring your own user store](https://go-oidc-provider.libraz.net/ja/use-cases/byo-userstore) を参照してください。
 
 `st` は OP 自身のレコード（クライアント、コード、トークン、セッション）を、利用者のテーブルと並ぶ `oidc_*` テーブルに保存します。`op.New` は構成が使うテーブルを構築時に検査し、足りないものを 1 つのエラーですべて挙げます。対象のテーブルは [`TABLES.md`](op/storeadapter/sql/schema/TABLES.md) にまとめてあります。アダプタが `db` を閉じることはなく、閉じるのは利用者側です。`go run github.com/libraz/go-oidc-provider/op/storeadapter/sql/cmd/op-schema export` を使うと、migration を golang-migrate、goose、Flyway のファイルとして書き出せます。users テーブルと migration ツールをすでに持つアプリケーションは [既存のデータベースに組み込む](https://go-oidc-provider.libraz.net/ja/getting-started/existing-db) を参照してください。
 
@@ -170,7 +170,7 @@ op.WithProfile(profile.OIDCCore)      // confidential client の PKCE を任意�
 
 ## サンプル
 
-[`examples/`](examples/README.md) に動作デモが 46 本あります。オプションや機能 1 つにつき 1 本という構成で、それぞれがドキュメントサイトの [ユースケースページ](https://go-oidc-provider.libraz.net/ja/use-cases/) に対応します。
+[`examples/`](examples/README.md) に動作デモが 50 本あります。オプションや機能 1 つにつき 1 本という構成で、それぞれがドキュメントサイトの [ユースケースページ](https://go-oidc-provider.libraz.net/ja/use-cases/) に対応します。
 
 ```sh
 (cd examples/01-minimal && GOWORK=off go run -tags example .)

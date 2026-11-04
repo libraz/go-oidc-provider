@@ -122,8 +122,10 @@ func (u users) ReadPasswordHash(ctx context.Context, sub string) ([]byte, error)
 
 The table gains no column when it already has an opaque identifier assigned
 once and never reused (not an auto-increment id or an email address). The
-same store supplies the ID Token and `/userinfo` claims; `op.WithUserStore`
-is for claims kept elsewhere. A table of bcrypt hashes needs the
+same store supplies the claims: `/userinfo` returns them, and the ID Token
+carries them only for the scopes listed in `op.WithIDTokenScopeClaims`, such
+as `op.WithIDTokenScopeClaims("profile", "email")`. `op.WithUserStore` is for
+claims kept elsewhere. A table of bcrypt hashes needs the
 `LegacySchemes` line above: without it every login against such a hash fails,
 and the OP logs one WARN that names the field through the logger given to
 `op.WithLogger`. See
@@ -284,7 +286,7 @@ and [Bring your own store](https://go-oidc-provider.libraz.net/use-cases/byo-sto
 
 ## Examples
 
-[`examples/`](examples/README.md) holds 46 runnable demos, one option or
+[`examples/`](examples/README.md) holds 50 runnable demos, one option or
 feature apiece, each mapped to a
 [use-case page](https://go-oidc-provider.libraz.net/use-cases/).
 
