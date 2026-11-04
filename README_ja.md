@@ -99,7 +99,7 @@ func (u users) ReadPasswordHash(ctx context.Context, sub string) ([]byte, error)
 
 起動時、ストアにない静的クライアントは追加されますが、保存済みの内容と異なるクライアントがあると起動を拒否します。そのため、クライアントを変更したとき（redirect URI の追加、シークレットのローテーションなど）は、新しいバージョンを起動する前にデプロイジョブから `op.SyncStaticClients` で書き込みます。本番では平文の `Secret` ではなく、`go run github.com/libraz/go-oidc-provider/cmd/op-client-secret` が出力するハッシュを `SecretHash` に設定します。詳しくは [クライアントの登録パターン](https://go-oidc-provider.libraz.net/ja/use-cases/client-onboarding) を参照してください。
 
-ログインと同意は、差し替えるまでは OP 組み込みの HTML ページで表示されます。`op.WithSPAUI` を使えば両方を自前の SPA に、`op.WithInteractionDriver` を使えばサーバ側で描画する自前の `interaction.Driver` に任せられます。同意画面のテンプレートだけを差し替えるなら `op.WithConsentUI` です。UI 系オプションのうちどれを併用でき、どれを `op.New` が拒否するかは [UI の方式を選ぶ](https://go-oidc-provider.libraz.net/ja/use-cases/spa-custom-interaction#choosing-a-ui-path) の表にまとめています。OP を専用のリスナではなく既存のルータから配信する方法は [ハンドラのマウント](https://go-oidc-provider.libraz.net/ja/getting-started/mount) にあります。
+ログインと同意は、差し替えるまでは OP 組み込みの HTML ページで表示されます。`op.WithUI` には 3 つのモードのうち 1 つを渡します。`op.SPAUI` なら両方を自前の SPA に、`op.DriverUI` ならサーバ側で描画する自前の `interaction.Driver` に任せられます。ログイン・同意・アカウント選択のうち特定の画面のテンプレートだけを差し替えるなら `op.HTMLUI` です。どの値がどの用途に合うかは [UI の方式を選ぶ](https://go-oidc-provider.libraz.net/ja/use-cases/spa-custom-interaction#choosing-a-ui-path) の表にまとめています。OP を専用のリスナではなく既存のルータから配信する方法は [ハンドラのマウント](https://go-oidc-provider.libraz.net/ja/getting-started/mount) にあります。
 
 `Issuer` / `Store` / `Keyset` は常に必須です。認可コード（`authorization_code`）による認可は既定で有効になっており、これを使う場合は `CookieKeys` と `LoginFlow` も必須です。`op.New` は安全でない構成のままでは起動せずにエラーを返すので、不完全な設定は構築時に弾かれます。
 
@@ -124,7 +124,7 @@ op.WithProfile(profile.OIDCCore)      // confidential client の PKCE を任意�
 
 - **`http.Handler` として埋め込みます**。フレームワークに依存せず、任意のプレフィックスにマウントできます。
 - **ユーザモデルとストレージは持ち込みです**。小さな `store.*` サブストアのインターフェースを介すだけで、利用者の `users` テーブルをライブラリが直接触ることはありません。
-- **対話ドライバはヘッドレスです**。ログインと同意は `op.WithSPAUI` で SPA に委譲することも、`op.WithInteractionDriver` で独自の `interaction.Driver` に描かせることもできます。同意画面のテンプレートだけを差し替えるなら `op.WithConsentUI` を使います。ログアウトの確認画面とサインアウト完了画面は既定では OP 組み込みの（ロケール対応済みの）ページで、`op.WithLogoutUI` を使えば独自テンプレートに差し替えられます。
+- **対話ドライバはヘッドレスです**。ログインと同意は `op.SPAUI` で SPA に委譲することも、`op.DriverUI` で独自の `interaction.Driver` に描かせることもできます。ログイン・同意・アカウント選択のテンプレートだけを差し替えるなら `op.HTMLUI` を使います。いずれも `op.WithUI` に渡します。ログアウトの確認画面とサインアウト完了画面は既定では OP 組み込みの（ロケール対応済みの）ページで、`op.WithLogoutUI` を使えば独自テンプレートに差し替えられます。
 - **観測性は監査を起点にします**。業務イベントは `audit.Emitter` を通じて集約され、`op.WithPrometheus(reg)` は厳選したカウンタ群を利用者のレジストリに登録します。`/metrics` の公開、リクエスト所要時間を測るミドルウェアの導入、ルータのラップはライブラリ側では**行いません**。これらは組み込み側の責務です。
 
 次のものは意図的にスコープ外です。IdP ではありません（ユーザのレコードを所有せず、メール送信も持ちません）。汎用の OAuth2 フレームワークでも、UI フレームワークでもありません。詳しくは [Why this library](https://go-oidc-provider.libraz.net/ja/why) を参照してください。

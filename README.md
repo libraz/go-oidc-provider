@@ -140,11 +140,12 @@ plaintext `Secret`. See
 [Client onboarding](https://go-oidc-provider.libraz.net/use-cases/client-onboarding).
 
 Login and consent render the OP's built-in HTML pages until you replace
-them: `op.WithSPAUI` hands both to your own SPA, `op.WithInteractionDriver`
-to your own server-rendered `interaction.Driver`, and `op.WithConsentUI`
-swaps the consent screen's template alone.
+them: `op.WithUI` takes one mode. `op.SPAUI` hands both to your own SPA,
+`op.DriverUI` to your own server-rendered `interaction.Driver`, and
+`op.HTMLUI` swaps the template of any one screen (login, consent or account
+chooser) while keeping the rest built in.
 [Choosing a UI path](https://go-oidc-provider.libraz.net/use-cases/spa-custom-interaction#choosing-a-ui-path)
-tabulates which of the UI options combine and which `op.New` refuses together.
+tabulates which `op.WithUI` value fits which need.
 To serve the OP from your existing router rather than its own listener, see
 [Mounting the handler](https://go-oidc-provider.libraz.net/getting-started/mount).
 
@@ -203,9 +204,9 @@ features it uses. Documented under
 - **Bring your own user model and storage.** Small `store.*` substore
   interfaces; the library never touches your `users` table directly.
 - **Headless interaction driver.** Login and consent can be driven from a SPA
-  via `op.WithSPAUI` or rendered by your own `interaction.Driver` through
-  `op.WithInteractionDriver`, and `op.WithConsentUI` replaces the consent
-  template alone. The logout confirmation and signed-out pages are the
+  via `op.SPAUI` or rendered by your own `interaction.Driver` through
+  `op.DriverUI`, and `op.HTMLUI` replaces the login, consent or chooser
+  template alone, all passed to `op.WithUI`. The logout confirmation and signed-out pages are the
   OP's built-in, localised ones unless `op.WithLogoutUI` replaces them with
   your own templates.
 - **Audit-first observability.** Business events go through `audit.Emitter`,
