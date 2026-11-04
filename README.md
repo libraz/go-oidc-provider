@@ -62,8 +62,9 @@ st, err := oidcsql.New(db, oidcsql.MySQL()) // op/storeadapter/sql
 if err != nil {
     log.Fatal(err)
 }
-// Migrate creates or upgrades the OP's tables and records the schema version.
-// A team with a migration tool applies st.Migrations() with it instead.
+// Migrate creates or upgrades the OP's tables. Run it once from a deploy job
+// (or apply st.Migrations() with your migration tool); calling it here keeps
+// the example short.
 if err := st.Migrate(context.Background()); err != nil {
     log.Fatal(err)
 }
@@ -112,7 +113,7 @@ user:
 ```go
 func (u users) FindBySubject(ctx context.Context, sub string) (*store.User, error)
 func (u users) FindByUsername(ctx context.Context, login string) (*store.User, error)
-func (u users) ReadPasswordHash(ctx context.Context, sub string) ([]byte, error) // PHC argon2id
+func (u users) ReadPasswordHash(ctx context.Context, sub string) ([]byte, error) // PHC argon2id; bcrypt via PrimaryPassword.LegacySchemes
 ```
 
 The table gains no column when it already has an opaque identifier assigned
@@ -126,7 +127,9 @@ is for claims kept elsewhere. Legacy hashes such as bcrypt verify through
 `oidc_*` tables next to yours. `op.New` checks the tables your configuration
 uses and names every missing one in one error;
 [`TABLES.md`](op/storeadapter/sql/schema/TABLES.md) lists them. The adapter
-never closes `db`; it stays yours.
+never closes `db`; it stays yours. For an application that already has a
+users table and a migration tool, see
+[Integrate with an existing database](https://go-oidc-provider.libraz.net/getting-started/existing-db).
 
 Startup inserts a static client that the store lacks and refuses one whose
 stored record differs, so an edited client (a new redirect URI, a rotated

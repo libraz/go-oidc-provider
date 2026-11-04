@@ -41,8 +41,9 @@ st, err := oidcsql.New(db, oidcsql.MySQL()) // op/storeadapter/sql
 if err != nil {
     log.Fatal(err)
 }
-// Migrate は OP のテーブルを作成または更新し、スキーマの版を記録する。
-// migration ツールを使うチームは、代わりに st.Migrations() をそのツールで適用する。
+// Migrate は OP のテーブルを作成または更新する。deploy job から一度だけ実行する
+// （または st.Migrations() を migration ツールで適用する）。ここで呼ぶのは
+// サンプルを短くするため。
 if err := st.Migrate(context.Background()); err != nil {
     log.Fatal(err)
 }
@@ -89,12 +90,12 @@ openssl rand -hex 32 > cookie.key
 ```go
 func (u users) FindBySubject(ctx context.Context, sub string) (*store.User, error)
 func (u users) FindByUsername(ctx context.Context, login string) (*store.User, error)
-func (u users) ReadPasswordHash(ctx context.Context, sub string) ([]byte, error) // PHC 形式の argon2id
+func (u users) ReadPasswordHash(ctx context.Context, sub string) ([]byte, error) // PHC 形式の argon2id。bcrypt は PrimaryPassword.LegacySchemes
 ```
 
 一度だけ割り当てられ再利用されない不透明な識別子（自動採番の id やメールアドレスは不可）の列がすでにあれば、テーブルに列を足す必要はありません。ID トークンと `/userinfo` のクレームも同じストアから読みます。クレームを別の場所に持つ場合だけ `op.WithUserStore` を使います。bcrypt などのレガシーハッシュは `PrimaryPassword.LegacySchemes` で検証できます。詳しくは [Bring your own user store](https://go-oidc-provider.libraz.net/ja/use-cases/byo-userstore) を参照してください。
 
-`st` は OP 自身のレコード（クライアント、コード、トークン、セッション）を、利用者のテーブルと並ぶ `oidc_*` テーブルに保存します。`op.New` は構成が使うテーブルを構築時に検査し、足りないものを 1 つのエラーですべて挙げます。対象のテーブルは [`TABLES.md`](op/storeadapter/sql/schema/TABLES.md) にまとめてあります。アダプタが `db` を閉じることはなく、閉じるのは利用者側です。
+`st` は OP 自身のレコード（クライアント、コード、トークン、セッション）を、利用者のテーブルと並ぶ `oidc_*` テーブルに保存します。`op.New` は構成が使うテーブルを構築時に検査し、足りないものを 1 つのエラーですべて挙げます。対象のテーブルは [`TABLES.md`](op/storeadapter/sql/schema/TABLES.md) にまとめてあります。アダプタが `db` を閉じることはなく、閉じるのは利用者側です。users テーブルと migration ツールをすでに持つアプリケーションは [既存のデータベースに組み込む](https://go-oidc-provider.libraz.net/ja/getting-started/existing-db) を参照してください。
 
 起動時、ストアにない静的クライアントは追加されますが、保存済みの内容と異なるクライアントがあると起動を拒否します。そのため、クライアントを変更したとき（redirect URI の追加、シークレットのローテーションなど）は、新しいバージョンを起動する前にデプロイジョブから `op.SyncStaticClients` で書き込みます。本番では平文の `Secret` ではなく、`go run github.com/libraz/go-oidc-provider/cmd/op-client-secret` が出力するハッシュを `SecretHash` に設定します。詳しくは [クライアントの登録パターン](https://go-oidc-provider.libraz.net/ja/use-cases/client-onboarding) を参照してください。
 
