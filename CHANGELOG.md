@@ -317,9 +317,14 @@ must implement `AuthnLockouts()` or be paired with
 - An outbound fetch refused by the private-network deny-list names the option
   that lifts it (`; pass op.WithAllowPrivateNetworkSector() to admit
   private-network targets`, and `rs.Config.AllowPrivateNetwork` in `op/rs`).
-  The refusal reaches the logs for `sector_identifier_uri`, back-channel
-  logout and Shared Signals delivery, and the `op/rs` verifier's logger.
-  Cloud-metadata refusals carry no hint, because no option lifts them.
+  A refused relying-party JWKS, JAR `request_uri` or Client ID Metadata
+  Document fetch logs one WARN through `op.WithLogger`
+  (`outbound fetch refused by the private-network deny-list`, with `fetch`,
+  `client_id` where known, and `err`), at most once per URL per negative-cache
+  lifetime; the `sector_identifier_uri` warning, the back-channel logout and
+  Shared Signals audit records, and the `op/rs` verifier's logger carry the
+  same text. Cloud-metadata refusals carry no hint, because no option lifts
+  them.
 
 - The keyset error for an RSA key under ES256 suggests
   `op.WithSigningAlgorithm(op.AlgRS256)`, and the cookie-key length error
