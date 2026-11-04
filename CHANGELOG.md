@@ -22,8 +22,10 @@ bring-your-own store may adopt; one that does not keeps working as before.
 `v1.5.0` breaks the stable surface again, as a minor release: an OP with no
 `op.WithProfile` now requires PKCE (`profile.OIDCCore` restores the old
 shape), `store.Store` loses `Users()` so the user store is passed through the
-login flow or `op.WithUserStore`, and every deprecated symbol is removed. Its
-`Changed` and `Removed` sections list each one with its replacement.
+login flow or `op.WithUserStore`, every deprecated symbol is removed, and the
+interaction UI is chosen through one `op.WithUI`, which replaces five options
+including `op.WithInteractionDriver`, stable since v1.0. Its `Changed` and
+`Removed` sections list each one with its replacement.
 
 The main module and the storage-adapter sub-modules
 (`op/storeadapter/sql`, `op/storeadapter/redis`, and from `v1.0.0`
@@ -109,10 +111,11 @@ Deployments that need to do something before upgrading: an
 `op.WithACRValuesSupported` entry that is not one of the canonical AAL URIs
 (`op.AAL1.ACRURI()` and so on) must be declared with
 `op.WithACRPolicy(op.ACRLevels{"<value>": op.AAL2})`, or `op.New` refuses to
-start. A login flow with a passkey step must use `op.WithSPAUI` or an
-`op.WithInteractionDriver` that runs the WebAuthn ceremony. A custom SPA
-bundle served through `op.WithSPAUI` that loads external scripts, uses inline
-scripts or a `<base>` element must set `SPAUI.ContentSecurityPolicy`. A custom
+start. Every UI option moves to `op.WithUI`; the `Removed` section maps each
+old call. A login flow with a passkey step must use `op.SPAUI` or an
+`op.DriverUI` whose driver runs the WebAuthn ceremony. A custom SPA bundle
+served through `op.SPAUI` that loads external scripts, uses inline scripts or
+a `<base>` element must set `SPAUI.ContentSecurityPolicy`. A custom
 SPA that reads the prompt JSON must switch to the snake_case keys listed under
 `Changed`. A configuration that uses `op.WithAuthenticators`,
 `op.WithCaptchaVerifier` or `op.WithRiskAssessor` no longer compiles; the
@@ -282,9 +285,9 @@ start.
 
 - **BREAKING:** `op.New` refuses a browser sign-in option set explicitly while
   the grant set has no `authorization_code`: `op.WithLoginFlow`,
-  `op.WithInteractions`, `op.WithSPAUI`, `op.WithConsentUI`,
-  `op.WithChooserUI` and `op.WithFirstPartyClients`. `op.WithGrants` replaces
-  the defaults, so these options used to be dropped without a trace. Options
+  `op.WithInteractions`, `op.WithUI` (in every mode, `op.DriverUI` included)
+  and `op.WithFirstPartyClients`. `op.WithGrants` replaces the defaults, so
+  these options used to be dropped without a trace. Options
   that arrive through `op.WithDefaults` are not counted, and neither is a
   login flow that only serves as the claim source of `device_code` or CIBA.
   Fix it by listing `grant.AuthorizationCode` in `op.WithGrants` or by
@@ -331,12 +334,6 @@ start.
 - The warning that forwarded headers arrived while `op.WithTrustedProxies`
   is not configured goes to `slog.Default()` when no `op.WithLogger` is set;
   it was discarded before.
-
-- `op.New` refuses `op.WithSPAUI` combined with a bundled HTML driver
-  (`interaction.HTMLDriver` or `interaction.TemplateOverlayDriver`). The
-  configured driver renders and parses the prompts the SPA fetches from
-  `<LoginMount>/state`, and an HTML driver cannot produce them. Use
-  `op.WithSPAUI` alone, or a driver that returns JSON.
 
 - `op.New` logs one warning per static client that names a grant the OP has
   not enabled, naming the option that enables it (a seed that leaves
@@ -557,7 +554,7 @@ a later release records the release it was created at with that `INSERT` once.
   driver (including `interaction.TemplateOverlayDriver` passed by value or
   pointer) instead of logging a warning; no user could complete it.
 
-- The SPA login shell served under `op.WithSPAUI` carries a default
+- The SPA login shell served under `op.SPAUI` carries a default
   `Content-Security-Policy`
   (`default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'`).
 
@@ -678,13 +675,19 @@ a later release records the release it was created at with that `INSERT` once.
 
 ### Added
 
-- `op.WithLoginUI(op.LoginUI{Template, ContentSecurityPolicy})` renders every
-  sign-in prompt other than consent, the account chooser and passkey through
-  an embedder template: password, TOTP, email OTP, recovery code, factor
-  choice, captcha, custom steps and `op.WithInteractions` prompts. The template
-  receives `interaction.LoginTemplateData`; `TemplateOverlayDriver` gains
-  `LoginTemplate` and `LoginCSP`. It is exclusive with `op.WithSPAUI`.
-  `examples/37-custom-login-ui` shows it.
+- `op.WithUI` selects how the OP renders the sign-in, consent and account
+  chooser prompts, taking exactly one of `op.HTMLUI`, `op.SPAUI` or
+  `op.DriverUI`; without it the built-in HTML pages render, as `op.HTMLUI{}`
+  does. `op.HTMLUI{Login, Consent, Chooser}` replaces any built-in page with an
+  `op.PageTemplate`, and a page left empty keeps the built-in markup. The
+  `Login` page renders every sign-in prompt other than consent, the account
+  chooser and passkey: password, TOTP, email OTP, recovery code, factor choice,
+  captcha, custom steps and `op.WithInteractions` prompts, with
+  `interaction.LoginTemplateData`; `TemplateOverlayDriver` gains
+  `LoginTemplate` and `LoginCSP`. `op.DriverUI` takes an embedder
+  `interaction.Driver`, and `op.New` checks a hand-composed
+  `TemplateOverlayDriver`'s `Inner` and policies. `examples/37-custom-login-ui`
+  shows a login template.
 
 - The SQL adapter's version table `<prefix>schema_migrations`, written by
   `Store.Migrate`. Its columns and primary key match golang-migrate's version
@@ -815,7 +818,7 @@ a later release records the release it was created at with that `INSERT` once.
   with `interaction.LogoutConfirmTemplateData` and
   `interaction.LogoutSignedOutTemplateData`. The confirmation template must
   render every `interaction.HiddenField` of `Fields` inside its form;
-  `op.New` rejects one that does not. Composes with `op.WithSPAUI`.
+  `op.New` rejects one that does not. Applies in every `op.WithUI` mode.
 
 - Client secret rotation overlap. `op.ConfidentialClient.PreviousSecret`
   (or `PreviousSecretHash`) with `PreviousSecretExpiresAt` keeps the
@@ -858,9 +861,8 @@ a later release records the release it was created at with that `INSERT` once.
 - The login and interaction surface graduates out of its experimental
   marker and is covered by the SemVer promise from this release:
   `op.LoginFlow`, `op.WithLoginFlow`, `op.WithInteractions`,
-  `op.WithLoginAttemptObserver`, `op.SPAUI`, `op.ConsentUI`,
-  `op.ChooserUI` together with `op.WithSPAUI`, `op.WithConsentUI` and
-  `op.WithChooserUI`, the whole `op/interaction` package, and the DynamoDB
+  `op.WithLoginAttemptObserver`, `op.WithUI` with `op.HTMLUI`, `op.SPAUI`,
+  `op.DriverUI` and `op.PageTemplate`, the whole `op/interaction` package, and the DynamoDB
   storage adapter (`op/storeadapter/dynamodb`, its package and `Store`).
   Grant Management (`op.GrantManagementAction`, `op.WithGrantManagement`)
   stays experimental: it follows an IETF draft whose wire format may still
@@ -1180,8 +1182,7 @@ covered by the SemVer promise.
   issuer path, mount prefix or an endpoint path contains a space, and
   rejects an undefined `op.WithSessionDurabilityPosture` value.
 
-- Zero-argument flag options accept being passed twice, and `op.WithSPAUI` /
-  `op.WithConsentUI` placed under `op.WithDefaults` yield to an explicit one.
+- Zero-argument flag options accept being passed twice.
 
 - `op.LoadPublicJWKS` errors no longer include the file's directory.
 
@@ -1313,6 +1314,27 @@ The client builders lose a field they could only ever set to `false`.
   `op.ConfidentialClient` and `op.PrivateKeyJWTClient`. `op.New` already
   refused `true`; delete the field. The dynamic-registration metadata field is
   unchanged.
+
+The interaction UI options give way to `op.WithUI`, whose modes do not
+combine, so the rules between the old options go with them.
+
+- **BREAKING:** `op.WithSPAUI`, `op.WithInteractionDriver`, `op.WithLoginUI`,
+  `op.WithConsentUI`, `op.WithChooserUI` and the `op.LoginUI`,
+  `op.ConsentUI` and `op.ChooserUI` types. Each call maps onto one `op.WithUI`:
+  - `op.WithSPAUI(s)` becomes `op.WithUI(s)`; `op.SPAUI` keeps its fields.
+  - `op.WithInteractionDriver(d)` becomes `op.WithUI(op.DriverUI{Driver: d})`.
+  - `op.WithLoginUI`, `op.WithConsentUI` and `op.WithChooserUI` become the
+    `Login`, `Consent` and `Chooser` fields of one `op.HTMLUI`, each an
+    `op.PageTemplate{Template, ContentSecurityPolicy}`.
+  - A custom driver with page templates, including an `interaction.HTMLDriver`
+    with its own `Translator`, becomes
+    `op.WithUI(op.DriverUI{Driver: interaction.TemplateOverlayDriver{Inner: d, ...}})`.
+  - A SPA combined with a custom JSON driver has no replacement. A chooser
+    template set alongside a SPA was never rendered; delete it.
+  - `op/testkit` installs its driver through `op.WithUI` under
+    `op.WithDefaults`, so a test's own `op.WithUI` replaces it. An
+    `op.HTMLUI` page template wraps the built-in HTML driver, not the testkit
+    driver the old page options used to wrap.
 
 ## [v1.4.0] — 2026-10-23
 
