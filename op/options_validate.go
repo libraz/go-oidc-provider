@@ -1,6 +1,7 @@
 package op
 
 import (
+	"errors"
 	"net"
 	"net/url"
 	"slices"
@@ -34,7 +35,6 @@ func (c *config) validate() error {
 		c.validateProfiles,
 		c.validateFeatureActivation,
 		c.validateRegistration,
-		c.validateLoginFlowRequired,
 		c.validateAuthorizationCodeGrantRequired,
 		c.validateInteractions,
 		c.validateLocales,
@@ -92,11 +92,43 @@ func issuerInvalid(raw string, err error) error {
 	return newConfigurationError("issuer "+strconv.Quote(raw)+": "+reason, ErrIssuerInvalid)
 }
 
-// validateRequired enforces the four-argument boot contract (Issuer +
-// Store + Keyset + cookie keys) plus keyset shape. Split out so
-// [validate] stays under the gocognit ceiling and so a future "what
-// MUST be set" check has one obvious home.
+// validateRequired enforces the boot contract (Issuer + Store + Keyset +
+// cookie keys + login flow). Each field is checked for existence and then
+// for its own shape, fail-fast within the field; the errors of all fields
+// are collected so one [New] call reports everything wrong. A single
+// error is returned bare, two or more as an [errors.Join] in field order
+// (issuer, backchannel-dev issuer, store, keyset, cookie keys, login
+// flow), each reachable through errors.Is. Split out so [validate] stays
+// under the gocognit ceiling and so a future "what MUST be set" check has
+// one obvious home.
 func (c *config) validateRequired() error {
+	var errs []error
+	add := func(err error) {
+		if err != nil {
+			errs = append(errs, err)
+		}
+	}
+	add(c.validateIssuerRequired())
+	if nilcheck.IsNil(c.store) {
+		add(ErrStoreRequired)
+	}
+	add(c.validateKeysetRequired())
+	add(c.validateCookieKeysField())
+	add(c.validateLoginFlowRequired())
+	switch len(errs) {
+	case 0:
+		return nil
+	case 1:
+		return errs[0]
+	default:
+		return errors.Join(errs...)
+	}
+}
+
+// validateIssuerRequired checks the issuer's existence, format and the
+// backchannel-dev pairing; the pairing is only judged against a present,
+// valid issuer.
+func (c *config) validateIssuerRequired() error {
 	if c.issuer == "" {
 		return ErrIssuerRequired
 	}
@@ -110,18 +142,24 @@ func (c *config) validateRequired() error {
 			"WithAllowInsecureBackchannelLogoutForDev requires a development issuer (loopback, localhost, or a .localhost/.test/.invalid/.example host)", nil,
 		)
 	}
-	if nilcheck.IsNil(c.store) {
-		return ErrStoreRequired
-	}
+	return nil
+}
+
+// validateKeysetRequired checks the keyset's existence, shape and that
+// the active key is live.
+func (c *config) validateKeysetRequired() error {
 	if len(c.keyset) == 0 {
 		return ErrKeysetRequired
 	}
 	if err := validateKeyset(c.keyset, c.issuingAlg()); err != nil {
 		return err
 	}
-	if err := validateActiveSigningKeyLive(c.keyset, c.clock.Now()); err != nil {
-		return err
-	}
+	return validateActiveSigningKeyLive(c.keyset, c.clock.Now())
+}
+
+// validateCookieKeysField checks the cookie keys' shape, then that they
+// exist when the grant set needs them.
+func (c *config) validateCookieKeysField() error {
 	if err := validateCookieKeys(c.cookieKeys); err != nil {
 		return err
 	}
@@ -398,7 +436,8 @@ func (c *config) validateLocales() error {
 // authorization request as a server_error, which reads as an OP fault to
 // the relying party and gives the operator nothing to act on. This is
 // exactly the class the boot contract exists to exclude, so it is
-// refused at construction alongside the other required wiring.
+// refused at construction alongside the other required wiring, from the
+// existence stage of [config.validateRequired].
 func (c *config) validateLoginFlowRequired() error {
 	if c.loginFlowSet {
 		return nil

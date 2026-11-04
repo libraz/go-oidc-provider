@@ -2,6 +2,7 @@ package op_test
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 
@@ -9,6 +10,50 @@ import (
 	"github.com/libraz/go-oidc-provider/op/feature"
 	"github.com/libraz/go-oidc-provider/op/store"
 )
+
+// TestNew_ReportsEveryMissingRequiredOption pins the existence stage: with
+// no options at all, the default authorization_code grant owes cookie keys
+// and a login flow on top of issuer, store and keyset, and one op.New call
+// reports all five.
+func TestNew_ReportsEveryMissingRequiredOption(t *testing.T) {
+	t.Parallel()
+
+	_, err := op.New()
+	if err == nil {
+		t.Fatal("op.New() with no options returned nil")
+	}
+	for name, want := range map[string]error{
+		"issuer":      op.ErrIssuerRequired,
+		"store":       op.ErrStoreRequired,
+		"keyset":      op.ErrKeysetRequired,
+		"cookie keys": op.ErrCookieKeysRequired,
+		"login flow":  op.ErrLoginFlowRequired,
+	} {
+		if !errors.Is(err, want) {
+			t.Errorf("err does not report the missing %s: %v", name, err)
+		}
+	}
+}
+
+// TestNew_SingleMissingReturnsBareSentinel pins that one missing item is
+// returned as itself rather than wrapped in a join, so a direct comparison
+// keeps working and the message stays a single line.
+func TestNew_SingleMissingReturnsBareSentinel(t *testing.T) {
+	t.Parallel()
+
+	_, err := op.New(op.WithDefaults(
+		op.WithStore(stubStore{}),
+		op.WithUserStore(stubUserStore{}),
+		op.WithKeyset(validKeyset(t)),
+		op.WithCookieKeys(newRandomCookieKey(t)),
+	), fixtureAuthenticator())
+	if err != op.ErrIssuerRequired { //nolint:errorlint // asserting the bare sentinel is the point
+		t.Fatalf("err = %v, want the bare ErrIssuerRequired", err)
+	}
+	if strings.Contains(err.Error(), "\n") {
+		t.Errorf("single missing option produced a multi-line message: %q", err.Error())
+	}
+}
 
 // TestFeatureFlag_RejectedWithoutItsConfiguringOption pins the
 // construction-time rejection of a feature flag that carries no
