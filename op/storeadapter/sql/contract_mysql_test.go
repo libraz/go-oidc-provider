@@ -73,8 +73,9 @@ func newMySQLFactoryWithClientFoundRows(t *testing.T, clientFoundRows bool) cont
 }
 
 // newMySQLDBFactory boots the container and returns a function that
-// opens a connection to a fresh, empty database per call.
-func newMySQLDBFactory(t *testing.T, clientFoundRows bool) func(*testing.T) *databasesql.DB {
+// opens a connection to a fresh, empty database per call. Each opt adjusts
+// the per-database driver config before it is opened.
+func newMySQLDBFactory(t *testing.T, clientFoundRows bool, opts ...func(*mysqldriver.Config)) func(*testing.T) *databasesql.DB {
 	t.Helper()
 	ctx := context.Background()
 
@@ -124,6 +125,9 @@ func newMySQLDBFactory(t *testing.T, clientFoundRows bool) func(*testing.T) *dat
 		sub := *baseCfg
 		sub.DBName = dbName
 		sub.ClientFoundRows = clientFoundRows
+		for _, opt := range opts {
+			opt(&sub)
+		}
 		db, err := databasesql.Open("mysql", sub.FormatDSN())
 		if err != nil {
 			t.Fatalf("open %s: %v", dbName, err)

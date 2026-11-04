@@ -64,8 +64,9 @@ func newPostgresFactory(t *testing.T) contract.Factory {
 }
 
 // newPostgresDBFactory boots the container and returns a function that
-// opens a connection to a fresh, empty database per call.
-func newPostgresDBFactory(t *testing.T) func(*testing.T) *databasesql.DB {
+// opens a connection to a fresh, empty database per call. Each opt receives
+// the per-database DSN and returns the DSN to open.
+func newPostgresDBFactory(t *testing.T, opts ...func(dsn string) string) func(*testing.T) *databasesql.DB {
 	t.Helper()
 	ctx := context.Background()
 
@@ -114,6 +115,9 @@ func newPostgresDBFactory(t *testing.T) func(*testing.T) *databasesql.DB {
 		}
 
 		dsn := rewritePostgresDB(t, adminDSN, dbName)
+		for _, opt := range opts {
+			dsn = opt(dsn)
+		}
 		db, err := databasesql.Open("pgx", dsn)
 		if err != nil {
 			t.Fatalf("open %s: %v", dbName, err)

@@ -19,14 +19,12 @@ import (
 // files name each index. That cannot tell whether the statements work: a
 // wrong column, a table renamed since, or an ALTER that MySQL rejects all read
 // the same to a name matcher. This file applies the chain instead of parsing
-// it, and compares the result against a fresh install of the current schema.
+// it, and compares the result against a database built by Store.Migrate,
+// which applies the same migration files and records the version.
 //
-// MySQL is the engine that needs it. SQLite and PostgreSQL declare indexes as
-// standalone CREATE INDEX IF NOT EXISTS statements that a later Store.Migrate
-// re-applies, so an existing database converges on its own. MySQL declares
-// them inline in CREATE TABLE, and CREATE TABLE IF NOT EXISTS does nothing to
-// a table that exists — the migrations are the entire upgrade path, and a
-// defect in them is invisible until a query plans badly in production.
+// MySQL declares indexes inline in CREATE TABLE, so a defect in a migration
+// file is invisible until a query plans badly in production. The version
+// table only Migrate creates is left out of the comparison.
 
 // mysqlMigrationImage pins the same engine version the contract harness uses.
 const mysqlMigrationImage = "mysql:8.4"
@@ -53,11 +51,11 @@ func describeSchema(t *testing.T, db *databasesql.DB) (indexes, columns []string
 	indexes = queryStrings(t, db, `
 		SELECT CONCAT(TABLE_NAME, '.', INDEX_NAME, '[', SEQ_IN_INDEX, ']=', COLUMN_NAME)
 		FROM information_schema.STATISTICS
-		WHERE TABLE_SCHEMA = DATABASE()`)
+		WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME <> 'oidc_schema_migrations'`)
 	columns = queryStrings(t, db, `
 		SELECT CONCAT(TABLE_NAME, '.', COLUMN_NAME, ' ', IFNULL(COLLATION_NAME, '-'))
 		FROM information_schema.COLUMNS
-		WHERE TABLE_SCHEMA = DATABASE()`)
+		WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME <> 'oidc_schema_migrations'`)
 	return indexes, columns
 }
 
