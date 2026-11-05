@@ -20,7 +20,7 @@ posture and the conformance scoreboard. This README covers installation, the
 shape of the repository, and the decisions to know about before adopting the
 library.
 
-> **Status: `v1.5.0`.** The public `op` surface follows strict
+> **Status: `v1.5.0`.** The public `op` surface follows
 > [Semantic Versioning](https://semver.org/spec/v2.0.0.html) from the 1.0
 > release on. Symbols documented with an `Experimental:` marker are exempt.
 > Today that is Grant Management, Client ID Metadata Documents, the ID-JAG
