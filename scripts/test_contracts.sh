@@ -34,7 +34,9 @@ log "contract-test parallelism: packages=$test_parallel, GOMAXPROCS=$go_max_proc
 run_contracts() {
   local module="$1"
   local subtest_parallel="${2:-$test_parallel}"
-  local -a args=(-count=1 -timeout=15m -p "$test_parallel" "-parallel=$subtest_parallel" -tags=testcontainers ./...)
+  # The SQL module migrates a fresh MySQL database per sub-test (about 0.6s
+  # each) across two full MySQL runs; CI has measured 590s to over 900s.
+  local -a args=(-count=1 -timeout=30m -p "$test_parallel" "-parallel=$subtest_parallel" -tags=testcontainers ./...)
   log "go test -tags=testcontainers ./... ($module; required containers)"
   (
     cd "$module"
