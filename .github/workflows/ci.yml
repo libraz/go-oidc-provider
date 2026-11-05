@@ -133,12 +133,14 @@ jobs:
       - name: Test conformance release verifier
         run: python3 -m unittest discover -s tools/conformance/tests -v
 
+      # test/scenarios runs over 300s under -race: most of its CPU goes to
+      # Argon2id client-secret and password verification at production cost.
       - name: Test root module (race + coverage)
         run: |
           go test -race \
             -coverprofile="$GITHUB_WORKSPACE/cover.root.out" \
             -covermode=atomic \
-            -count=1 -timeout=5m \
+            -count=1 -timeout=15m \
             ./...
 
       - name: Test op/storeadapter/sql (race + coverage)
